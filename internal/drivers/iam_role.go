@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
-	"github.com/digitalocean/godo"
 )
 
 // IAMRoleDriver provides a ResourceDriver for infra.iam_role on DigitalOcean.
@@ -14,40 +13,16 @@ import (
 //
 // DigitalOcean does not expose fine-grained IAM role management via the godo API.
 // Personal Access Tokens and OAuth applications must be created through the DO
-// control panel (https://cloud.digitalocean.com/account/api/tokens). The godo API
-// surfaces only SSH key management (godo.KeysService) and team membership at the
-// account level.
+// control panel (https://cloud.digitalocean.com/account/api/tokens).
 //
-// This driver:
-//   - Create/Update: stores the role metadata as an SSH key tag (surrogate) and
-//     returns the declared config as outputs for downstream consumption.
-//   - Read/Delete/HealthCheck: look up the surrogate key by name.
-//   - Scale: not supported.
-//
-// For production workloads that require programmatic token or team-member management,
-// use the DigitalOcean control panel or the DO API directly with a personal access
-// token that has "write" scope.
-type IAMRoleDriver struct {
-	client IAMRoleClient
-}
+// This driver is entirely declarative: Create/Update return the declared config as
+// outputs with a limitation notice; Read/HealthCheck return a healthy declared state;
+// Delete and Scale are no-ops. No godo API calls are made.
+type IAMRoleDriver struct{}
 
-// IAMRoleClient is an abstraction over godo.KeysService (for mocking).
-// It is used as a surrogate store for IAM role metadata since godo has no
-// native IAM/role resource.
-type IAMRoleClient interface {
-	Create(ctx context.Context, req *godo.KeyCreateRequest) (*godo.Key, *godo.Response, error)
-	GetByFingerprint(ctx context.Context, fingerprint string) (*godo.Key, *godo.Response, error)
-	DeleteByFingerprint(ctx context.Context, fingerprint string) (*godo.Response, error)
-}
-
-// NewIAMRoleDriver creates an IAMRoleDriver backed by a real godo client.
-func NewIAMRoleDriver(c *godo.Client) *IAMRoleDriver {
-	return &IAMRoleDriver{client: c.Keys}
-}
-
-// NewIAMRoleDriverWithClient creates a driver with an injected client (for tests).
-func NewIAMRoleDriverWithClient(c IAMRoleClient) *IAMRoleDriver {
-	return &IAMRoleDriver{client: c}
+// NewIAMRoleDriver creates an IAMRoleDriver.
+func NewIAMRoleDriver() *IAMRoleDriver {
+	return &IAMRoleDriver{}
 }
 
 // Create records an IAM role declaration. Since DO has no native role API the

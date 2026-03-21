@@ -71,7 +71,7 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 		"infra.registry":          drivers.NewRegistryDriver(p.client),
 		"infra.certificate":       drivers.NewCertificateDriver(p.client),
 		"infra.droplet":           drivers.NewDropletDriver(p.client, p.region),
-		"infra.iam_role":          drivers.NewIAMRoleDriver(p.client),
+		"infra.iam_role":          drivers.NewIAMRoleDriver(),
 		"infra.api_gateway":       drivers.NewAPIGatewayDriver(p.client, p.region),
 	}
 	return nil
@@ -95,7 +95,7 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.certificate", Tier: 1, Operations: ops},
 		{ResourceType: "infra.droplet", Tier: 1, Operations: ops},
 		{ResourceType: "infra.iam_role", Tier: 1, Operations: noScale},
-		{ResourceType: "infra.api_gateway", Tier: 3, Operations: ops},
+		{ResourceType: "infra.api_gateway", Tier: 3, Operations: noScale},
 	}
 }
 

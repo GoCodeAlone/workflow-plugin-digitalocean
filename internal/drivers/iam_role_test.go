@@ -6,27 +6,10 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
-	"github.com/digitalocean/godo"
 )
 
-type mockIAMRoleClient struct {
-	key *godo.Key
-	err error
-}
-
-func (m *mockIAMRoleClient) Create(_ context.Context, _ *godo.KeyCreateRequest) (*godo.Key, *godo.Response, error) {
-	return m.key, nil, m.err
-}
-func (m *mockIAMRoleClient) GetByFingerprint(_ context.Context, _ string) (*godo.Key, *godo.Response, error) {
-	return m.key, nil, m.err
-}
-func (m *mockIAMRoleClient) DeleteByFingerprint(_ context.Context, _ string) (*godo.Response, error) {
-	return nil, m.err
-}
-
 func TestIAMRoleDriver_Create(t *testing.T) {
-	mock := &mockIAMRoleClient{}
-	d := drivers.NewIAMRoleDriverWithClient(mock)
+	d := drivers.NewIAMRoleDriver()
 
 	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
 		Name:   "deploy-role",
@@ -48,8 +31,7 @@ func TestIAMRoleDriver_Create(t *testing.T) {
 }
 
 func TestIAMRoleDriver_HealthCheck(t *testing.T) {
-	mock := &mockIAMRoleClient{}
-	d := drivers.NewIAMRoleDriverWithClient(mock)
+	d := drivers.NewIAMRoleDriver()
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "deploy-role"})
 	if err != nil {
@@ -61,8 +43,7 @@ func TestIAMRoleDriver_HealthCheck(t *testing.T) {
 }
 
 func TestIAMRoleDriver_Delete_NoOp(t *testing.T) {
-	mock := &mockIAMRoleClient{}
-	d := drivers.NewIAMRoleDriverWithClient(mock)
+	d := drivers.NewIAMRoleDriver()
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{Name: "deploy-role"})
 	if err != nil {
