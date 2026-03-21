@@ -1,0 +1,143 @@
+package drivers
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/digitalocean/godo"
+)
+
+// KubernetesClient is the godo Kubernetes interface (for mocking).
+type KubernetesClient interface {
+	Create(ctx context.Context, req *godo.KubernetesClusterCreateRequest) (*godo.KubernetesCluster, *godo.Response, error)
+	Get(ctx context.Context, clusterID string) (*godo.KubernetesCluster, *godo.Response, error)
+	Update(ctx context.Context, clusterID string, req *godo.KubernetesClusterUpdateRequest) (*godo.KubernetesCluster, *godo.Response, error)
+	Delete(ctx context.Context, clusterID string) (*godo.Response, error)
+}
+
+// KubernetesDriver manages DigitalOcean Kubernetes Service (DOKS) clusters (infra.k8s_cluster).
+type KubernetesDriver struct {
+	client KubernetesClient
+	region string
+}
+
+// NewKubernetesDriver creates a KubernetesDriver backed by a real godo client.
+func NewKubernetesDriver(c *godo.Client, region string) *KubernetesDriver {
+	return &KubernetesDriver{client: c.Kubernetes, region: region}
+}
+
+// NewKubernetesDriverWithClient creates a driver with an injected client (for tests).
+func NewKubernetesDriverWithClient(c KubernetesClient, region string) *KubernetesDriver {
+	return &KubernetesDriver{client: c, region: region}
+}
+
+func (d *KubernetesDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	version := strFromConfig(spec.Config, "version", "latest")
+	nodeSize := strFromConfig(spec.Config, "node_size", "s-2vcpu-4gb")
+	nodeCount, _ := intFromConfig(spec.Config, "node_count", 3)
+	region := strFromConfig(spec.Config, "region", d.region)
+
+	req := &godo.KubernetesClusterCreateRequest{
+		Name:        spec.Name,
+		RegionSlug:  region,
+		VersionSlug: version,
+		NodePools: []*godo.KubernetesNodePoolCreateRequest{
+			{
+				Name:  spec.Name + "-pool",
+				Size:  nodeSize,
+				Count: nodeCount,
+			},
+		},
+	}
+
+	cluster, _, err := d.client.Create(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes create %q: %w", spec.Name, err)
+	}
+	return k8sOutput(cluster), nil
+}
+
+func (d *KubernetesDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes read %q: %w", ref.Name, err)
+	}
+	return k8sOutput(cluster), nil
+}
+
+func (d *KubernetesDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	req := &godo.KubernetesClusterUpdateRequest{
+		Name: spec.Name,
+	}
+	cluster, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes update %q: %w", ref.Name, err)
+	}
+	return k8sOutput(cluster), nil
+}
+
+func (d *KubernetesDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
+	_, err := d.client.Delete(ctx, ref.ProviderID)
+	if err != nil {
+		return fmt.Errorf("kubernetes delete %q: %w", ref.Name, err)
+	}
+	return nil
+}
+
+func (d *KubernetesDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	if current == nil {
+		return &interfaces.DiffResult{NeedsUpdate: true}, nil
+	}
+	return &interfaces.DiffResult{NeedsUpdate: false}, nil
+}
+
+func (d *KubernetesDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	healthy := cluster.Status != nil && cluster.Status.State == godo.KubernetesClusterStatusRunning
+	msg := ""
+	if !healthy && cluster.Status != nil {
+		msg = cluster.Status.Message
+	}
+	return &interfaces.HealthResult{Healthy: healthy, Message: msg}, nil
+}
+
+func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
+	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes scale read %q: %w", ref.Name, err)
+	}
+	// Scale the first node pool.
+	if len(cluster.NodePools) == 0 {
+		return nil, fmt.Errorf("kubernetes scale %q: no node pools found", ref.Name)
+	}
+	req := &godo.KubernetesClusterUpdateRequest{
+		Name: cluster.Name,
+	}
+	updated, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes scale %q: %w", ref.Name, err)
+	}
+	return k8sOutput(updated), nil
+}
+
+func k8sOutput(cluster *godo.KubernetesCluster) *interfaces.ResourceOutput {
+	status := "provisioning"
+	if cluster.Status != nil {
+		status = string(cluster.Status.State)
+	}
+	return &interfaces.ResourceOutput{
+		Name:       cluster.Name,
+		Type:       "infra.k8s_cluster",
+		ProviderID: cluster.ID,
+		Outputs: map[string]any{
+			"endpoint": cluster.Endpoint,
+			"region":   cluster.RegionSlug,
+			"version":  cluster.VersionSlug,
+		},
+		Status: status,
+	}
+}
