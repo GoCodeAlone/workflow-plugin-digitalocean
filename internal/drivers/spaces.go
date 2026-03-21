@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/digitalocean/godo"
 )
 
@@ -30,11 +33,17 @@ type SpacesDriver struct {
 	region string
 }
 
-// NewSpacesDriver creates a SpacesDriver. Since godo does not provide Spaces bucket
-// management (it uses the S3-compatible API), this driver requires a SpacesBucketClient.
-// For production use, wrap an S3-compatible client; for tests, inject a mock.
-func NewSpacesDriver(_ *godo.Client, region string) *SpacesDriver {
-	return &SpacesDriver{client: &noopSpacesClient{}, region: region}
+// NewSpacesDriver creates a SpacesDriver.
+// If accessKey and secretKey are non-empty a real S3-compatible client is used;
+// otherwise a no-op client is used (suitable only for tests / dry-run mode).
+func NewSpacesDriver(_ *godo.Client, region, accessKey, secretKey string) *SpacesDriver {
+	var client SpacesBucketClient
+	if accessKey != "" && secretKey != "" {
+		client = newS3SpacesClient(region, accessKey, secretKey)
+	} else {
+		client = &noopSpacesClient{}
+	}
+	return &SpacesDriver{client: client, region: region}
 }
 
 // NewSpacesDriverWithClient creates a driver with an injected client (for tests).
@@ -103,7 +112,64 @@ func spacesOutput(b *SpacesBucket, name string) *interfaces.ResourceOutput {
 	}
 }
 
-// noopSpacesClient is a no-op implementation used when no real S3 client is configured.
+// --- Real S3-backed implementation ---
+
+// s3SpacesClient implements SpacesBucketClient using the AWS S3-compatible
+// DigitalOcean Spaces API.
+type s3SpacesClient struct {
+	accessKey string
+	secretKey string
+}
+
+func newS3SpacesClient(_, accessKey, secretKey string) *s3SpacesClient {
+	return &s3SpacesClient{accessKey: accessKey, secretKey: secretKey}
+}
+
+func (c *s3SpacesClient) s3Client(region string) *s3.Client {
+	endpoint := fmt.Sprintf("https://%s.digitaloceanspaces.com", region)
+	return s3.New(s3.Options{
+		Region:       region,
+		BaseEndpoint: aws.String(endpoint),
+		Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(c.accessKey, c.secretKey, "")),
+	})
+}
+
+func (c *s3SpacesClient) CreateBucket(ctx context.Context, name, region string) (*SpacesBucket, error) {
+	cl := c.s3Client(region)
+	_, err := cl.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(name),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("spaces s3 create bucket %q: %w", name, err)
+	}
+	return &SpacesBucket{Name: name, Region: region, CreatedAt: time.Now()}, nil
+}
+
+func (c *s3SpacesClient) GetBucket(ctx context.Context, name, region string) (*SpacesBucket, error) {
+	cl := c.s3Client(region)
+	_, err := cl.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(name),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("spaces s3 get bucket %q: %w", name, err)
+	}
+	return &SpacesBucket{Name: name, Region: region}, nil
+}
+
+func (c *s3SpacesClient) DeleteBucket(ctx context.Context, name, region string) error {
+	cl := c.s3Client(region)
+	_, err := cl.DeleteBucket(ctx, &s3.DeleteBucketInput{
+		Bucket: aws.String(name),
+	})
+	if err != nil {
+		return fmt.Errorf("spaces s3 delete bucket %q: %w", name, err)
+	}
+	return nil
+}
+
+// --- No-op implementation (tests / dry-run) ---
+
+// noopSpacesClient is a no-op implementation used when no Spaces credentials are configured.
 type noopSpacesClient struct{}
 
 func (c *noopSpacesClient) CreateBucket(_ context.Context, name, region string) (*SpacesBucket, error) {

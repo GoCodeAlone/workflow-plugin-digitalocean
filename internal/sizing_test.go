@@ -21,10 +21,19 @@ func TestResolveSizing(t *testing.T) {
 		{"infra.k8s_cluster", interfaces.SizeM, "s-2vcpu-4gb"},
 		{"infra.database", interfaces.SizeS, "db-s-1vcpu-2gb"},
 		{"infra.database", interfaces.SizeL, "db-s-4vcpu-8gb"},
+		{"infra.cache", interfaces.SizeS, "db-s-1vcpu-2gb"},
+		{"infra.cache", interfaces.SizeM, "db-s-2vcpu-4gb"},
 		{"infra.load_balancer", interfaces.SizeXS, "lb-small"},
 		{"infra.load_balancer", interfaces.SizeM, "lb-medium"},
-		// Unknown type falls back to droplet map.
-		{"infra.unknown", interfaces.SizeS, "s-1vcpu-2gb"},
+		{"infra.api_gateway", interfaces.SizeS, "apps-s-1vcpu-1gb"},
+		// Types without variable sizing return "n/a".
+		{"infra.vpc", interfaces.SizeM, "n/a"},
+		{"infra.firewall", interfaces.SizeL, "n/a"},
+		{"infra.dns", interfaces.SizeS, "n/a"},
+		{"infra.storage", interfaces.SizeXL, "n/a"},
+		{"infra.registry", interfaces.SizeS, "n/a"},
+		{"infra.certificate", interfaces.SizeM, "n/a"},
+		{"infra.iam_role", interfaces.SizeS, "n/a"},
 	}
 
 	for _, tc := range cases {
@@ -37,5 +46,12 @@ func TestResolveSizing(t *testing.T) {
 				t.Errorf("InstanceType = %q, want %q", result.InstanceType, tc.wantSKU)
 			}
 		})
+	}
+}
+
+func TestResolveSizing_UnknownTypeReturnsError(t *testing.T) {
+	_, err := resolveSizing("infra.unknown_thing", interfaces.SizeM, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown resource type, got nil")
 	}
 }

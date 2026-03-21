@@ -14,6 +14,7 @@ type KubernetesClient interface {
 	Get(ctx context.Context, clusterID string) (*godo.KubernetesCluster, *godo.Response, error)
 	Update(ctx context.Context, clusterID string, req *godo.KubernetesClusterUpdateRequest) (*godo.KubernetesCluster, *godo.Response, error)
 	Delete(ctx context.Context, clusterID string) (*godo.Response, error)
+	UpdateNodePool(ctx context.Context, clusterID, poolID string, req *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error)
 }
 
 // KubernetesDriver manages DigitalOcean Kubernetes Service (DOKS) clusters (infra.k8s_cluster).
@@ -105,23 +106,25 @@ func (d *KubernetesDriver) HealthCheck(ctx context.Context, ref interfaces.Resou
 	return &interfaces.HealthResult{Healthy: healthy, Message: msg}, nil
 }
 
+// Scale resizes the first node pool of the cluster to the given replica count
+// using godo.Kubernetes.UpdateNodePool.
 func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
 	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes scale read %q: %w", ref.Name, err)
 	}
-	// Scale the first node pool.
 	if len(cluster.NodePools) == 0 {
 		return nil, fmt.Errorf("kubernetes scale %q: no node pools found", ref.Name)
 	}
-	req := &godo.KubernetesClusterUpdateRequest{
-		Name: cluster.Name,
-	}
-	updated, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	pool := cluster.NodePools[0]
+	count := replicas
+	_, _, err = d.client.UpdateNodePool(ctx, ref.ProviderID, pool.ID, &godo.KubernetesNodePoolUpdateRequest{
+		Count: &count,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes scale %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("kubernetes scale %q pool %q: %w", ref.Name, pool.ID, err)
 	}
-	return k8sOutput(updated), nil
+	return d.Read(ctx, ref)
 }
 
 func k8sOutput(cluster *godo.KubernetesCluster) *interfaces.ResourceOutput {

@@ -3,7 +3,9 @@ package internal
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -37,7 +39,8 @@ func (p *DOProvider) Name() string    { return "digitalocean" }
 func (p *DOProvider) Version() string { return "0.1.0" }
 
 // Initialize configures the godo client using the provided config map.
-// Required key: "token". Optional: "region" (default: "nyc3").
+// Required: "token".
+// Optional: "region" (default "nyc3"), "spaces_access_key", "spaces_secret_key".
 func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error {
 	token, _ := config["token"].(string)
 	if token == "" {
@@ -49,6 +52,9 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 	}
 	p.region = region
 
+	spacesAccessKey, _ := config["spaces_access_key"].(string)
+	spacesSecretKey, _ := config["spaces_secret_key"].(string)
+
 	oauthClient := oauth2.NewClient(context.Background(), &tokenSource{token: token})
 	p.client = godo.NewClient(oauthClient)
 
@@ -56,14 +62,17 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 		"infra.container_service": drivers.NewAppPlatformDriver(p.client, p.region),
 		"infra.k8s_cluster":       drivers.NewKubernetesDriver(p.client, p.region),
 		"infra.database":          drivers.NewDatabaseDriver(p.client, p.region),
+		"infra.cache":             drivers.NewCacheDriver(p.client, p.region),
 		"infra.load_balancer":     drivers.NewLoadBalancerDriver(p.client, p.region),
 		"infra.vpc":               drivers.NewVPCDriver(p.client, p.region),
 		"infra.firewall":          drivers.NewFirewallDriver(p.client),
 		"infra.dns":               drivers.NewDNSDriver(p.client),
-		"infra.storage":           drivers.NewSpacesDriver(p.client, p.region),
+		"infra.storage":           drivers.NewSpacesDriver(p.client, p.region, spacesAccessKey, spacesSecretKey),
 		"infra.registry":          drivers.NewRegistryDriver(p.client),
 		"infra.certificate":       drivers.NewCertificateDriver(p.client),
 		"infra.droplet":           drivers.NewDropletDriver(p.client, p.region),
+		"infra.iam_role":          drivers.NewIAMRoleDriver(p.client),
+		"infra.api_gateway":       drivers.NewAPIGatewayDriver(p.client, p.region),
 	}
 	return nil
 }
@@ -71,10 +80,12 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 // Capabilities returns the resource types this provider supports.
 func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 	ops := []string{"create", "read", "update", "delete", "scale"}
+	noScale := []string{"create", "read", "update", "delete"}
 	return []interfaces.IaCCapabilityDeclaration{
 		{ResourceType: "infra.container_service", Tier: 3, Operations: ops},
 		{ResourceType: "infra.k8s_cluster", Tier: 1, Operations: ops},
 		{ResourceType: "infra.database", Tier: 1, Operations: ops},
+		{ResourceType: "infra.cache", Tier: 1, Operations: ops},
 		{ResourceType: "infra.load_balancer", Tier: 1, Operations: ops},
 		{ResourceType: "infra.vpc", Tier: 1, Operations: ops},
 		{ResourceType: "infra.firewall", Tier: 1, Operations: ops},
@@ -83,6 +94,8 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.registry", Tier: 2, Operations: ops},
 		{ResourceType: "infra.certificate", Tier: 1, Operations: ops},
 		{ResourceType: "infra.droplet", Tier: 1, Operations: ops},
+		{ResourceType: "infra.iam_role", Tier: 1, Operations: noScale},
+		{ResourceType: "infra.api_gateway", Tier: 3, Operations: ops},
 	}
 }
 
@@ -101,7 +114,7 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 }
 
 // Plan computes the set of actions needed to reach the desired state.
-func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	currentByName := make(map[string]interfaces.ResourceState, len(current))
 	for _, r := range current {
 		currentByName[r.Name] = r
@@ -121,10 +134,7 @@ func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec
 			})
 			continue
 		}
-		// Check if config changed.
-		curHash := configHash(cur.AppliedConfig)
-		newHash := configHash(spec.Config)
-		if curHash != newHash {
+		if configHash(cur.AppliedConfig) != configHash(spec.Config) {
 			plan.Actions = append(plan.Actions, interfaces.PlanAction{
 				Action:   "update",
 				Resource: spec,
@@ -142,9 +152,7 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 		d, err := p.ResourceDriver(action.Resource.Type)
 		if err != nil {
 			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name,
-				Action:   action.Action,
-				Error:    err.Error(),
+				Resource: action.Resource.Name, Action: action.Action, Error: err.Error(),
 			})
 			continue
 		}
@@ -164,9 +172,7 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 		}
 		if err != nil {
 			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name,
-				Action:   action.Action,
-				Error:    err.Error(),
+				Resource: action.Resource.Name, Action: action.Action, Error: err.Error(),
 			})
 			continue
 		}
@@ -182,17 +188,13 @@ func (p *DOProvider) Destroy(ctx context.Context, resources []interfaces.Resourc
 		d, err := p.ResourceDriver(ref.Type)
 		if err != nil {
 			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: ref.Name,
-				Action:   "delete",
-				Error:    err.Error(),
+				Resource: ref.Name, Action: "delete", Error: err.Error(),
 			})
 			continue
 		}
 		if err := d.Delete(ctx, ref); err != nil {
 			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: ref.Name,
-				Action:   "delete",
-				Error:    err.Error(),
+				Resource: ref.Name, Action: "delete", Error: err.Error(),
 			})
 			continue
 		}
@@ -208,43 +210,30 @@ func (p *DOProvider) Status(ctx context.Context, resources []interfaces.Resource
 		d, err := p.ResourceDriver(ref.Type)
 		if err != nil {
 			statuses = append(statuses, interfaces.ResourceStatus{
-				Name:       ref.Name,
-				Type:       ref.Type,
-				ProviderID: ref.ProviderID,
-				Status:     "unknown",
+				Name: ref.Name, Type: ref.Type, ProviderID: ref.ProviderID, Status: "unknown",
 			})
 			continue
 		}
 		out, err := d.Read(ctx, ref)
 		if err != nil {
 			statuses = append(statuses, interfaces.ResourceStatus{
-				Name:       ref.Name,
-				Type:       ref.Type,
-				ProviderID: ref.ProviderID,
-				Status:     "unknown",
+				Name: ref.Name, Type: ref.Type, ProviderID: ref.ProviderID, Status: "unknown",
 			})
 			continue
 		}
 		statuses = append(statuses, interfaces.ResourceStatus{
-			Name:       out.Name,
-			Type:       out.Type,
-			ProviderID: out.ProviderID,
-			Status:     out.Status,
-			Outputs:    out.Outputs,
+			Name: out.Name, Type: out.Type, ProviderID: out.ProviderID,
+			Status: out.Status, Outputs: out.Outputs,
 		})
 	}
 	return statuses, nil
 }
 
 // DetectDrift checks for drift between declared and actual resource state.
-func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
+func (p *DOProvider) DetectDrift(_ context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
 	var results []interfaces.DriftResult
 	for _, ref := range resources {
-		results = append(results, interfaces.DriftResult{
-			Name:    ref.Name,
-			Type:    ref.Type,
-			Drifted: false,
-		})
+		results = append(results, interfaces.DriftResult{Name: ref.Name, Type: ref.Type, Drifted: false})
 	}
 	return results, nil
 }
@@ -255,11 +244,7 @@ func (p *DOProvider) Import(ctx context.Context, cloudID string, resourceType st
 	if err != nil {
 		return nil, err
 	}
-	ref := interfaces.ResourceRef{
-		Name:       cloudID,
-		Type:       resourceType,
-		ProviderID: cloudID,
-	}
+	ref := interfaces.ResourceRef{Name: cloudID, Type: resourceType, ProviderID: cloudID}
 	out, err := d.Read(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("digitalocean import: %w", err)
@@ -280,9 +265,23 @@ func (p *DOProvider) Import(ctx context.Context, cloudID string, resourceType st
 // Close is a no-op; the godo client has no persistent connection to close.
 func (p *DOProvider) Close() error { return nil }
 
-// configHash returns a stable hash of a config map for change detection.
+// configHash returns a stable, deterministic hash of a config map.
+// Keys are sorted before JSON serialisation so map iteration order does not affect the result.
 func configHash(cfg map[string]any) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%v", cfg)
-	return fmt.Sprintf("%x", h.Sum(nil))
+	if len(cfg) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(cfg))
+	for k := range cfg {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	ordered := make([]any, 0, len(keys)*2)
+	for _, k := range keys {
+		ordered = append(ordered, k, cfg[k])
+	}
+	data, _ := json.Marshal(ordered)
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum)
 }

@@ -10,8 +10,9 @@ import (
 )
 
 type mockK8sClient struct {
-	cluster *godo.KubernetesCluster
-	err     error
+	cluster  *godo.KubernetesCluster
+	nodePool *godo.KubernetesNodePool
+	err      error
 }
 
 func (m *mockK8sClient) Create(_ context.Context, _ *godo.KubernetesClusterCreateRequest) (*godo.KubernetesCluster, *godo.Response, error) {
@@ -25,6 +26,12 @@ func (m *mockK8sClient) Update(_ context.Context, _ string, _ *godo.KubernetesCl
 }
 func (m *mockK8sClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
+}
+func (m *mockK8sClient) UpdateNodePool(_ context.Context, _, _ string, _ *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error) {
+	if m.nodePool != nil {
+		return m.nodePool, nil, m.err
+	}
+	return &godo.KubernetesNodePool{ID: "pool-1", Count: 5}, nil, m.err
 }
 
 func testCluster() *godo.KubernetesCluster {
@@ -75,5 +82,21 @@ func TestKubernetesDriver_HealthCheck_Running(t *testing.T) {
 	}
 	if !result.Healthy {
 		t.Error("expected healthy cluster")
+	}
+}
+
+func TestKubernetesDriver_Scale(t *testing.T) {
+	mock := &mockK8sClient{cluster: testCluster()}
+	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
+
+	out, err := d.Scale(context.Background(), interfaces.ResourceRef{
+		Name:       "my-cluster",
+		ProviderID: "k8s-123",
+	}, 5)
+	if err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+	if out.ProviderID != "k8s-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
 	}
 }
