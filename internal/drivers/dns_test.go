@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -65,6 +66,20 @@ func TestDNSDriver_Create(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_Create_Error(t *testing.T) {
+	// When Get fails AND Create also fails, should return error.
+	mock := &mockDomainsClient{err: fmt.Errorf("api failure")}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "example-dns",
+		Config: map[string]any{"domain": "example.com"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 func TestDNSDriver_Create_IdempotentExistingDomain(t *testing.T) {
 	// When Get succeeds (domain exists), Create should not error.
 	mock := &mockDomainsClient{domain: testDomain()}
@@ -79,5 +94,119 @@ func TestDNSDriver_Create_IdempotentExistingDomain(t *testing.T) {
 	}
 	if out.ProviderID != "example.com" {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "example.com")
+	}
+}
+
+func TestDNSDriver_Read_Success(t *testing.T) {
+	mock := &mockDomainsClient{domain: testDomain()}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if out.ProviderID != "example.com" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "example.com")
+	}
+}
+
+func TestDNSDriver_Update_Success(t *testing.T) {
+	mock := &mockDomainsClient{domain: testDomain()}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	out, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name:   "example-dns",
+		Config: map[string]any{"domain": "example.com"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if out.ProviderID != "example.com" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "example.com")
+	}
+}
+
+func TestDNSDriver_Delete_Success(t *testing.T) {
+	mock := &mockDomainsClient{domain: testDomain()}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	err := d.Delete(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
+func TestDNSDriver_Delete_Error(t *testing.T) {
+	mock := &mockDomainsClient{err: fmt.Errorf("delete failed")}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	err := d.Delete(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestDNSDriver_Diff_NilCurrent(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "example-dns"}, nil)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=true when current is nil")
+	}
+}
+
+func TestDNSDriver_Diff_NoChanges(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{ProviderID: "example.com"}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "example-dns"}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=false when current exists")
+	}
+}
+
+func TestDNSDriver_HealthCheck_Healthy(t *testing.T) {
+	mock := &mockDomainsClient{domain: testDomain()}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected healthy dns zone")
+	}
+}
+
+func TestDNSDriver_HealthCheck_Unhealthy(t *testing.T) {
+	mock := &mockDomainsClient{err: fmt.Errorf("not found")}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Errorf("expected unhealthy when get fails")
 	}
 }

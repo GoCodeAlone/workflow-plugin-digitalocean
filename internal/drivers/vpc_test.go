@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -52,6 +53,133 @@ func TestVPCDriver_Create(t *testing.T) {
 	}
 	if out.ProviderID != "vpc-123" {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "vpc-123")
+	}
+}
+
+func TestVPCDriver_Create_Error(t *testing.T) {
+	mock := &mockVPCClient{err: fmt.Errorf("api failure")}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-vpc",
+		Config: map[string]any{"ip_range": "10.0.0.0/16"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestVPCDriver_Read_Success(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if out.ProviderID != "vpc-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "vpc-123")
+	}
+}
+
+func TestVPCDriver_Update_Success(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	out, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	}, interfaces.ResourceSpec{Name: "my-vpc", Config: map[string]any{}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if out.ProviderID != "vpc-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "vpc-123")
+	}
+}
+
+func TestVPCDriver_Update_Error(t *testing.T) {
+	mock := &mockVPCClient{err: fmt.Errorf("update failed")}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	}, interfaces.ResourceSpec{Name: "my-vpc", Config: map[string]any{}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestVPCDriver_Delete_Success(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	err := d.Delete(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
+func TestVPCDriver_Delete_Error(t *testing.T) {
+	mock := &mockVPCClient{err: fmt.Errorf("delete failed")}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	err := d.Delete(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestVPCDriver_Diff_NoChanges(t *testing.T) {
+	mock := &mockVPCClient{}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"ip_range": "10.0.0.0/16"},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"ip_range": "10.0.0.0/16"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=false when ip_range unchanged")
+	}
+}
+
+func TestVPCDriver_HealthCheck_Healthy(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected healthy vpc")
+	}
+}
+
+func TestVPCDriver_HealthCheck_Unhealthy(t *testing.T) {
+	mock := &mockVPCClient{err: fmt.Errorf("not found")}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc", ProviderID: "vpc-123",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Errorf("expected unhealthy when get fails")
 	}
 }
 

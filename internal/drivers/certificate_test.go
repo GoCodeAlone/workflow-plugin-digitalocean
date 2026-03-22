@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -92,6 +93,37 @@ func TestCertificateDriver_HealthCheck_Verified(t *testing.T) {
 	}
 }
 
+func TestCertificateDriver_Create_Error(t *testing.T) {
+	mock := &mockCertClient{err: fmt.Errorf("api failure")}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cert",
+		Config: map[string]any{"type": "lets_encrypt"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestCertificateDriver_Update_Success(t *testing.T) {
+	mock := &mockCertClient{cert: testCertificate()}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	out, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-cert", ProviderID: "cert-123",
+	}, interfaces.ResourceSpec{
+		Name:   "my-cert",
+		Config: map[string]any{"type": "lets_encrypt", "dns_names": []any{"example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if out.ProviderID != "cert-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "cert-123")
+	}
+}
+
 func TestCertificateDriver_Delete(t *testing.T) {
 	mock := &mockCertClient{cert: testCertificate()}
 	d := drivers.NewCertificateDriverWithClient(mock)
@@ -101,5 +133,64 @@ func TestCertificateDriver_Delete(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+}
+
+func TestCertificateDriver_Delete_Error(t *testing.T) {
+	mock := &mockCertClient{err: fmt.Errorf("delete failed")}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	err := d.Delete(context.Background(), interfaces.ResourceRef{
+		Name: "my-cert", ProviderID: "cert-123",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestCertificateDriver_Diff_NilCurrent(t *testing.T) {
+	mock := &mockCertClient{}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "my-cert"}, nil)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=true when current is nil")
+	}
+}
+
+func TestCertificateDriver_Diff_NoChanges(t *testing.T) {
+	mock := &mockCertClient{}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{ProviderID: "cert-123"}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "my-cert"}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=false when current exists")
+	}
+}
+
+func TestCertificateDriver_HealthCheck_Unhealthy(t *testing.T) {
+	cert := &godo.Certificate{
+		ID:    "cert-123",
+		Name:  "my-cert",
+		State: "pending",
+	}
+	mock := &mockCertClient{cert: cert}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "my-cert", ProviderID: "cert-123",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Errorf("expected unhealthy for pending certificate")
 	}
 }
