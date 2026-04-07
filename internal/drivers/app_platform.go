@@ -52,6 +52,7 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 					Name:          spec.Name,
 					InstanceCount: int64(instanceCount),
 					HTTPPort:      int64(httpPort),
+					Envs:          envVarsFromConfig(spec.Config),
 					Image: &godo.ImageSourceSpec{
 						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
 						Repository:   imageRepo(image),
@@ -95,6 +96,7 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 					Name:          spec.Name,
 					InstanceCount: int64(instanceCount),
 					HTTPPort:      int64(httpPort),
+					Envs:          envVarsFromConfig(spec.Config),
 					Image: &godo.ImageSourceSpec{
 						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
 						Repository:   imageRepo(image),
@@ -190,4 +192,33 @@ func imageTag(image string) string {
 		return parts[1]
 	}
 	return "latest"
+}
+
+// envVarsFromConfig converts the "env_vars" map in spec config to App Platform
+// environment variable definitions. Values listed under "secret_env_vars" are
+// marked as SECRET so DigitalOcean stores them encrypted.
+func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
+	raw, _ := cfg["env_vars"].(map[string]any)
+	secrets, _ := cfg["secret_env_vars"].(map[string]any)
+	if len(raw) == 0 && len(secrets) == 0 {
+		return nil
+	}
+	envs := make([]*godo.AppVariableDefinition, 0, len(raw)+len(secrets))
+	for k, v := range raw {
+		envs = append(envs, &godo.AppVariableDefinition{
+			Key:   k,
+			Value: fmt.Sprintf("%v", v),
+			Type:  godo.AppVariableType_General,
+			Scope: godo.AppVariableScope_RunAndBuildTime,
+		})
+	}
+	for k, v := range secrets {
+		envs = append(envs, &godo.AppVariableDefinition{
+			Key:   k,
+			Value: fmt.Sprintf("%v", v),
+			Type:  godo.AppVariableType_Secret,
+			Scope: godo.AppVariableScope_RunAndBuildTime,
+		})
+	}
+	return envs
 }
