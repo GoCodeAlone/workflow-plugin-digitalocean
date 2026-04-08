@@ -146,3 +146,5 @@ func apiGatewayOutput(app *godo.App) *interfaces.ResourceOutput {
 		Status: status,
 	}
 }
+
+func (d *APIGatewayDriver) SensitiveKeys() []string { return nil }

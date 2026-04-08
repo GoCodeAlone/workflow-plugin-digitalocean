@@ -85,3 +85,5 @@ func iamOutput(name string, config map[string]any) *interfaces.ResourceOutput {
 		Status:     "declared",
 	}
 }
+
+func (d *IAMRoleDriver) SensitiveKeys() []string { return nil }

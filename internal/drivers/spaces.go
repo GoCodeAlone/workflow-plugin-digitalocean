@@ -183,3 +183,5 @@ func (c *noopSpacesClient) GetBucket(_ context.Context, name, region string) (*S
 func (c *noopSpacesClient) DeleteBucket(_ context.Context, _, _ string) error {
 	return nil
 }
+
+func (d *SpacesDriver) SensitiveKeys() []string { return nil }

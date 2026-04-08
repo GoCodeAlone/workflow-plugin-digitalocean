@@ -222,3 +222,5 @@ func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
 	}
 	return envs
 }
+
+func (d *AppPlatformDriver) SensitiveKeys() []string { return nil }

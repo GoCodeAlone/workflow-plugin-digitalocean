@@ -103,3 +103,5 @@ func registryOutput(reg *godo.Registry, name string) *interfaces.ResourceOutput 
 		Status: "active",
 	}
 }
+
+func (d *RegistryDriver) SensitiveKeys() []string { return nil }

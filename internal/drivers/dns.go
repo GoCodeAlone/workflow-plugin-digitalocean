@@ -164,3 +164,5 @@ func dnsOutput(dom *godo.Domain, name string) *interfaces.ResourceOutput {
 		Status: "active",
 	}
 }
+
+func (d *DNSDriver) SensitiveKeys() []string { return nil }

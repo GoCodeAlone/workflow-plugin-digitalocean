@@ -130,3 +130,5 @@ func lbOutput(lb *godo.LoadBalancer) *interfaces.ResourceOutput {
 		Status: lb.Status,
 	}
 }
+
+func (d *LoadBalancerDriver) SensitiveKeys() []string { return nil }

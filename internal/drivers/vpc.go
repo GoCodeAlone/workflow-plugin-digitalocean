@@ -124,3 +124,5 @@ func vpcOutput(vpc *godo.VPC) *interfaces.ResourceOutput {
 		Status: "active",
 	}
 }
+
+func (d *VPCDriver) SensitiveKeys() []string { return nil }

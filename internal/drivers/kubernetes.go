@@ -144,3 +144,5 @@ func k8sOutput(cluster *godo.KubernetesCluster) *interfaces.ResourceOutput {
 		Status: status,
 	}
 }
+
+func (d *KubernetesDriver) SensitiveKeys() []string { return nil }

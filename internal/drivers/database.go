@@ -122,6 +122,10 @@ func (d *DatabaseDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, 
 	return d.Read(ctx, ref)
 }
 
+func (d *DatabaseDriver) SensitiveKeys() []string {
+	return []string{"uri", "password", "user"}
+}
+
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 	outputs := map[string]any{
 		"engine":   db.EngineSlug,

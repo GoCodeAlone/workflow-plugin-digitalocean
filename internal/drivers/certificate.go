@@ -111,3 +111,5 @@ func certOutput(cert *godo.Certificate, name string) *interfaces.ResourceOutput 
 		Status: cert.State,
 	}
 }
+
+func (d *CertificateDriver) SensitiveKeys() []string { return nil }

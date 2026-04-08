@@ -141,3 +141,5 @@ func cacheOutput(db *godo.Database) *interfaces.ResourceOutput {
 		Status:     db.Status,
 	}
 }
+
+func (d *CacheDriver) SensitiveKeys() []string { return nil }

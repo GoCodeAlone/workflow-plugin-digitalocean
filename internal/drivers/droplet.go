@@ -134,3 +134,5 @@ func providerIDToInt(id string) int {
 	fmt.Sscanf(id, "%d", &n)
 	return n
 }
+
+func (d *DropletDriver) SensitiveKeys() []string { return nil }

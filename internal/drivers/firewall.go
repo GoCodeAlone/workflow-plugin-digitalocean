@@ -150,3 +150,5 @@ func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 		Status: fw.Status,
 	}
 }
+
+func (d *FirewallDriver) SensitiveKeys() []string { return nil }
