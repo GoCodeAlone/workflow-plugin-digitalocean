@@ -58,6 +58,8 @@ github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0 h1:cvdLHbM/vzvygQT
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0/go.mod h1:/9ipMG4qM2CHQ14BfXKdVlYRJelef6M8MFI5TbZv67M=
 github.com/GoCodeAlone/workflow v0.9.3 h1:rzS7rPqhyBEezq85yLgbGMZSYyhMaFFzxyORjH66DIQ=
 github.com/GoCodeAlone/workflow v0.9.3/go.mod h1:2z4L9RJ339us4BX8t8W3YqboZUwfeo9LgX6HPPupejQ=
+github.com/GoCodeAlone/workflow v0.9.4 h1:a0jathkV6WZx5Nlp4K14a6beqcMR9j8tfoCaGIcTM80=
+github.com/GoCodeAlone/workflow v0.9.4/go.mod h1:2z4L9RJ339us4BX8t8W3YqboZUwfeo9LgX6HPPupejQ=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.31.0 h1:DHa2U07rk8syqvCge0QIGMCE1WxGj9njT44GH7zNJLQ=

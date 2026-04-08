@@ -145,6 +145,7 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 		Type:       "infra.database",
 		ProviderID: db.ID,
 		Outputs:    outputs,
+		Sensitive:  map[string]bool{"uri": true, "password": true, "user": true},
 		Status:     db.Status,
 	}
 }
