@@ -465,6 +465,203 @@ func TestDoModuleInstance_InvokeMethod_ResourceOutputSensitive(t *testing.T) {
 	}
 }
 
+// ── IaCProvider bulk-method dispatch tests ────────────────────────────────────
+
+func TestDoModuleInstance_InvokeMethod_Plan_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{planResult: &interfaces.IaCPlan{
+		ID: "plan-abc",
+		Actions: []interfaces.PlanAction{
+			{Action: "create", Resource: interfaces.ResourceSpec{Name: "my-db", Type: "infra.database"}},
+		},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.Plan", map[string]any{
+		"desired": []any{
+			map[string]any{"name": "my-db", "type": "infra.database", "config": map[string]any{}},
+		},
+		"current": []any{},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !fake.planCalled {
+		t.Error("Plan was not called on the provider")
+	}
+	if result["id"] != "plan-abc" {
+		t.Errorf("expected id=plan-abc, got %v", result["id"])
+	}
+	actions, _ := result["actions"].([]any)
+	if len(actions) != 1 {
+		t.Errorf("expected 1 action, got %d", len(actions))
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_Apply_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{applyResult: &interfaces.ApplyResult{
+		PlanID:    "plan-abc",
+		Resources: []interfaces.ResourceOutput{{ProviderID: "do-111", Status: "active"}},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.Apply", map[string]any{
+		"plan": map[string]any{"id": "plan-abc", "actions": []any{}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !fake.applyCalled {
+		t.Error("Apply was not called on the provider")
+	}
+	if result["plan_id"] != "plan-abc" {
+		t.Errorf("expected plan_id=plan-abc, got %v", result["plan_id"])
+	}
+	resources, _ := result["resources"].([]any)
+	if len(resources) != 1 {
+		t.Errorf("expected 1 resource, got %d", len(resources))
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_Destroy_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{destroyResult: &interfaces.DestroyResult{
+		Destroyed: []string{"my-db"},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.Destroy", map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-db", "type": "infra.database", "provider_id": "do-222"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if !fake.destroyCalled {
+		t.Error("Destroy was not called on the provider")
+	}
+	destroyed, _ := result["destroyed"].([]any)
+	if len(destroyed) != 1 || destroyed[0] != "my-db" {
+		t.Errorf("expected destroyed=[my-db], got %v", result["destroyed"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_Status_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{statusResult: []interfaces.ResourceStatus{
+		{Name: "my-app", Type: "infra.container_service", ProviderID: "do-333", Status: "running"},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.Status", map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-app", "type": "infra.container_service", "provider_id": "do-333"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !fake.statusCalled {
+		t.Error("Status was not called on the provider")
+	}
+	statuses, _ := result["statuses"].([]any)
+	if len(statuses) != 1 {
+		t.Errorf("expected 1 status, got %d", len(statuses))
+	}
+	s, _ := statuses[0].(map[string]any)
+	if s["status"] != "running" {
+		t.Errorf("expected status=running, got %v", s["status"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_DetectDrift_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{driftResult: []interfaces.DriftResult{
+		{Name: "my-vpc", Type: "infra.vpc", Drifted: true, Fields: []string{"cidr"}},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.DetectDrift", map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-vpc", "type": "infra.vpc", "provider_id": "do-444"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DetectDrift: %v", err)
+	}
+	if !fake.detectDriftCalled {
+		t.Error("DetectDrift was not called on the provider")
+	}
+	drifts, _ := result["drifts"].([]any)
+	if len(drifts) != 1 {
+		t.Errorf("expected 1 drift, got %d", len(drifts))
+	}
+	d, _ := drifts[0].(map[string]any)
+	if d["drifted"] != true {
+		t.Errorf("expected drifted=true, got %v", d["drifted"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_Import_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{importResult: &interfaces.ResourceState{
+		ID: "do-555", Name: "imported-db", Type: "infra.database", Provider: "digitalocean",
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.Import", map[string]any{
+		"resource_type": "infra.database",
+		"provider_id":   "do-555",
+	})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if !fake.importCalled {
+		t.Error("Import was not called on the provider")
+	}
+	if result["id"] != "do-555" {
+		t.Errorf("expected id=do-555, got %v", result["id"])
+	}
+	if result["name"] != "imported-db" {
+		t.Errorf("expected name=imported-db, got %v", result["name"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_ResolveSizing_DispatchesToProvider(t *testing.T) {
+	fake := &fakeIaCProvider{sizingResult: &interfaces.ProviderSizing{
+		InstanceType: "db-s-1vcpu-1gb",
+		Specs:        map[string]any{"cpu": "1", "memory": "1Gi"},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.ResolveSizing", map[string]any{
+		"resource_type": "infra.database",
+		"size":          "s",
+		"hints":         map[string]any{"cpu": "2"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSizing: %v", err)
+	}
+	if !fake.resolveSizingCalled {
+		t.Error("ResolveSizing was not called on the provider")
+	}
+	if result["instance_type"] != "db-s-1vcpu-1gb" {
+		t.Errorf("expected instance_type=db-s-1vcpu-1gb, got %v", result["instance_type"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_ResolveSizing_NoHints(t *testing.T) {
+	fake := &fakeIaCProvider{sizingResult: &interfaces.ProviderSizing{InstanceType: "db-xs"}}
+	mi := &doModuleInstance{provider: fake}
+
+	_, err := mi.InvokeMethod("IaCProvider.ResolveSizing", map[string]any{
+		"resource_type": "infra.database",
+		"size":          "xs",
+	})
+	if err != nil {
+		t.Fatalf("ResolveSizing without hints: %v", err)
+	}
+	if fake.resolveSizingHints != nil {
+		t.Errorf("expected nil hints, got %v", fake.resolveSizingHints)
+	}
+}
+
 // ── stub driver ───────────────────────────────────────────────────────────────
 
 type stubResourceDriver struct {
@@ -535,4 +732,66 @@ func (s *stubResourceDriver) Scale(_ context.Context, _ interfaces.ResourceRef, 
 func (s *stubResourceDriver) SensitiveKeys() []string {
 	s.sensitiveKeysCalled = true
 	return s.sensitiveKeys
+}
+
+// ── fake IaCProvider ──────────────────────────────────────────────────────────
+
+type fakeIaCProvider struct {
+	// call tracking
+	planCalled          bool
+	applyCalled         bool
+	destroyCalled       bool
+	statusCalled        bool
+	detectDriftCalled   bool
+	importCalled        bool
+	resolveSizingCalled bool
+	resolveSizingHints  *interfaces.ResourceHints
+
+	// return values
+	planResult    *interfaces.IaCPlan
+	applyResult   *interfaces.ApplyResult
+	destroyResult *interfaces.DestroyResult
+	statusResult  []interfaces.ResourceStatus
+	driftResult   []interfaces.DriftResult
+	importResult  *interfaces.ResourceState
+	sizingResult  *interfaces.ProviderSizing
+}
+
+func (f *fakeIaCProvider) Name() string                                          { return "fake" }
+func (f *fakeIaCProvider) Version() string                                       { return "0.0.0" }
+func (f *fakeIaCProvider) Initialize(_ context.Context, _ map[string]any) error { return nil }
+func (f *fakeIaCProvider) Capabilities() []interfaces.IaCCapabilityDeclaration  { return nil }
+func (f *fakeIaCProvider) ResourceDriver(_ string) (interfaces.ResourceDriver, error) {
+	return &stubResourceDriver{}, nil
+}
+func (f *fakeIaCProvider) Close() error { return nil }
+
+func (f *fakeIaCProvider) Plan(_ context.Context, _ []interfaces.ResourceSpec, _ []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+	f.planCalled = true
+	return f.planResult, nil
+}
+func (f *fakeIaCProvider) Apply(_ context.Context, _ *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
+	f.applyCalled = true
+	return f.applyResult, nil
+}
+func (f *fakeIaCProvider) Destroy(_ context.Context, _ []interfaces.ResourceRef) (*interfaces.DestroyResult, error) {
+	f.destroyCalled = true
+	return f.destroyResult, nil
+}
+func (f *fakeIaCProvider) Status(_ context.Context, _ []interfaces.ResourceRef) ([]interfaces.ResourceStatus, error) {
+	f.statusCalled = true
+	return f.statusResult, nil
+}
+func (f *fakeIaCProvider) DetectDrift(_ context.Context, _ []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
+	f.detectDriftCalled = true
+	return f.driftResult, nil
+}
+func (f *fakeIaCProvider) Import(_ context.Context, _ string, _ string) (*interfaces.ResourceState, error) {
+	f.importCalled = true
+	return f.importResult, nil
+}
+func (f *fakeIaCProvider) ResolveSizing(_ string, _ interfaces.Size, hints *interfaces.ResourceHints) (*interfaces.ProviderSizing, error) {
+	f.resolveSizingCalled = true
+	f.resolveSizingHints = hints
+	return f.sizingResult, nil
 }
