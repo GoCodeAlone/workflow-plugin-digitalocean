@@ -2,16 +2,17 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 )
 
-// doModuleInstance wraps a DOProvider as an sdk.ModuleInstance + sdk.ServiceInvoker.
+// doModuleInstance wraps an IaCProvider as an sdk.ModuleInstance + sdk.ServiceInvoker.
 // The host calls InvokeMethod to route IaCProvider and ResourceDriver operations
 // across the gRPC plugin boundary.
 type doModuleInstance struct {
-	provider *DOProvider
+	provider interfaces.IaCProvider
 }
 
 // ── sdk.ModuleInstance ────────────────────────────────────────────────────────
@@ -48,6 +49,27 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 		}
 		return map[string]any{"capabilities": out}, nil
 
+	case "IaCProvider.Plan":
+		return m.invokeProviderPlan(args)
+
+	case "IaCProvider.Apply":
+		return m.invokeProviderApply(args)
+
+	case "IaCProvider.Destroy":
+		return m.invokeProviderDestroy(args)
+
+	case "IaCProvider.Status":
+		return m.invokeProviderStatus(args)
+
+	case "IaCProvider.DetectDrift":
+		return m.invokeProviderDetectDrift(args)
+
+	case "IaCProvider.Import":
+		return m.invokeProviderImport(args)
+
+	case "IaCProvider.ResolveSizing":
+		return m.invokeProviderResolveSizing(args)
+
 	case "ResourceDriver.Update":
 		return m.invokeDriverUpdate(args)
 
@@ -75,6 +97,116 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 	default:
 		return nil, fmt.Errorf("digitalocean plugin: unknown method %q", method)
 	}
+}
+
+// ── IaCProvider bulk-method helpers ──────────────────────────────────────────
+
+// invokeProviderPlan decodes desired+current and calls IaCProvider.Plan.
+func (m *doModuleInstance) invokeProviderPlan(args map[string]any) (map[string]any, error) {
+	var desired []interfaces.ResourceSpec
+	if err := decodeJSONField(args, "desired", &desired); err != nil {
+		return nil, fmt.Errorf("IaCProvider.Plan: %w", err)
+	}
+	var current []interfaces.ResourceState
+	if err := decodeJSONField(args, "current", &current); err != nil {
+		return nil, fmt.Errorf("IaCProvider.Plan: %w", err)
+	}
+	plan, err := m.provider.Plan(context.Background(), desired, current)
+	if err != nil {
+		return nil, err
+	}
+	return structToMap(plan)
+}
+
+// invokeProviderApply decodes the plan and calls IaCProvider.Apply.
+func (m *doModuleInstance) invokeProviderApply(args map[string]any) (map[string]any, error) {
+	var plan interfaces.IaCPlan
+	if err := decodeJSONField(args, "plan", &plan); err != nil {
+		return nil, fmt.Errorf("IaCProvider.Apply: %w", err)
+	}
+	result, err := m.provider.Apply(context.Background(), &plan)
+	if err != nil {
+		return nil, err
+	}
+	return structToMap(result)
+}
+
+// invokeProviderDestroy decodes refs and calls IaCProvider.Destroy.
+func (m *doModuleInstance) invokeProviderDestroy(args map[string]any) (map[string]any, error) {
+	refs, err := refsFromArgs(args)
+	if err != nil {
+		return nil, fmt.Errorf("IaCProvider.Destroy: %w", err)
+	}
+	result, err := m.provider.Destroy(context.Background(), refs)
+	if err != nil {
+		return nil, err
+	}
+	return structToMap(result)
+}
+
+// invokeProviderStatus decodes refs and calls IaCProvider.Status.
+func (m *doModuleInstance) invokeProviderStatus(args map[string]any) (map[string]any, error) {
+	refs, err := refsFromArgs(args)
+	if err != nil {
+		return nil, fmt.Errorf("IaCProvider.Status: %w", err)
+	}
+	statuses, err := m.provider.Status(context.Background(), refs)
+	if err != nil {
+		return nil, err
+	}
+	statusList := make([]any, len(statuses))
+	for i, s := range statuses {
+		sm, _ := structToMap(s)
+		statusList[i] = sm
+	}
+	return map[string]any{"statuses": statusList}, nil
+}
+
+// invokeProviderDetectDrift decodes refs and calls IaCProvider.DetectDrift.
+func (m *doModuleInstance) invokeProviderDetectDrift(args map[string]any) (map[string]any, error) {
+	refs, err := refsFromArgs(args)
+	if err != nil {
+		return nil, fmt.Errorf("IaCProvider.DetectDrift: %w", err)
+	}
+	drifts, err := m.provider.DetectDrift(context.Background(), refs)
+	if err != nil {
+		return nil, err
+	}
+	driftList := make([]any, len(drifts))
+	for i, d := range drifts {
+		dm, _ := structToMap(d)
+		driftList[i] = dm
+	}
+	return map[string]any{"drifts": driftList}, nil
+}
+
+// invokeProviderImport decodes resource_type + provider_id and calls IaCProvider.Import.
+func (m *doModuleInstance) invokeProviderImport(args map[string]any) (map[string]any, error) {
+	resourceType := stringArg(args, "resource_type")
+	providerID := stringArg(args, "provider_id")
+	state, err := m.provider.Import(context.Background(), providerID, resourceType)
+	if err != nil {
+		return nil, err
+	}
+	return structToMap(state)
+}
+
+// invokeProviderResolveSizing decodes resource_type + size + hints and calls IaCProvider.ResolveSizing.
+func (m *doModuleInstance) invokeProviderResolveSizing(args map[string]any) (map[string]any, error) {
+	resourceType := stringArg(args, "resource_type")
+	size := interfaces.Size(stringArg(args, "size"))
+	var hints *interfaces.ResourceHints
+	if h, ok := args["hints"]; ok && h != nil {
+		hints = &interfaces.ResourceHints{}
+		if err := decodeJSONValue(h, hints); err != nil {
+			return nil, fmt.Errorf("IaCProvider.ResolveSizing: %w", err)
+		}
+	}
+	sizing, err := m.provider.ResolveSizing(resourceType, size, hints)
+	if err != nil {
+		return nil, err
+	}
+	return structToMap(sizing)
 }
 
 // invokeDriverUpdate decodes args and calls ResourceDriver.Update.
@@ -345,6 +477,52 @@ func intArg(args map[string]any, key string) int {
 		return int(v)
 	}
 	return 0
+}
+
+// refsFromArgs decodes the "refs" arg into a []ResourceRef via JSON round-trip.
+func refsFromArgs(args map[string]any) ([]interfaces.ResourceRef, error) {
+	var refs []interfaces.ResourceRef
+	if err := decodeJSONField(args, "refs", &refs); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+// decodeJSONField marshals args[key] to JSON, then unmarshals into out.
+func decodeJSONField(args map[string]any, key string, out any) error {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil // leave out at its zero value
+	}
+	return decodeJSONValue(v, out)
+}
+
+// decodeJSONValue marshals v to JSON, then unmarshals into out.
+func decodeJSONValue(v any, out any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	return nil
+}
+
+// structToMap serialises v to JSON and back to map[string]any for transport.
+func structToMap(v any) (map[string]any, error) {
+	if v == nil {
+		return map[string]any{}, nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("structToMap marshal: %w", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("structToMap unmarshal: %w", err)
+	}
+	return m, nil
 }
 
 func stringArg(args map[string]any, key string) string {
