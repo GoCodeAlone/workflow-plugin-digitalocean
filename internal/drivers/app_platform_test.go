@@ -327,3 +327,211 @@ func TestAppPlatformDriver_HealthCheck_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy when no active deployment")
 	}
 }
+
+// ── ParseImageRef unit tests ──────────────────────────────────────────────────
+
+func TestParseImageRef_DOCR(t *testing.T) {
+	spec, err := drivers.ParseImageRef("registry.digitalocean.com/foo/bar:v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.RegistryType != godo.ImageSourceSpecRegistryType_DOCR {
+		t.Errorf("RegistryType = %q, want DOCR", spec.RegistryType)
+	}
+	if spec.Registry != "" {
+		t.Errorf("Registry = %q, want empty (must be empty for DOCR)", spec.Registry)
+	}
+	if spec.Repository != "bar" {
+		t.Errorf("Repository = %q, want %q", spec.Repository, "bar")
+	}
+	if spec.Tag != "v1" {
+		t.Errorf("Tag = %q, want %q", spec.Tag, "v1")
+	}
+}
+
+func TestParseImageRef_GHCR(t *testing.T) {
+	spec, err := drivers.ParseImageRef("ghcr.io/org/app:sha256abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.RegistryType != godo.ImageSourceSpecRegistryType_Ghcr {
+		t.Errorf("RegistryType = %q, want GHCR", spec.RegistryType)
+	}
+	if spec.Registry != "org" {
+		t.Errorf("Registry = %q, want %q", spec.Registry, "org")
+	}
+	if spec.Repository != "app" {
+		t.Errorf("Repository = %q, want %q", spec.Repository, "app")
+	}
+	if spec.Tag != "sha256abc" {
+		t.Errorf("Tag = %q, want %q", spec.Tag, "sha256abc")
+	}
+}
+
+func TestParseImageRef_DockerHub_Explicit(t *testing.T) {
+	spec, err := drivers.ParseImageRef("docker.io/org/app:tag")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", spec.RegistryType)
+	}
+	if spec.Registry != "org" {
+		t.Errorf("Registry = %q, want %q", spec.Registry, "org")
+	}
+	if spec.Repository != "app" {
+		t.Errorf("Repository = %q, want %q", spec.Repository, "app")
+	}
+	if spec.Tag != "tag" {
+		t.Errorf("Tag = %q, want %q", spec.Tag, "tag")
+	}
+}
+
+func TestParseImageRef_DockerHub_Bare(t *testing.T) {
+	spec, err := drivers.ParseImageRef("org/app:tag")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", spec.RegistryType)
+	}
+	if spec.Registry != "org" {
+		t.Errorf("Registry = %q, want %q", spec.Registry, "org")
+	}
+	if spec.Repository != "app" {
+		t.Errorf("Repository = %q, want %q", spec.Repository, "app")
+	}
+}
+
+func TestParseImageRef_NoTag(t *testing.T) {
+	// Missing tag defaults to "latest".
+	spec, err := drivers.ParseImageRef("registry.digitalocean.com/myregistry/myapp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.Tag != "latest" {
+		t.Errorf("Tag = %q, want %q (default)", spec.Tag, "latest")
+	}
+}
+
+func TestParseImageRef_Malformed(t *testing.T) {
+	cases := []string{
+		"",                                     // empty
+		"justarepo",                            // no org/registry prefix
+		"registry.digitalocean.com/onlyone",    // DOCR with only one path segment
+		"ghcr.io/onlyone",                      // GHCR with only org, no repo
+		"docker.io/onlyone",                    // docker.io with only one path segment
+	}
+	for _, tc := range cases {
+		_, err := drivers.ParseImageRef(tc)
+		if err == nil {
+			t.Errorf("ParseImageRef(%q): expected error, got nil", tc)
+		}
+	}
+}
+
+// ── Create with nested image spec ────────────────────────────────────────────
+
+func TestAppPlatformDriver_Create_BuildsNestedImageSpec(t *testing.T) {
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "bmw-app",
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/bmw-registry/buymywishlist:abc123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if mock.lastCreateReq == nil {
+		t.Fatal("no create request captured")
+	}
+	svc := mock.lastCreateReq.Spec.Services[0]
+	img := svc.Image
+	if img == nil {
+		t.Fatal("service Image is nil")
+	}
+	if img.RegistryType != godo.ImageSourceSpecRegistryType_DOCR {
+		t.Errorf("RegistryType = %q, want DOCR", img.RegistryType)
+	}
+	if img.Registry != "" {
+		t.Errorf("Registry = %q, want empty (must be empty for DOCR)", img.Registry)
+	}
+	if img.Repository != "buymywishlist" {
+		t.Errorf("Repository = %q, want %q", img.Repository, "buymywishlist")
+	}
+	if img.Tag != "abc123" {
+		t.Errorf("Tag = %q, want %q", img.Tag, "abc123")
+	}
+}
+
+func TestAppPlatformDriver_Update_BuildsNestedImageSpec(t *testing.T) {
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "bmw-app", ProviderID: "app-123",
+	}, interfaces.ResourceSpec{
+		Name: "bmw-app",
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/bmw-registry/buymywishlist:def456",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if mock.lastUpdateReq == nil {
+		t.Fatal("no update request captured")
+	}
+	svc := mock.lastUpdateReq.Spec.Services[0]
+	img := svc.Image
+	if img == nil {
+		t.Fatal("service Image is nil")
+	}
+	if img.RegistryType != godo.ImageSourceSpecRegistryType_DOCR {
+		t.Errorf("RegistryType = %q, want DOCR", img.RegistryType)
+	}
+	if img.Repository != "buymywishlist" {
+		t.Errorf("Repository = %q, want %q", img.Repository, "buymywishlist")
+	}
+	if img.Tag != "def456" {
+		t.Errorf("Tag = %q, want %q", img.Tag, "def456")
+	}
+}
+
+func TestAppPlatformDriver_Create_NestedMapImageSpec(t *testing.T) {
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "bmw-app",
+		Config: map[string]any{
+			"image": map[string]any{
+				"registry_type": "DOCR",
+				"repository":    "buymywishlist",
+				"tag":           "v2",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create with nested map: %v", err)
+	}
+	svc := mock.lastCreateReq.Spec.Services[0]
+	img := svc.Image
+	if img == nil {
+		t.Fatal("service Image is nil")
+	}
+	if img.RegistryType != godo.ImageSourceSpecRegistryType_DOCR {
+		t.Errorf("RegistryType = %q, want DOCR", img.RegistryType)
+	}
+	if img.Repository != "buymywishlist" {
+		t.Errorf("Repository = %q, want %q", img.Repository, "buymywishlist")
+	}
+	if img.Tag != "v2" {
+		t.Errorf("Tag = %q, want %q", img.Tag, "v2")
+	}
+}

@@ -35,7 +35,10 @@ func NewAppPlatformDriverWithClient(c AppPlatformClient, region string) *AppPlat
 }
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	image, _ := spec.Config["image"].(string)
+	imgSpec, err := imageSpecFromConfig(spec.Config)
+	if err != nil {
+		return nil, fmt.Errorf("app platform image config: %w", err)
+	}
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
@@ -53,11 +56,7 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 					InstanceCount: int64(instanceCount),
 					HTTPPort:      int64(httpPort),
 					Envs:          envVarsFromConfig(spec.Config),
-					Image: &godo.ImageSourceSpec{
-						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
-						Repository:   imageRepo(image),
-						Tag:          imageTag(image),
-					},
+					Image:         imgSpec,
 				},
 			},
 		},
@@ -79,7 +78,10 @@ func (d *AppPlatformDriver) Read(ctx context.Context, ref interfaces.ResourceRef
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	image, _ := spec.Config["image"].(string)
+	imgSpec, err := imageSpecFromConfig(spec.Config)
+	if err != nil {
+		return nil, fmt.Errorf("app platform image config: %w", err)
+	}
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
@@ -97,11 +99,7 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 					InstanceCount: int64(instanceCount),
 					HTTPPort:      int64(httpPort),
 					Envs:          envVarsFromConfig(spec.Config),
-					Image: &godo.ImageSourceSpec{
-						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
-						Repository:   imageRepo(image),
-						Tag:          imageTag(image),
-					},
+					Image:         imgSpec,
 				},
 			},
 		},
@@ -181,17 +179,116 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 	return out
 }
 
-func imageRepo(image string) string {
-	parts := strings.SplitN(image, ":", 2)
-	return parts[0]
+// ParseImageRef parses a flat image reference string into a DO App Platform
+// ImageSourceSpec. Supports:
+//
+//   - registry.digitalocean.com/<registry>/<repo>:<tag>  → DOCR (Registry left empty per DO API requirement)
+//   - ghcr.io/<org>/<repo>:<tag>                         → GHCR
+//   - docker.io/<org>/<repo>:<tag>                       → DOCKER_HUB
+//   - <org>/<repo>:<tag>                                 → DOCKER_HUB (bare form)
+//
+// A missing tag defaults to "latest".
+func ParseImageRef(imageStr string) (*godo.ImageSourceSpec, error) {
+	if imageStr == "" {
+		return nil, fmt.Errorf("image ref is empty")
+	}
+
+	// Separate tag from the path reference.
+	ref, tag, _ := strings.Cut(imageStr, ":")
+	if tag == "" {
+		tag = "latest"
+	}
+
+	parts := strings.Split(ref, "/")
+
+	switch {
+	case strings.HasPrefix(ref, "registry.digitalocean.com/"):
+		// registry.digitalocean.com/<registry>/<repo>
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("invalid DOCR image ref %q: expected registry.digitalocean.com/<registry>/<repo>", imageStr)
+		}
+		return &godo.ImageSourceSpec{
+			RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
+			// Registry must be left empty for DOCR per DO API.
+			Repository: parts[len(parts)-1],
+			Tag:        tag,
+		}, nil
+
+	case strings.HasPrefix(ref, "ghcr.io/"):
+		// ghcr.io/<org>/<repo>
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("invalid GHCR image ref %q: expected ghcr.io/<org>/<repo>", imageStr)
+		}
+		return &godo.ImageSourceSpec{
+			RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+			Registry:     parts[1],
+			Repository:   parts[len(parts)-1],
+			Tag:          tag,
+		}, nil
+
+	case strings.HasPrefix(ref, "docker.io/"):
+		// docker.io/<org>/<repo>
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("invalid Docker Hub image ref %q: expected docker.io/<org>/<repo>", imageStr)
+		}
+		return &godo.ImageSourceSpec{
+			RegistryType: godo.ImageSourceSpecRegistryType_DockerHub,
+			Registry:     parts[1],
+			Repository:   parts[len(parts)-1],
+			Tag:          tag,
+		}, nil
+
+	default:
+		// Bare <org>/<repo> format treated as Docker Hub.
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("unsupported image ref %q: expected <org>/<repo>[:tag] or a registry-prefixed form (registry.digitalocean.com, ghcr.io, docker.io)", imageStr)
+		}
+		return &godo.ImageSourceSpec{
+			RegistryType: godo.ImageSourceSpecRegistryType_DockerHub,
+			Registry:     parts[0],
+			Repository:   parts[len(parts)-1],
+			Tag:          tag,
+		}, nil
+	}
 }
 
-func imageTag(image string) string {
-	parts := strings.SplitN(image, ":", 2)
-	if len(parts) == 2 {
-		return parts[1]
+// imageSpecFromConfig extracts an ImageSourceSpec from spec.Config["image"].
+// Accepts either a flat string (parsed by ParseImageRef) or an already-nested
+// map[string]any with keys registry_type, repository, tag, registry.
+func imageSpecFromConfig(cfg map[string]any) (*godo.ImageSourceSpec, error) {
+	switch v := cfg["image"].(type) {
+	case string:
+		if v == "" {
+			return nil, fmt.Errorf("image config is empty")
+		}
+		return ParseImageRef(v)
+	case map[string]any:
+		return imageSpecFromMap(v)
+	default:
+		return nil, fmt.Errorf("image config must be a string or map[string]any, got %T", cfg["image"])
 	}
-	return "latest"
+}
+
+func imageSpecFromMap(m map[string]any) (*godo.ImageSourceSpec, error) {
+	repo, _ := m["repository"].(string)
+	if repo == "" {
+		return nil, fmt.Errorf("image map config missing required field 'repository'")
+	}
+	regType, _ := m["registry_type"].(string)
+	if regType == "" {
+		regType = string(godo.ImageSourceSpecRegistryType_DOCR)
+	}
+	tag, _ := m["tag"].(string)
+	if tag == "" {
+		tag = "latest"
+	}
+	registry, _ := m["registry"].(string)
+	return &godo.ImageSourceSpec{
+		RegistryType: godo.ImageSourceSpecRegistryType(regType),
+		Registry:     registry,
+		Repository:   repo,
+		Tag:          tag,
+	}, nil
 }
 
 // envVarsFromConfig converts the "env_vars" map in spec config to App Platform
