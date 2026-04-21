@@ -294,8 +294,20 @@ func currentFromArgs(args map[string]any) *interfaces.ResourceOutput {
 	if outputs, ok := args["current_outputs"].(map[string]any); ok {
 		out.Outputs = outputs
 	}
-	if sensitive, ok := args["current_sensitive"].(map[string]bool); ok {
-		out.Sensitive = sensitive
+	switch v := args["current_sensitive"].(type) {
+	case map[string]bool:
+		out.Sensitive = v
+	case map[string]any:
+		// gRPC/protobuf Struct deserializes nested objects as map[string]any.
+		sens := make(map[string]bool, len(v))
+		for k, val := range v {
+			if b, ok := val.(bool); ok {
+				sens[k] = b
+			}
+		}
+		if len(sens) > 0 {
+			out.Sensitive = sens
+		}
 	}
 	return out
 }

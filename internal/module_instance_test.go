@@ -334,6 +334,44 @@ func TestDoModuleInstance_InvokeMethod_Diff_DispatchesToDriver(t *testing.T) {
 	}
 }
 
+func TestDoModuleInstance_InvokeMethod_Diff_CurrentSensitive_GRPCForm(t *testing.T) {
+	// current_sensitive arrives as map[string]any through the gRPC boundary
+	// (protobuf Struct deserializes nested objects as map[string]any, not map[string]bool).
+	// Verify currentFromArgs handles both forms correctly.
+	stub := &stubResourceDriver{diffOutput: &interfaces.DiffResult{NeedsUpdate: false}}
+	provider := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.database": stub}}
+	mi := &doModuleInstance{provider: provider}
+
+	_, err := mi.InvokeMethod("ResourceDriver.Diff", map[string]any{
+		"resource_type":       "infra.database",
+		"spec_name":           "my-db",
+		"spec_type":           "infra.database",
+		"spec_config":         map[string]any{},
+		"current_provider_id": "do-abc",
+		"current_name":        "my-db",
+		"current_type":        "infra.database",
+		"current_status":      "running",
+		// gRPC-deserialized form: values are any (bool), not a typed map[string]bool
+		"current_sensitive": map[string]any{"password": true, "api_key": true},
+	})
+	if err != nil {
+		t.Fatalf("Diff with gRPC-form current_sensitive: %v", err)
+	}
+	if !stub.diffCalled {
+		t.Error("Diff was not called on the driver")
+	}
+	// Verify the sensitive map was decoded into the ResourceOutput passed to Diff.
+	if stub.lastDiffCurrent == nil {
+		t.Fatal("expected non-nil current passed to Diff")
+	}
+	if !stub.lastDiffCurrent.Sensitive["password"] {
+		t.Errorf("expected sensitive[password]=true, got %v", stub.lastDiffCurrent.Sensitive)
+	}
+	if !stub.lastDiffCurrent.Sensitive["api_key"] {
+		t.Errorf("expected sensitive[api_key]=true, got %v", stub.lastDiffCurrent.Sensitive)
+	}
+}
+
 func TestDoModuleInstance_InvokeMethod_Scale_DispatchesToDriver(t *testing.T) {
 	stub := &stubResourceDriver{scaleOutput: &interfaces.ResourceOutput{
 		ProviderID: "do-777", Status: "scaling",
@@ -431,16 +469,19 @@ func TestDoModuleInstance_InvokeMethod_ResourceOutputSensitive(t *testing.T) {
 
 type stubResourceDriver struct {
 	// call tracking
-	createCalled       bool
-	readCalled         bool
-	updateCalled       bool
-	deleteCalled       bool
-	diffCalled         bool
-	scaleCalled        bool
-	scaleReplicas      int
+	createCalled        bool
+	readCalled          bool
+	updateCalled        bool
+	deleteCalled        bool
+	diffCalled          bool
+	scaleCalled         bool
+	scaleReplicas       int
 	sensitiveKeysCalled bool
-	healthyResult      bool
-	healthMessage      string
+	healthyResult       bool
+	healthMessage       string
+
+	// args captured on last call
+	lastDiffCurrent *interfaces.ResourceOutput
 
 	// return values
 	createOutput  *interfaces.ResourceOutput
@@ -472,8 +513,9 @@ func (s *stubResourceDriver) Delete(_ context.Context, _ interfaces.ResourceRef)
 	s.deleteCalled = true
 	return nil
 }
-func (s *stubResourceDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+func (s *stubResourceDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	s.diffCalled = true
+	s.lastDiffCurrent = current
 	if s.diffOutput != nil {
 		return s.diffOutput, nil
 	}
