@@ -8,7 +8,7 @@ env:
   GOPRIVATE: github.com/GoCodeAlone/*
 jobs:
   test:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
