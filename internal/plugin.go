@@ -20,7 +20,7 @@ func NewDOPlugin() sdk.PluginProvider {
 func (p *doPlugin) Manifest() sdk.PluginManifest {
 	return sdk.PluginManifest{
 		Name:        "workflow-plugin-digitalocean",
-		Version:     "0.6.0",
+		Version:     "0.6.1",
 		Author:      "GoCodeAlone",
 		Description: "DigitalOcean IaC provider: App Platform, DOKS, databases, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, and Droplets",
 	}
