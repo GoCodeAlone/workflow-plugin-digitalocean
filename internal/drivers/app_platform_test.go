@@ -185,6 +185,9 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
+	if mock.createDeploymentCalled {
+		t.Error("CreateDeployment should not be called on Update failure")
+	}
 }
 
 func TestAppPlatformDriver_Update_TriggersCreateDeployment(t *testing.T) {
@@ -511,6 +514,19 @@ func TestAppPlatformDriver_HealthCheck_NoDeployment(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "no deployment") {
 		t.Errorf("message should contain 'no deployment', got: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Unknown), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false for unknown phase")
+	}
+	if !strings.Contains(result.Message, "unknown phase") {
+		t.Errorf("message should contain 'unknown phase', got: %q", result.Message)
 	}
 }
 

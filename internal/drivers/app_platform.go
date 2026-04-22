@@ -142,9 +142,11 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	// Trigger a new deployment — Update only changes the spec; DO does not auto-deploy.
-	if _, _, err := d.client.CreateDeployment(ctx, ref.ProviderID, &godo.DeploymentCreateRequest{ForceBuild: true}); err != nil {
+	dep, _, err := d.client.CreateDeployment(ctx, ref.ProviderID, &godo.DeploymentCreateRequest{ForceBuild: true})
+	if err != nil {
 		return nil, fmt.Errorf("app platform create deployment %q: %w", ref.Name, WrapGodoError(err))
 	}
+	fmt.Printf("  app platform deploy %q: triggered deployment %s\n", spec.Name, dep.ID)
 	return appOutput(app), nil
 }
 
@@ -203,11 +205,19 @@ func appHealthResult(app *godo.App) *interfaces.HealthResult {
 				Healthy: false,
 				Message: fmt.Sprintf("deployment in progress: %s", dep.Phase),
 			}
-		default:
-			// ERROR, CANCELED, SUPERSEDED, etc.
+		case godo.DeploymentPhase_Error,
+			godo.DeploymentPhase_Canceled,
+			godo.DeploymentPhase_Superseded:
 			return &interfaces.HealthResult{
 				Healthy: false,
 				Message: fmt.Sprintf("deployment failed: %s", dep.Phase),
+			}
+		default:
+			// Forward-compat: a future godo release may add new phases.
+			// Report "unknown" rather than "failed" to avoid mislabeling.
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("unknown phase: %s", dep.Phase),
 			}
 		}
 	}
