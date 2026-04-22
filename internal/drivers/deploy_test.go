@@ -76,6 +76,13 @@ func (m *deployMockClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo
 	return apps, &godo.Response{}, nil
 }
 
+func (m *deployMockClient) CreateDeployment(_ context.Context, _ string, _ ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return &godo.Deployment{ID: "dep-deploy"}, nil, nil
+}
+
 func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Response, error) {
 	if m.err != nil {
 		return nil, m.err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -12,14 +13,26 @@ import (
 	"github.com/digitalocean/godo"
 )
 
+// makeGodoErr builds a *godo.ErrorResponse with the given HTTP status code,
+// matching what WrapGodoError inspects.
+func makeGodoErr(statusCode int) error {
+	return &godo.ErrorResponse{
+		Response: &http.Response{StatusCode: statusCode},
+		Message:  http.StatusText(statusCode),
+	}
+}
+
 // mockAppClient is a mock implementation of AppPlatformClient.
 type mockAppClient struct {
-	app           *godo.App
-	err           error
-	listApps      []*godo.App // returned by List
-	listErr       error       // error returned by List
-	lastCreateReq *godo.AppCreateRequest
-	lastUpdateReq *godo.AppUpdateRequest
+	app                    *godo.App
+	err                    error
+	listApps               []*godo.App // returned by List
+	listErr                error       // error returned by List
+	createDeploymentErr    error       // error returned by CreateDeployment
+	createDeploymentCalled bool
+	lastCreateDeployReq    *godo.DeploymentCreateRequest
+	lastCreateReq          *godo.AppCreateRequest
+	lastUpdateReq          *godo.AppUpdateRequest
 }
 
 func (m *mockAppClient) Create(_ context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
@@ -35,6 +48,13 @@ func (m *mockAppClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.Ap
 func (m *mockAppClient) Update(_ context.Context, _ string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	m.lastUpdateReq = req
 	return m.app, nil, m.err
+}
+func (m *mockAppClient) CreateDeployment(_ context.Context, _ string, reqs ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
+	m.createDeploymentCalled = true
+	for _, r := range reqs {
+		m.lastCreateDeployReq = r
+	}
+	return &godo.Deployment{ID: "dep-1"}, nil, m.createDeploymentErr
 }
 func (m *mockAppClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
@@ -164,6 +184,66 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestAppPlatformDriver_Update_TriggersCreateDeployment(t *testing.T) {
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-app", ProviderID: "app-123",
+	}, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !mock.createDeploymentCalled {
+		t.Error("expected CreateDeployment to be called after Update")
+	}
+	if mock.lastCreateDeployReq == nil || !mock.lastCreateDeployReq.ForceBuild {
+		t.Error("expected CreateDeployment called with ForceBuild=true")
+	}
+}
+
+func TestAppPlatformDriver_Update_CreateDeploymentFails(t *testing.T) {
+	mock := &mockAppClient{
+		app:                 testApp(),
+		createDeploymentErr: fmt.Errorf("deployment quota exceeded"),
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-app", ProviderID: "app-123",
+	}, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	})
+	if err == nil {
+		t.Fatal("expected error when CreateDeployment fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "deployment quota exceeded") {
+		t.Errorf("error should contain original message, got: %v", err)
+	}
+}
+
+func TestAppPlatformDriver_Update_CreateDeploymentSentinelPropagates(t *testing.T) {
+	mock := &mockAppClient{
+		app:                 testApp(),
+		createDeploymentErr: makeGodoErr(http.StatusTooManyRequests),
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-app", ProviderID: "app-123",
+	}, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	})
+	if !errors.Is(err, interfaces.ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited sentinel, got: %v", err)
 	}
 }
 
