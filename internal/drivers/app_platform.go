@@ -21,6 +21,7 @@ type AppPlatformClient interface {
 	Get(ctx context.Context, appID string) (*godo.App, *godo.Response, error)
 	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
 	Update(ctx context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error)
+	CreateDeployment(ctx context.Context, appID string, req ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
 
@@ -139,6 +140,10 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 	app, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
+	}
+	// Trigger a new deployment — Update only changes the spec; DO does not auto-deploy.
+	if _, _, err := d.client.CreateDeployment(ctx, ref.ProviderID, &godo.DeploymentCreateRequest{ForceBuild: true}); err != nil {
+		return nil, fmt.Errorf("app platform create deployment %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(app), nil
 }
