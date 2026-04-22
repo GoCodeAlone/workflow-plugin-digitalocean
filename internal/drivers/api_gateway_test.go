@@ -3,6 +3,7 @@ package drivers_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -206,5 +207,91 @@ func TestAPIGatewayDriver_HealthCheck_Unhealthy(t *testing.T) {
 	}
 	if result.Healthy {
 		t.Errorf("expected unhealthy when no active deployment")
+	}
+}
+
+// ── APIGateway HealthCheck deployment-phase tests ────────────────────────────
+
+func gwAppWithPhases(active, inProgress, pending *godo.DeploymentPhase) *godo.App {
+	app := &godo.App{ID: "app-gw-999", Spec: &godo.AppSpec{Name: "phased-gw"}}
+	if active != nil {
+		app.ActiveDeployment = &godo.Deployment{Phase: *active}
+	}
+	if inProgress != nil {
+		app.InProgressDeployment = &godo.Deployment{Phase: *inProgress}
+	}
+	if pending != nil {
+		app.PendingDeployment = &godo.Deployment{Phase: *pending}
+	}
+	return app
+}
+
+func gwPhasePtr(p godo.DeploymentPhase) *godo.DeploymentPhase { return &p }
+
+func TestAPIGatewayDriver_HealthCheck_InProgress_Building(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, gwPhasePtr(godo.DeploymentPhase_Building), nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false while BUILDING")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+}
+
+func TestAPIGatewayDriver_HealthCheck_InProgress_Deploying(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, gwPhasePtr(godo.DeploymentPhase_Deploying), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false while DEPLOYING")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+}
+
+func TestAPIGatewayDriver_HealthCheck_InProgress_Failed(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, gwPhasePtr(godo.DeploymentPhase_Error), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false for ERROR phase")
+	}
+	if !strings.Contains(result.Message, "failed") {
+		t.Errorf("message should contain 'failed', got: %q", result.Message)
+	}
+}
+
+func TestAPIGatewayDriver_HealthCheck_PendingDeployment(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, nil, gwPhasePtr(godo.DeploymentPhase_PendingBuild)),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false with only a pending deployment")
+	}
+	if !strings.Contains(result.Message, "queued") {
+		t.Errorf("message should contain 'queued', got: %q", result.Message)
+	}
+}
+
+func TestAPIGatewayDriver_HealthCheck_NoDeployment(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, nil, nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false with no deployments")
+	}
+	if !strings.Contains(result.Message, "no deployment") {
+		t.Errorf("message should contain 'no deployment', got: %q", result.Message)
 	}
 }
