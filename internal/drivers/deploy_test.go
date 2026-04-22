@@ -65,6 +65,17 @@ func (m *deployMockClient) Update(_ context.Context, appID string, req *godo.App
 	return app, nil, nil
 }
 
+func (m *deployMockClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	apps := make([]*godo.App, 0, len(m.apps))
+	for _, a := range m.apps {
+		apps = append(apps, a)
+	}
+	return apps, &godo.Response{}, nil
+}
+
 func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Response, error) {
 	if m.err != nil {
 		return nil, m.err
