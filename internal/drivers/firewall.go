@@ -35,7 +35,7 @@ func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	req := firewallRequest(spec)
 	fw, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("firewall create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("firewall create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return fwOutput(fw), nil
 }
@@ -43,7 +43,7 @@ func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 func (d *FirewallDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	fw, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("firewall read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("firewall read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return fwOutput(fw), nil
 }
@@ -52,7 +52,7 @@ func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	req := firewallRequest(spec)
 	fw, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
-		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return fwOutput(fw), nil
 }
@@ -60,7 +60,7 @@ func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("firewall delete %q: %w", ref.Name, err)
+		return fmt.Errorf("firewall delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

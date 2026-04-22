@@ -44,7 +44,7 @@ func (d *VPCDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 
 	vpc, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("vpc create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("vpc create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return vpcOutput(vpc), nil
 }
@@ -52,7 +52,7 @@ func (d *VPCDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 func (d *VPCDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	vpc, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("vpc read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("vpc read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return vpcOutput(vpc), nil
 }
@@ -63,7 +63,7 @@ func (d *VPCDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 	}
 	vpc, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
-		return nil, fmt.Errorf("vpc update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("vpc update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return vpcOutput(vpc), nil
 }
@@ -71,7 +71,7 @@ func (d *VPCDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 func (d *VPCDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("vpc delete %q: %w", ref.Name, err)
+		return fmt.Errorf("vpc delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

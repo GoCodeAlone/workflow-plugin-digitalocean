@@ -49,7 +49,7 @@ func (d *CertificateDriver) Create(ctx context.Context, spec interfaces.Resource
 
 	cert, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("certificate create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("certificate create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return certOutput(cert, spec.Name), nil
 }
@@ -57,7 +57,7 @@ func (d *CertificateDriver) Create(ctx context.Context, spec interfaces.Resource
 func (d *CertificateDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	cert, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("certificate read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("certificate read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return certOutput(cert, ref.Name), nil
 }
@@ -73,7 +73,7 @@ func (d *CertificateDriver) Update(ctx context.Context, ref interfaces.ResourceR
 func (d *CertificateDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("certificate delete %q: %w", ref.Name, err)
+		return fmt.Errorf("certificate delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 
 	droplet, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("droplet create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("droplet create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return dropletOutput(droplet), nil
 }
@@ -54,7 +54,7 @@ func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*
 	id := providerIDToInt(ref.ProviderID)
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("droplet read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("droplet read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return dropletOutput(droplet), nil
 }
@@ -67,7 +67,7 @@ func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) 
 	id := providerIDToInt(ref.ProviderID)
 	_, err := d.client.Delete(ctx, id)
 	if err != nil {
-		return fmt.Errorf("droplet delete %q: %w", ref.Name, err)
+		return fmt.Errorf("droplet delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

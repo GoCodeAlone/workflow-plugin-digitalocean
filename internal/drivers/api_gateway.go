@@ -45,7 +45,7 @@ func (d *APIGatewayDriver) Create(ctx context.Context, spec interfaces.ResourceS
 
 	app, _, err := d.client.Create(ctx, &godo.AppCreateRequest{Spec: appSpec})
 	if err != nil {
-		return nil, fmt.Errorf("api_gateway create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("api_gateway create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return apiGatewayOutput(app), nil
 }
@@ -53,7 +53,7 @@ func (d *APIGatewayDriver) Create(ctx context.Context, spec interfaces.ResourceS
 func (d *APIGatewayDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	app, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("api_gateway read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("api_gateway read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return apiGatewayOutput(app), nil
 }
@@ -64,7 +64,7 @@ func (d *APIGatewayDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 
 	app, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
-		return nil, fmt.Errorf("api_gateway update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("api_gateway update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return apiGatewayOutput(app), nil
 }
@@ -72,7 +72,7 @@ func (d *APIGatewayDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 func (d *APIGatewayDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("api_gateway delete %q: %w", ref.Name, err)
+		return fmt.Errorf("api_gateway delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

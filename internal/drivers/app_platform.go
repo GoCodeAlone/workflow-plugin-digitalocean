@@ -70,7 +70,7 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 
 	app, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("app platform create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("app platform create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return appOutput(app), nil
 }
@@ -81,7 +81,7 @@ func (d *AppPlatformDriver) Read(ctx context.Context, ref interfaces.ResourceRef
 	}
 	app, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("app platform read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("app platform read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(app), nil
 }
@@ -93,7 +93,7 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 	for {
 		apps, resp, err := d.client.List(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("app platform list: %w", err)
+			return nil, fmt.Errorf("app platform list: %w", WrapGodoError(err))
 		}
 		for _, app := range apps {
 			if app.Spec != nil && app.Spec.Name == name {
@@ -138,7 +138,7 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 
 	app, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
-		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(app), nil
 }
@@ -146,7 +146,7 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 func (d *AppPlatformDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("app platform delete %q: %w", ref.Name, err)
+		return fmt.Errorf("app platform delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }
@@ -219,7 +219,7 @@ func appHealthResult(app *godo.App) *interfaces.HealthResult {
 func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
 	app, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("app platform scale read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("app platform scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	spec := app.Spec
 	for _, svc := range spec.Services {
@@ -227,7 +227,7 @@ func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRe
 	}
 	updated, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: spec})
 	if err != nil {
-		return nil, fmt.Errorf("app platform scale update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("app platform scale update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(updated), nil
 }

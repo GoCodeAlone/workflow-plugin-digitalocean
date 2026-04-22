@@ -54,7 +54,7 @@ func (d *KubernetesDriver) Create(ctx context.Context, spec interfaces.ResourceS
 
 	cluster, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("kubernetes create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return k8sOutput(cluster), nil
 }
@@ -62,7 +62,7 @@ func (d *KubernetesDriver) Create(ctx context.Context, spec interfaces.ResourceS
 func (d *KubernetesDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("kubernetes read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return k8sOutput(cluster), nil
 }
@@ -73,7 +73,7 @@ func (d *KubernetesDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 	}
 	cluster, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("kubernetes update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return k8sOutput(cluster), nil
 }
@@ -81,7 +81,7 @@ func (d *KubernetesDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 func (d *KubernetesDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("kubernetes delete %q: %w", ref.Name, err)
+		return fmt.Errorf("kubernetes delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func (d *KubernetesDriver) HealthCheck(ctx context.Context, ref interfaces.Resou
 func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
 	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes scale read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("kubernetes scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	if len(cluster.NodePools) == 0 {
 		return nil, fmt.Errorf("kubernetes scale %q: no node pools found", ref.Name)
@@ -122,7 +122,7 @@ func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef
 		Count: &count,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes scale %q pool %q: %w", ref.Name, pool.ID, err)
+		return nil, fmt.Errorf("kubernetes scale %q pool %q: %w", ref.Name, pool.ID, WrapGodoError(err))
 	}
 	return d.Read(ctx, ref)
 }

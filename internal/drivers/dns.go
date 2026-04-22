@@ -48,7 +48,7 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 	if err != nil {
 		dom, _, err = d.client.Create(ctx, &godo.DomainCreateRequest{Name: domain})
 		if err != nil {
-			return nil, fmt.Errorf("dns create domain %q: %w", domain, err)
+			return nil, fmt.Errorf("dns create domain %q: %w", domain, WrapGodoError(err))
 		}
 	}
 
@@ -63,7 +63,7 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 	domain := ref.ProviderID
 	dom, _, err := d.client.Get(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("dns read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("dns read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return dnsOutput(dom, ref.Name), nil
 }
@@ -79,7 +79,7 @@ func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 func (d *DNSDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("dns delete %q: %w", ref.Name, err)
+		return fmt.Errorf("dns delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }
@@ -112,7 +112,7 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map
 
 	existing, _, err := d.client.Records(ctx, domain, nil)
 	if err != nil {
-		return fmt.Errorf("dns list records %q: %w", domain, err)
+		return fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
 	}
 
 	existingByName := make(map[string]godo.DomainRecord)
@@ -141,11 +141,11 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map
 		key := strings.ToLower(rType) + ":" + rName
 		if existing, found := existingByName[key]; found {
 			if _, _, err := d.client.EditRecord(ctx, domain, existing.ID, editReq); err != nil {
-				return fmt.Errorf("dns update record %q %s/%s: %w", domain, rType, rName, err)
+				return fmt.Errorf("dns update record %q %s/%s: %w", domain, rType, rName, WrapGodoError(err))
 			}
 		} else {
 			if _, _, err := d.client.CreateRecord(ctx, domain, editReq); err != nil {
-				return fmt.Errorf("dns create record %q %s/%s: %w", domain, rType, rName, err)
+				return fmt.Errorf("dns create record %q %s/%s: %w", domain, rType, rName, WrapGodoError(err))
 			}
 		}
 	}
