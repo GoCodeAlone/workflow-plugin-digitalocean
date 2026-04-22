@@ -52,7 +52,7 @@ func (d *LoadBalancerDriver) Create(ctx context.Context, spec interfaces.Resourc
 
 	lb, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("load balancer create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("load balancer create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return lbOutput(lb), nil
 }
@@ -60,7 +60,7 @@ func (d *LoadBalancerDriver) Create(ctx context.Context, spec interfaces.Resourc
 func (d *LoadBalancerDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	lb, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("load balancer read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("load balancer read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return lbOutput(lb), nil
 }
@@ -85,7 +85,7 @@ func (d *LoadBalancerDriver) Update(ctx context.Context, ref interfaces.Resource
 
 	lb, _, err := d.client.Update(ctx, ref.ProviderID, req)
 	if err != nil {
-		return nil, fmt.Errorf("load balancer update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("load balancer update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return lbOutput(lb), nil
 }
@@ -93,7 +93,7 @@ func (d *LoadBalancerDriver) Update(ctx context.Context, ref interfaces.Resource
 func (d *LoadBalancerDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("load balancer delete %q: %w", ref.Name, err)
+		return fmt.Errorf("load balancer delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

@@ -41,7 +41,7 @@ func (d *RegistryDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 		Region:               region,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("registry create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("registry create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return registryOutput(reg, spec.Name), nil
 }
@@ -49,7 +49,7 @@ func (d *RegistryDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 func (d *RegistryDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	reg, _, err := d.client.Get(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("registry read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("registry read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return registryOutput(reg, ref.Name), nil
 }
@@ -58,7 +58,7 @@ func (d *RegistryDriver) Update(ctx context.Context, _ interfaces.ResourceRef, s
 	// DOCR does not support in-place updates; return current state.
 	reg, _, err := d.client.Get(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("registry update %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("registry update %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return registryOutput(reg, spec.Name), nil
 }
@@ -66,7 +66,7 @@ func (d *RegistryDriver) Update(ctx context.Context, _ interfaces.ResourceRef, s
 func (d *RegistryDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx)
 	if err != nil {
-		return fmt.Errorf("registry delete %q: %w", ref.Name, err)
+		return fmt.Errorf("registry delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }

@@ -51,7 +51,7 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 
 	db, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("database create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("database create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return dbOutput(db), nil
 }
@@ -59,7 +59,7 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 func (d *DatabaseDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("database read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("database read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return dbOutput(db), nil
 }
@@ -72,7 +72,7 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 		NumNodes: numNodes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("database update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("database update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return d.Read(ctx, ref)
 }
@@ -80,7 +80,7 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 func (d *DatabaseDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("database delete %q: %w", ref.Name, err)
+		return fmt.Errorf("database delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }
@@ -110,14 +110,14 @@ func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.Resourc
 func (d *DatabaseDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("database scale read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("database scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	_, err = d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
 		SizeSlug: db.SizeSlug,
 		NumNodes: replicas,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("database scale %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("database scale %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return d.Read(ctx, ref)
 }

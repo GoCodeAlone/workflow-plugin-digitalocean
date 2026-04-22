@@ -50,7 +50,7 @@ func (d *CacheDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) 
 
 	db, _, err := d.client.Create(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("cache create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("cache create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	return cacheOutput(db), nil
 }
@@ -58,7 +58,7 @@ func (d *CacheDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) 
 func (d *CacheDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("cache read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cache read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return cacheOutput(db), nil
 }
@@ -71,7 +71,7 @@ func (d *CacheDriver) Update(ctx context.Context, ref interfaces.ResourceRef, sp
 		NumNodes: numNodes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cache update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cache update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return d.Read(ctx, ref)
 }
@@ -79,7 +79,7 @@ func (d *CacheDriver) Update(ctx context.Context, ref interfaces.ResourceRef, sp
 func (d *CacheDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
-		return fmt.Errorf("cache delete %q: %w", ref.Name, err)
+		return fmt.Errorf("cache delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
 }
@@ -109,14 +109,14 @@ func (d *CacheDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRe
 func (d *CacheDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("cache scale read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cache scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	_, err = d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
 		SizeSlug: db.SizeSlug,
 		NumNodes: replicas,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cache scale %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cache scale %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return d.Read(ctx, ref)
 }
