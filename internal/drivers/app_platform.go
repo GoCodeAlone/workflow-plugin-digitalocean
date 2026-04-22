@@ -3,6 +3,7 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,10 +11,15 @@ import (
 	"github.com/digitalocean/godo"
 )
 
+// ErrResourceNotFound is returned when a resource cannot be located by name or ID.
+// It is intended to be used with errors.Is for sentinel matching.
+var ErrResourceNotFound = errors.New("resource not found")
+
 // AppPlatformClient is the godo App interface used by AppPlatformDriver (for mocking).
 type AppPlatformClient interface {
 	Create(ctx context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error)
 	Get(ctx context.Context, appID string) (*godo.App, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
 	Update(ctx context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
@@ -70,11 +76,36 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 }
 
 func (d *AppPlatformDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	if ref.ProviderID == "" {
+		return d.findAppByName(ctx, ref.Name)
+	}
 	app, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("app platform read %q: %w", ref.Name, err)
 	}
 	return appOutput(app), nil
+}
+
+// findAppByName iterates the paginated app list and returns the first app whose
+// Spec.Name matches name. Returns ErrResourceNotFound if no match is found.
+func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		apps, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("app platform list: %w", err)
+		}
+		for _, app := range apps {
+			if app.Spec != nil && app.Spec.Name == name {
+				return appOutput(app), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("app %q: %w", name, ErrResourceNotFound)
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {

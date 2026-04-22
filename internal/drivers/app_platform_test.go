@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 type mockAppClient struct {
 	app           *godo.App
 	err           error
+	listApps      []*godo.App // returned by List
+	listErr       error       // error returned by List
 	lastCreateReq *godo.AppCreateRequest
 	lastUpdateReq *godo.AppUpdateRequest
 }
@@ -24,6 +27,9 @@ func (m *mockAppClient) Create(_ context.Context, req *godo.AppCreateRequest) (*
 }
 func (m *mockAppClient) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
 	return m.app, nil, m.err
+}
+func (m *mockAppClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	return m.listApps, &godo.Response{}, m.listErr
 }
 func (m *mockAppClient) Update(_ context.Context, _ string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	m.lastUpdateReq = req
@@ -500,6 +506,69 @@ func TestAppPlatformDriver_Update_BuildsNestedImageSpec(t *testing.T) {
 	}
 	if img.Tag != "def456" {
 		t.Errorf("Tag = %q, want %q", img.Tag, "def456")
+	}
+}
+
+// ── Read by name ─────────────────────────────────────────────────────────────
+
+func TestAppPlatformDriver_Read_ByName_Found(t *testing.T) {
+	app := &godo.App{
+		ID:      "app-456",
+		LiveURL: "https://bmw.example.com",
+		Spec:    &godo.AppSpec{Name: "bmw-app"},
+		ActiveDeployment: &godo.Deployment{
+			Phase: godo.DeploymentPhase_Active,
+		},
+	}
+	mock := &mockAppClient{listApps: []*godo.App{app}}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "bmw-app",
+		// ProviderID intentionally empty — should trigger name-based lookup.
+	})
+	if err != nil {
+		t.Fatalf("Read by name: unexpected error: %v", err)
+	}
+	if out.ProviderID != "app-456" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-456")
+	}
+	if out.Name != "bmw-app" {
+		t.Errorf("Name = %q, want %q", out.Name, "bmw-app")
+	}
+	if out.Status != "running" {
+		t.Errorf("Status = %q, want %q", out.Status, "running")
+	}
+}
+
+func TestAppPlatformDriver_Read_ByName_NotFound(t *testing.T) {
+	mock := &mockAppClient{listApps: []*godo.App{}} // empty list
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "missing-app",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown name, got nil")
+	}
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Errorf("expected ErrResourceNotFound, got: %v", err)
+	}
+}
+
+func TestAppPlatformDriver_Read_ByID_StillWorks(t *testing.T) {
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "app-123",
+	})
+	if err != nil {
+		t.Fatalf("Read by ID: unexpected error: %v", err)
+	}
+	if out.ProviderID != "app-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-123")
 	}
 }
 
