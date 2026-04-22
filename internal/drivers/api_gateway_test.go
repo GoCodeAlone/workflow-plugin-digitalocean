@@ -295,3 +295,16 @@ func TestAPIGatewayDriver_HealthCheck_NoDeployment(t *testing.T) {
 		t.Errorf("message should contain 'no deployment', got: %q", result.Message)
 	}
 }
+
+func TestAPIGatewayDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
+	d := drivers.NewAPIGatewayDriverWithClient(&mockAPIGatewayClient{
+		app: gwAppWithPhases(nil, gwPhasePtr(godo.DeploymentPhase_Unknown), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-gw", ProviderID: "app-gw-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false for unknown phase")
+	}
+	if !strings.Contains(result.Message, "unknown phase") {
+		t.Errorf("message should contain 'unknown phase', got: %q", result.Message)
+	}
+}

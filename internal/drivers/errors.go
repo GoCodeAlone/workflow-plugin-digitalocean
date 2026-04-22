@@ -13,13 +13,20 @@ import (
 // sentinel so callers can use errors.Is for classification while still having
 // access to the original DO API message via err.Error().
 //
-// If err is nil or not a *godo.ErrorResponse, it is returned unchanged.
+// Two passthrough branches return err unchanged:
+//   - err is nil → return nil (no-op; safe to call unconditionally)
+//   - err is not a *godo.ErrorResponse, or its Response field is nil → return err
+//     (e.g. network errors, context cancellation, or SDK bugs; not DO API errors)
+//
+// HTTP codes with no sentinel mapping (e.g. 301, 400 handled elsewhere) also
+// pass through unchanged via sentinelForStatus returning nil.
 func WrapGodoError(err error) error {
 	if err == nil {
 		return nil
 	}
 	gErr, ok := err.(*godo.ErrorResponse)
 	if !ok || gErr.Response == nil {
+		// Not a DO API error — pass through so the original error is preserved.
 		return err
 	}
 	sentinel := sentinelForStatus(gErr.Response.StatusCode)
