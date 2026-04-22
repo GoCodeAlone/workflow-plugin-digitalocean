@@ -170,12 +170,50 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	healthy := app.ActiveDeployment != nil && app.ActiveDeployment.Phase == godo.DeploymentPhase_Active
-	msg := ""
-	if !healthy {
-		msg = fmt.Sprintf("phase: %v", app.ActiveDeployment)
+	return appHealthResult(app), nil
+}
+
+// appHealthResult evaluates all three DO deployment slots in priority order and
+// returns an accurate HealthResult:
+//
+//   - ActiveDeployment ACTIVE         → Healthy=true
+//   - InProgressDeployment (building) → Healthy=false, "deployment in progress: <phase>"
+//   - InProgressDeployment (failed)   → Healthy=false, "deployment failed: <phase>"
+//   - PendingDeployment               → Healthy=false, "deployment queued"
+//   - none of the above               → Healthy=false, "no deployment found"
+func appHealthResult(app *godo.App) *interfaces.HealthResult {
+	// 1. Active and healthy.
+	if app.ActiveDeployment != nil && app.ActiveDeployment.Phase == godo.DeploymentPhase_Active {
+		return &interfaces.HealthResult{Healthy: true}
 	}
-	return &interfaces.HealthResult{Healthy: healthy, Message: msg}, nil
+
+	// 2. Deployment currently in progress — inspect its phase.
+	if dep := app.InProgressDeployment; dep != nil {
+		switch dep.Phase {
+		case godo.DeploymentPhase_PendingBuild,
+			godo.DeploymentPhase_Building,
+			godo.DeploymentPhase_PendingDeploy,
+			godo.DeploymentPhase_Deploying:
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("deployment in progress: %s", dep.Phase),
+			}
+		default:
+			// ERROR, CANCELED, SUPERSEDED, etc.
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("deployment failed: %s", dep.Phase),
+			}
+		}
+	}
+
+	// 3. Deployment queued but not yet started.
+	if app.PendingDeployment != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: "deployment queued"}
+	}
+
+	// 4. No deployment at all (first-deploy not yet kicked off, or app never deployed).
+	return &interfaces.HealthResult{Healthy: false, Message: "no deployment found"}
 }
 
 func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {

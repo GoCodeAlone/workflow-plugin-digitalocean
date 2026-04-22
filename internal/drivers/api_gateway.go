@@ -89,8 +89,7 @@ func (d *APIGatewayDriver) HealthCheck(ctx context.Context, ref interfaces.Resou
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	healthy := app.ActiveDeployment != nil && app.ActiveDeployment.Phase == godo.DeploymentPhase_Active
-	return &interfaces.HealthResult{Healthy: healthy}, nil
+	return appHealthResult(app), nil
 }
 
 func (d *APIGatewayDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {

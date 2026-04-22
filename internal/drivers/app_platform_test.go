@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -331,6 +332,105 @@ func TestAppPlatformDriver_HealthCheck_Unhealthy(t *testing.T) {
 	}
 	if result.Healthy {
 		t.Errorf("expected unhealthy when no active deployment")
+	}
+}
+
+// ── HealthCheck deployment-phase tests ───────────────────────────────────────
+
+func appWithPhases(active, inProgress, pending *godo.DeploymentPhase) *godo.App {
+	app := &godo.App{ID: "app-999", Spec: &godo.AppSpec{Name: "phased-app"}}
+	if active != nil {
+		app.ActiveDeployment = &godo.Deployment{Phase: *active}
+	}
+	if inProgress != nil {
+		app.InProgressDeployment = &godo.Deployment{Phase: *inProgress}
+	}
+	if pending != nil {
+		app.PendingDeployment = &godo.Deployment{Phase: *pending}
+	}
+	return app
+}
+
+func phasePtr(p godo.DeploymentPhase) *godo.DeploymentPhase { return &p }
+
+func TestAppPlatformDriver_HealthCheck_Active(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Active), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected Healthy=true for ACTIVE phase, got message: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_InProgress_Building(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Building), nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false while BUILDING")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_InProgress_Deploying(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Deploying), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false while DEPLOYING")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_InProgress_Failed(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Error), nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false for ERROR phase")
+	}
+	if !strings.Contains(result.Message, "failed") {
+		t.Errorf("message should contain 'failed', got: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_PendingDeployment(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, nil, phasePtr(godo.DeploymentPhase_PendingBuild)),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false with only a pending deployment")
+	}
+	if !strings.Contains(result.Message, "queued") {
+		t.Errorf("message should contain 'queued', got: %q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheck_NoDeployment(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, nil, nil),
+	}, "nyc3")
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	if result.Healthy {
+		t.Error("expected Healthy=false with no deployments")
+	}
+	if !strings.Contains(result.Message, "no deployment") {
+		t.Errorf("message should contain 'no deployment', got: %q", result.Message)
 	}
 }
 
