@@ -5,6 +5,7 @@ project_name: workflow-plugin-digitalocean
 before:
   hooks:
     - go mod tidy
+    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
 
 builds:
   - id: workflow-plugin-digitalocean
@@ -20,7 +21,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-digitalocean/internal.Version={{.Version}}
 
 archives:
   - id: workflow-plugin-digitalocean

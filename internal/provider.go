@@ -36,7 +36,7 @@ func NewDOProvider() *DOProvider {
 }
 
 func (p *DOProvider) Name() string    { return "digitalocean" }
-func (p *DOProvider) Version() string { return "0.6.2" }
+func (p *DOProvider) Version() string { return Version }
 
 // Initialize configures the godo client using the provided config map.
 // Required: "token".
