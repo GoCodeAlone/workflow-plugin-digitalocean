@@ -17,9 +17,9 @@ type doModuleInstance struct {
 
 // ── sdk.ModuleInstance ────────────────────────────────────────────────────────
 
-func (m *doModuleInstance) Init() error                      { return nil }
-func (m *doModuleInstance) Start(_ context.Context) error    { return nil }
-func (m *doModuleInstance) Stop(_ context.Context) error     { return nil }
+func (m *doModuleInstance) Init() error                   { return nil }
+func (m *doModuleInstance) Start(_ context.Context) error { return nil }
+func (m *doModuleInstance) Stop(_ context.Context) error  { return nil }
 
 // ── sdk.ServiceInvoker ────────────────────────────────────────────────────────
 
@@ -69,6 +69,9 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 
 	case "IaCProvider.ResolveSizing":
 		return m.invokeProviderResolveSizing(args)
+
+	case "IaCProvider.BootstrapStateBackend":
+		return m.invokeProviderBootstrapStateBackend(args)
 
 	case "ResourceDriver.Update":
 		return m.invokeDriverUpdate(args)
@@ -207,6 +210,26 @@ func (m *doModuleInstance) invokeProviderResolveSizing(args map[string]any) (map
 		return nil, err
 	}
 	return structToMap(sizing)
+}
+
+// invokeProviderBootstrapStateBackend decodes the cfg map and calls
+// IaCProvider.BootstrapStateBackend, returning the result as a flat map.
+func (m *doModuleInstance) invokeProviderBootstrapStateBackend(args map[string]any) (map[string]any, error) {
+	var cfg map[string]any
+	if args != nil {
+		cfg, _ = args["cfg"].(map[string]any)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	result, err := m.provider.BootstrapStateBackend(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return map[string]any{}, nil
+	}
+	return structToMap(result)
 }
 
 // invokeDriverUpdate decodes args and calls ResourceDriver.Update.
