@@ -43,12 +43,13 @@ func buildSpecViaUpdate(t *testing.T, cfg map[string]any) *godo.AppSpec {
 	return mock.lastUpdateReq.Spec
 }
 
-// ── SupportedCanonicalKeys ───────────────────────────────────────────────────
+// ── Representative canonical config (buildAppSpec builder coverage) ──────────
 
-func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
-	// Verify buildAppSpec accepts all supported canonical keys without error.
-	// The full SupportedCanonicalKeys() assertion lives in internal/provider_test.go;
-	// here we exercise that the builder handles a richly-populated canonical config.
+// TestBuildAppSpec_RepresentativeCanonicalConfig verifies that buildAppSpec accepts
+// all currently-supported canonical keys without error and wires them to the correct
+// AppSpec fields. The DOProvider.SupportedCanonicalKeys() key-list assertion is in
+// internal/provider_test.go#TestDOProvider_SupportedCanonicalKeys.
+func TestBuildAppSpec_RepresentativeCanonicalConfig(t *testing.T) {
 	cfg := map[string]any{
 		"image":          "registry.digitalocean.com/myrepo/myapp:v1",
 		"http_port":      8080,
@@ -62,7 +63,7 @@ func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
 		"jobs":           []any{map[string]any{"name": "j", "kind": "pre_deploy", "run_command": "/j"}},
 		"workers":        []any{map[string]any{"name": "w", "run_command": "/w"}},
 		"static_sites":   []any{map[string]any{"name": "s", "build_command": "npm run build", "output_dir": "dist"}},
-		// sidecars are declared in SupportedCanonicalKeys but mapped in Task #4
+		// "sidecars" is excluded from SupportedCanonicalKeys (doUnsupportedCanonicalKeys) until Task 37 lands.
 		"provider_specific": map[string]any{"digitalocean": map[string]any{"features": []any{"buildpack-stack=ubuntu-22"}}},
 	}
 	spec := buildSpecViaCreate(t, cfg)
@@ -829,6 +830,119 @@ func TestBuildAppSpec_StaticSites_FallbackDoc(t *testing.T) {
 	}
 	if ss.ErrorDocument != "404.html" {
 		t.Errorf("ErrorDocument = %q, want 404.html", ss.ErrorDocument)
+	}
+}
+
+// ── Ingress ──────────────────────────────────────────────────────────────────
+
+func TestBuildAppSpec_Ingress_LoadBalancer(t *testing.T) {
+	cfg := map[string]any{
+		"image":   "registry.digitalocean.com/myrepo/myapp:v1",
+		"ingress": map[string]any{"load_balancer": "DIGITALOCEAN"},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if spec.Ingress == nil {
+		t.Fatal("Ingress is nil")
+	}
+	if spec.Ingress.LoadBalancer != godo.AppIngressSpecLoadBalancer_DigitalOcean {
+		t.Errorf("Ingress.LoadBalancer = %q, want DIGITALOCEAN", spec.Ingress.LoadBalancer)
+	}
+}
+
+func TestBuildAppSpec_Ingress_EmptyIsNil(t *testing.T) {
+	// An ingress map with no recognised fields must not produce a non-nil AppIngressSpec.
+	cfg := map[string]any{
+		"image":   "registry.digitalocean.com/myrepo/myapp:v1",
+		"ingress": map[string]any{},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if spec.Ingress != nil {
+		t.Errorf("expected nil Ingress for empty ingress map, got %+v", spec.Ingress)
+	}
+}
+
+// ── LogDestinations ──────────────────────────────────────────────────────────
+
+func TestBuildAppSpec_LogDestinations(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"log_destinations": []any{
+			// HTTP endpoint destination with tls_insecure.
+			map[string]any{
+				"name":         "http-sink",
+				"endpoint":     "https://logs.example.com/ingest",
+				"tls_insecure": true,
+			},
+			// Papertrail destination (endpoint field).
+			map[string]any{
+				"name": "pt",
+				"papertrail": map[string]any{
+					"endpoint": "logs.papertrailapp.com:12345",
+				},
+			},
+			// Datadog destination (api_key + endpoint).
+			map[string]any{
+				"name": "dd",
+				"datadog": map[string]any{
+					"api_key":  "dd-api-key",
+					"endpoint": "https://http-intake.logs.datadoghq.com",
+				},
+			},
+			// Logtail destination (token).
+			map[string]any{
+				"name": "lt",
+				"logtail": map[string]any{
+					"token": "lt-source-token",
+				},
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	lds := spec.Services[0].LogDestinations
+	if len(lds) != 4 {
+		t.Fatalf("expected 4 log destinations, got %d", len(lds))
+	}
+
+	// HTTP endpoint + tls_insecure.
+	http := lds[0]
+	if http.Name != "http-sink" {
+		t.Errorf("ld[0].Name = %q, want http-sink", http.Name)
+	}
+	if http.Endpoint != "https://logs.example.com/ingest" {
+		t.Errorf("ld[0].Endpoint = %q, want https://logs.example.com/ingest", http.Endpoint)
+	}
+	if !http.TLSInsecure {
+		t.Error("ld[0].TLSInsecure should be true")
+	}
+
+	// Papertrail endpoint.
+	pt := lds[1]
+	if pt.Papertrail == nil {
+		t.Fatal("ld[1].Papertrail is nil")
+	}
+	if pt.Papertrail.Endpoint != "logs.papertrailapp.com:12345" {
+		t.Errorf("ld[1].Papertrail.Endpoint = %q", pt.Papertrail.Endpoint)
+	}
+
+	// Datadog api_key + endpoint.
+	dd := lds[2]
+	if dd.Datadog == nil {
+		t.Fatal("ld[2].Datadog is nil")
+	}
+	if dd.Datadog.ApiKey != "dd-api-key" {
+		t.Errorf("ld[2].Datadog.ApiKey = %q", dd.Datadog.ApiKey)
+	}
+	if dd.Datadog.Endpoint != "https://http-intake.logs.datadoghq.com" {
+		t.Errorf("ld[2].Datadog.Endpoint = %q", dd.Datadog.Endpoint)
+	}
+
+	// Logtail token.
+	lt := lds[3]
+	if lt.Logtail == nil {
+		t.Fatal("ld[3].Logtail is nil")
+	}
+	if lt.Logtail.Token != "lt-source-token" {
+		t.Errorf("ld[3].Logtail.Token = %q", lt.Logtail.Token)
 	}
 }
 

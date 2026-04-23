@@ -380,7 +380,7 @@ func alertSpecFromMap(m map[string]any) *godo.AppAlertSpec {
 }
 
 // logDestinationsFromConfig converts the canonical "log_destinations" list to []*godo.AppLogDestinationSpec.
-// Currently maps: endpoint (HTTP), papertrail token, datadog api_key.
+// Currently maps: endpoint (HTTP), papertrail endpoint, datadog api_key/endpoint, logtail token.
 func logDestinationsFromConfig(cfg map[string]any) []*godo.AppLogDestinationSpec {
 	raw, ok := cfg["log_destinations"].([]any)
 	if !ok || len(raw) == 0 {
@@ -460,6 +460,7 @@ func domainsFromConfig(cfg map[string]any) []*godo.AppDomainSpec {
 
 // ingressFromConfig converts the canonical "ingress" map to a *godo.AppIngressSpec.
 // The canonical ingress spec is minimal; complex routing should use provider_specific.
+// Returns nil when no supported fields are present (consistent with CORS/autoscaling/maintenance).
 func ingressFromConfig(cfg map[string]any) *godo.AppIngressSpec {
 	raw, ok := cfg["ingress"].(map[string]any)
 	if !ok || len(raw) == 0 {
@@ -470,6 +471,10 @@ func ingressFromConfig(cfg map[string]any) *godo.AppIngressSpec {
 		spec.LoadBalancer = godo.AppIngressSpecLoadBalancer(strings.ToUpper(lb))
 	}
 	// Rules are complex; skip for now unless coming from provider_specific.
+	// Return nil when no supported field was set to avoid sending an empty ingress block.
+	if spec.LoadBalancer == "" && len(spec.Rules) == 0 {
+		return nil
+	}
 	return spec
 }
 
