@@ -256,10 +256,10 @@ func TestDoModuleInstance_InvokeMethod_Read_DispatchesToDriver(t *testing.T) {
 	mi := &doModuleInstance{provider: provider}
 
 	result, err := mi.InvokeMethod("ResourceDriver.Read", map[string]any{
-		"resource_type":    "infra.database",
-		"ref_name":         "my-db",
-		"ref_type":         "infra.database",
-		"ref_provider_id":  "do-456",
+		"resource_type":   "infra.database",
+		"ref_name":        "my-db",
+		"ref_type":        "infra.database",
+		"ref_provider_id": "do-456",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -309,15 +309,15 @@ func TestDoModuleInstance_InvokeMethod_Diff_DispatchesToDriver(t *testing.T) {
 	mi := &doModuleInstance{provider: provider}
 
 	result, err := mi.InvokeMethod("ResourceDriver.Diff", map[string]any{
-		"resource_type":    "infra.container_service",
-		"spec_name":        "my-app",
-		"spec_type":        "infra.container_service",
-		"spec_config":      map[string]any{"image": "nginx:2.0"},
+		"resource_type":       "infra.container_service",
+		"spec_name":           "my-app",
+		"spec_type":           "infra.container_service",
+		"spec_config":         map[string]any{"image": "nginx:2.0"},
 		"current_provider_id": "do-abc",
-		"current_name":     "my-app",
-		"current_type":     "infra.container_service",
-		"current_status":   "running",
-		"current_outputs":  map[string]any{"url": "https://app.example.com"},
+		"current_name":        "my-app",
+		"current_type":        "infra.container_service",
+		"current_status":      "running",
+		"current_outputs":     map[string]any{"url": "https://app.example.com"},
 	})
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
@@ -757,8 +757,8 @@ type fakeIaCProvider struct {
 	sizingResult  *interfaces.ProviderSizing
 }
 
-func (f *fakeIaCProvider) Name() string                                          { return "fake" }
-func (f *fakeIaCProvider) Version() string                                       { return "0.0.0" }
+func (f *fakeIaCProvider) Name() string                                         { return "fake" }
+func (f *fakeIaCProvider) Version() string                                      { return "0.0.0" }
 func (f *fakeIaCProvider) Initialize(_ context.Context, _ map[string]any) error { return nil }
 func (f *fakeIaCProvider) Capabilities() []interfaces.IaCCapabilityDeclaration  { return nil }
 func (f *fakeIaCProvider) ResourceDriver(_ string) (interfaces.ResourceDriver, error) {
@@ -796,3 +796,6 @@ func (f *fakeIaCProvider) ResolveSizing(_ string, _ interfaces.Size, hints *inte
 	return f.sizingResult, nil
 }
 func (f *fakeIaCProvider) SupportedCanonicalKeys() []string { return interfaces.CanonicalKeys() }
+func (f *fakeIaCProvider) BootstrapStateBackend(_ context.Context, _ map[string]any) (*interfaces.BootstrapResult, error) {
+	return nil, nil
+}
