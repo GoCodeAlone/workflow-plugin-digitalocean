@@ -52,10 +52,10 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 
 	// Extract provider_specific.digitalocean overrides for top-level AppSpec fields.
 	var (
-		disableEdgeCache         bool
-		disableEmailObfuscation  bool
-		enhancedThreatControl    bool
-		features                 []string
+		disableEdgeCache        bool
+		disableEmailObfuscation bool
+		enhancedThreatControl   bool
+		features                []string
 	)
 	if ps, ok := cfg["provider_specific"].(map[string]any); ok {
 		if do, ok := ps["digitalocean"].(map[string]any); ok {
@@ -537,14 +537,14 @@ func buildJobSpec(m map[string]any) *godo.AppJobSpec {
 	}
 	kind := mapJobKind(strFromConfig(m, "kind", ""))
 	job := &godo.AppJobSpec{
-		Name:            name,
-		Kind:            kind,
-		RunCommand:      strFromConfig(m, "run_command", ""),
-		BuildCommand:    strFromConfig(m, "build_command", ""),
-		DockerfilePath:  strFromConfig(m, "dockerfile_path", ""),
-		SourceDir:       strFromConfig(m, "source_dir", ""),
+		Name:             name,
+		Kind:             kind,
+		RunCommand:       strFromConfig(m, "run_command", ""),
+		BuildCommand:     strFromConfig(m, "build_command", ""),
+		DockerfilePath:   strFromConfig(m, "dockerfile_path", ""),
+		SourceDir:        strFromConfig(m, "source_dir", ""),
 		InstanceSizeSlug: strFromConfig(m, "instance_size_slug", ""),
-		Envs:            envVarsFromJobConfig(m),
+		Envs:             envVarsFromJobConfig(m),
 	}
 	// Image from "image" field.
 	if imgStr := strFromConfig(m, "image", ""); imgStr != "" {

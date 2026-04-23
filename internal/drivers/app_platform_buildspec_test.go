@@ -343,7 +343,7 @@ func TestBuildAppSpec_Termination(t *testing.T) {
 	cfg := map[string]any{
 		"image": "registry.digitalocean.com/myrepo/myapp:v1",
 		"termination": map[string]any{
-			"drain_seconds":       30,
+			"drain_seconds":        30,
 			"grace_period_seconds": 60,
 		},
 	}
@@ -458,9 +458,9 @@ func TestBuildAppSpec_ProviderSpecific_Features(t *testing.T) {
 		"image": "registry.digitalocean.com/myrepo/myapp:v1",
 		"provider_specific": map[string]any{
 			"digitalocean": map[string]any{
-				"features":                     []any{"buildpack-stack=ubuntu-22"},
-				"disable_edge_cache":            true,
-				"disable_email_obfuscation":     true,
+				"features":                        []any{"buildpack-stack=ubuntu-22"},
+				"disable_edge_cache":              true,
+				"disable_email_obfuscation":       true,
 				"enhanced_threat_control_enabled": false,
 			},
 		},
@@ -826,7 +826,7 @@ func TestBuildAppSpec_BMWPreDeployScenario(t *testing.T) {
 				"image":       "registry.digitalocean.com/bmw-registry/workflow-migrate:v1",
 				"run_command": "/workflow-migrate tenant-ensure",
 				"env_vars_secret": map[string]any{
-					"DATABASE_URL": "staging-db-url",
+					"DATABASE_URL":    "staging-db-url",
 					"BMW_TENANT_SLUG": "bmw",
 				},
 			},
