@@ -151,13 +151,15 @@ func TestConfigHash_Empty(t *testing.T) {
 // ── fake driver for Apply upsert test ─────────────────────────────────────────
 
 // upsertFakeDriver is a minimal ResourceDriver that:
-//   - returns ErrResourceAlreadyExists on the first Create call
+//   - always returns ErrResourceAlreadyExists on Create
 //   - returns a fixed ResourceOutput on Read (simulating discovery by name)
-//   - records Update calls so the test can assert the upsert path was taken
+//   - records the ref passed to Read and Update so the test can assert the
+//     upsert path was taken with the correct arguments
 type upsertFakeDriver struct {
 	createCalls int
 	updateCalls int
 	readCalls   int
+	lastReadRef interfaces.ResourceRef
 	updatedRef  interfaces.ResourceRef
 }
 
@@ -168,6 +170,7 @@ func (f *upsertFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) 
 
 func (f *upsertFakeDriver) Read(_ context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	f.readCalls++
+	f.lastReadRef = ref
 	return &interfaces.ResourceOutput{
 		Name:       ref.Name,
 		Type:       ref.Type,
@@ -220,7 +223,7 @@ func TestDOProvider_Apply_UpsertOnAlreadyExists(t *testing.T) {
 		Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}},
 	}
 
-	result, err := p.Apply(context.Background(), plan)
+	result, err := p.Apply(t.Context(), plan)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -232,9 +235,15 @@ func TestDOProvider_Apply_UpsertOnAlreadyExists(t *testing.T) {
 	if fake.createCalls != 1 {
 		t.Errorf("createCalls = %d, want 1", fake.createCalls)
 	}
-	// Read was called to discover the ProviderID.
+	// Read was called with empty ProviderID (triggers name-based lookup in drivers).
 	if fake.readCalls != 1 {
 		t.Errorf("readCalls = %d, want 1", fake.readCalls)
+	}
+	if fake.lastReadRef.ProviderID != "" {
+		t.Errorf("Read called with non-empty ProviderID %q; want empty for name-based lookup", fake.lastReadRef.ProviderID)
+	}
+	if fake.lastReadRef.Name != spec.Name || fake.lastReadRef.Type != spec.Type {
+		t.Errorf("Read ref = {%q, %q}, want {%q, %q}", fake.lastReadRef.Name, fake.lastReadRef.Type, spec.Name, spec.Type)
 	}
 	// Update was called with the discovered ProviderID.
 	if fake.updateCalls != 1 {

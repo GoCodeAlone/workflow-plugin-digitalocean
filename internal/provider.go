@@ -184,13 +184,16 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 				// Resource exists in the provider but is not tracked in local
 				// state (e.g. manually created, or state was wiped). Upsert:
 				// discover the provider ID by reading by name, then update.
+				createErr := err
 				ref := interfaces.ResourceRef{
 					Name: action.Resource.Name,
 					Type: action.Resource.Type,
 				}
 				existing, readErr := d.Read(ctx, ref)
 				if readErr != nil {
-					err = fmt.Errorf("upsert: read after AlreadyExists: %w", readErr)
+					// Preserve createErr so ErrResourceAlreadyExists remains
+					// in the error chain for callers using errors.Is.
+					err = fmt.Errorf("upsert: read after conflict: %w", errors.Join(createErr, readErr))
 					break
 				}
 				ref.ProviderID = existing.ProviderID
