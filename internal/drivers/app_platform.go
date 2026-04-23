@@ -42,34 +42,16 @@ func NewAppPlatformDriverWithClient(c AppPlatformClient, region string) *AppPlat
 }
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	imgSpec, err := imageSpecFromConfig(spec.Config)
-	if err != nil {
-		return nil, fmt.Errorf("app platform image config: %w", err)
-	}
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
 	}
-	httpPort, _ := intFromConfig(spec.Config, "http_port", 8080)
-	instanceCount, _ := intFromConfig(spec.Config, "instance_count", 1)
-
-	req := &godo.AppCreateRequest{
-		Spec: &godo.AppSpec{
-			Name:   spec.Name,
-			Region: region,
-			Services: []*godo.AppServiceSpec{
-				{
-					Name:          spec.Name,
-					InstanceCount: int64(instanceCount),
-					HTTPPort:      int64(httpPort),
-					Envs:          envVarsFromConfig(spec.Config),
-					Image:         imgSpec,
-				},
-			},
-		},
+	appSpec, err := buildAppSpec(spec.Name, spec.Config, region)
+	if err != nil {
+		return nil, fmt.Errorf("app platform build spec: %w", err)
 	}
 
-	app, _, err := d.client.Create(ctx, req)
+	app, _, err := d.client.Create(ctx, &godo.AppCreateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform create %q: %w", spec.Name, WrapGodoError(err))
 	}
@@ -110,34 +92,16 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	imgSpec, err := imageSpecFromConfig(spec.Config)
-	if err != nil {
-		return nil, fmt.Errorf("app platform image config: %w", err)
-	}
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
 	}
-	httpPort, _ := intFromConfig(spec.Config, "http_port", 8080)
-	instanceCount, _ := intFromConfig(spec.Config, "instance_count", 1)
-
-	req := &godo.AppUpdateRequest{
-		Spec: &godo.AppSpec{
-			Name:   spec.Name,
-			Region: region,
-			Services: []*godo.AppServiceSpec{
-				{
-					Name:          spec.Name,
-					InstanceCount: int64(instanceCount),
-					HTTPPort:      int64(httpPort),
-					Envs:          envVarsFromConfig(spec.Config),
-					Image:         imgSpec,
-				},
-			},
-		},
+	appSpec, err := buildAppSpec(spec.Name, spec.Config, region)
+	if err != nil {
+		return nil, fmt.Errorf("app platform build spec: %w", err)
 	}
 
-	app, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	app, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -376,11 +340,19 @@ func imageSpecFromMap(m map[string]any) (*godo.ImageSourceSpec, error) {
 }
 
 // envVarsFromConfig converts the "env_vars" map in spec config to App Platform
-// environment variable definitions. Values listed under "secret_env_vars" are
-// marked as SECRET so DigitalOcean stores them encrypted.
+// environment variable definitions. Secret vars use "env_vars_secret" (canonical key).
+// "secret_env_vars" is a legacy alias: it is used only when "env_vars_secret" is
+// absent from the config entirely (key-presence check, not length check).
 func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
 	raw, _ := cfg["env_vars"].(map[string]any)
-	secrets, _ := cfg["secret_env_vars"].(map[string]any)
+	// Prefer the canonical key; fall back to the legacy alias only when the
+	// canonical key is not present at all (not just empty).
+	var secrets map[string]any
+	if v, ok := cfg["env_vars_secret"]; ok {
+		secrets, _ = v.(map[string]any)
+	} else {
+		secrets, _ = cfg["secret_env_vars"].(map[string]any)
+	}
 	if len(raw) == 0 && len(secrets) == 0 {
 		return nil
 	}

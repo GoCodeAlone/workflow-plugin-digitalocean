@@ -795,3 +795,4 @@ func (f *fakeIaCProvider) ResolveSizing(_ string, _ interfaces.Size, hints *inte
 	f.resolveSizingHints = hints
 	return f.sizingResult, nil
 }
+func (f *fakeIaCProvider) SupportedCanonicalKeys() []string { return interfaces.CanonicalKeys() }

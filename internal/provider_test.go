@@ -95,6 +95,38 @@ func TestDOProvider_ResourceDriver_Unknown(t *testing.T) {
 	}
 }
 
+func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
+	p := NewDOProvider()
+	keys := p.SupportedCanonicalKeys()
+	if len(keys) == 0 {
+		t.Fatal("SupportedCanonicalKeys returned empty slice")
+	}
+	keySet := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keySet[k] = true
+	}
+
+	// Keys the DO provider actively maps in this release.
+	supported := []string{
+		"name", "region", "image", "http_port", "instance_count", "size",
+		"env_vars", "env_vars_secret", "autoscaling", "routes", "health_check",
+		"liveness_check", "cors", "internal_ports", "build_command", "run_command",
+		"dockerfile_path", "source_dir", "termination", "domains", "alerts",
+		"log_destinations", "ingress", "egress", "maintenance", "vpc_ref",
+		"jobs", "workers", "static_sites", "provider_specific",
+	}
+	for _, k := range supported {
+		if !keySet[k] {
+			t.Errorf("SupportedCanonicalKeys missing expected key %q", k)
+		}
+	}
+
+	// "sidecars" is not yet mapped (Task 37); must NOT appear until then.
+	if keySet["sidecars"] {
+		t.Error("SupportedCanonicalKeys must not include \"sidecars\" until Task 37 lands")
+	}
+}
+
 func TestConfigHash_Deterministic(t *testing.T) {
 	cfg := map[string]any{"b": 2, "a": 1, "c": "three"}
 	h1 := configHash(cfg)
