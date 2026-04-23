@@ -946,6 +946,81 @@ func TestBuildAppSpec_LogDestinations(t *testing.T) {
 	}
 }
 
+// ── Sidecars ─────────────────────────────────────────────────────────────────
+
+func TestBuildAppSpec_Sidecars(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"sidecars": []any{
+			map[string]any{
+				"name":        "tailscale",
+				"image":       "docker.io/tailscale/tailscale:latest",
+				"run_command": "/usr/local/bin/containerboot",
+				"env_vars_secret": map[string]any{
+					"TS_AUTH_KEY": "ts-secret",
+				},
+			},
+			map[string]any{
+				"name":        "envoy-proxy",
+				"image":       "docker.io/envoyproxy/envoy:v1.29",
+				"run_command": "/usr/local/bin/envoy -c /config/envoy.yaml",
+				"ports":       []any{map[string]any{"port": 9901, "public": true}},
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	// Main service + 2 sidecars = 3 services total.
+	if len(spec.Services) != 3 {
+		t.Fatalf("expected 3 services (main + 2 sidecars), got %d", len(spec.Services))
+	}
+	if spec.Services[0].Name != "test-app" {
+		t.Errorf("services[0].Name = %q, want test-app", spec.Services[0].Name)
+	}
+	ts := spec.Services[1]
+	if ts.Name != "tailscale" {
+		t.Errorf("sidecar[0].Name = %q, want tailscale", ts.Name)
+	}
+	if ts.RunCommand != "/usr/local/bin/containerboot" {
+		t.Errorf("sidecar[0].RunCommand = %q", ts.RunCommand)
+	}
+	if ts.Image == nil || ts.Image.Repository != "tailscale" {
+		t.Errorf("sidecar[0].Image.Repository = %q, want tailscale", func() string {
+			if ts.Image == nil {
+				return "<nil>"
+			}
+			return ts.Image.Repository
+		}())
+	}
+	// Secret env var forwarded.
+	foundSecret := false
+	for _, e := range ts.Envs {
+		if e.Key == "TS_AUTH_KEY" && e.Type == godo.AppVariableType_Secret {
+			foundSecret = true
+		}
+	}
+	if !foundSecret {
+		t.Error("expected TS_AUTH_KEY secret env var in tailscale sidecar")
+	}
+
+	// Envoy sidecar: public port mapped to HTTPPort.
+	envoy := spec.Services[2]
+	if envoy.Name != "envoy-proxy" {
+		t.Errorf("sidecar[1].Name = %q, want envoy-proxy", envoy.Name)
+	}
+	if envoy.HTTPPort != 9901 {
+		t.Errorf("sidecar[1].HTTPPort = %d, want 9901", envoy.HTTPPort)
+	}
+}
+
+func TestBuildAppSpec_Sidecars_Empty(t *testing.T) {
+	cfg := map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v1"}
+	spec := buildSpecViaCreate(t, cfg)
+	// Only the main service, no sidecars.
+	if len(spec.Services) != 1 {
+		t.Errorf("expected 1 service (no sidecars), got %d", len(spec.Services))
+	}
+}
+
 // ── Update propagates buildAppSpec ──────────────────────────────────────────
 
 func TestBuildAppSpec_UpdateUsesBuildSpec(t *testing.T) {

@@ -72,10 +72,14 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		}
 	}
 
+	// Sidecars run as sibling AppServiceSpec entries (DO App Platform does not have
+	// a native sidecar concept; each sidecar becomes an independent service).
+	services := append([]*godo.AppServiceSpec{svc}, sidecarsFromConfig(cfg)...)
+
 	spec := &godo.AppSpec{
 		Name:                         name,
 		Region:                       region,
-		Services:                     []*godo.AppServiceSpec{svc},
+		Services:                     services,
 		Jobs:                         jobsFromConfig(cfg),
 		Workers:                      workersFromConfig(cfg),
 		StaticSites:                  staticSitesFromConfig(cfg),
@@ -717,6 +721,56 @@ func stringsFromConfig(cfg map[string]any, key string) []string {
 		if s, ok := v.(string); ok {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// sidecarsFromConfig converts canonical "sidecars" list to sibling []*godo.AppServiceSpec.
+// DO App Platform has no native sidecar model; each sidecar is mapped as an independent
+// service in the same app, sharing the app's network namespace via the platform routing.
+func sidecarsFromConfig(cfg map[string]any) []*godo.AppServiceSpec {
+	raw, ok := cfg["sidecars"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]*godo.AppServiceSpec, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strFromConfig(m, "name", "")
+		if name == "" {
+			continue
+		}
+		svc := &godo.AppServiceSpec{
+			Name:       name,
+			RunCommand: strFromConfig(m, "run_command", ""),
+			Envs:       envVarsFromConfig(m),
+		}
+		if imgStr := strFromConfig(m, "image", ""); imgStr != "" {
+			img, err := ParseImageRef(imgStr)
+			if err == nil {
+				svc.Image = img
+			}
+		}
+		// Map the first public port to HTTPPort if specified.
+		if ports, ok := m["ports"].([]any); ok {
+			for _, p := range ports {
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				pub, _ := pm["public"].(bool)
+				if pub {
+					if port, ok2 := intFromConfig(pm, "port", 0); ok2 && port > 0 {
+						svc.HTTPPort = int64(port)
+						break
+					}
+				}
+			}
+		}
+		out = append(out, svc)
 	}
 	return out
 }

@@ -110,10 +110,8 @@ func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 
 // doUnsupportedCanonicalKeys lists canonical keys that the DO plugin does not yet map.
 // Each entry is removed from SupportedCanonicalKeys() so wfctl validate can warn callers.
-// "sidecars" is implemented in v0.7.0 Task 37 (feat/v0.7.0-sidecars).
-var doUnsupportedCanonicalKeys = map[string]struct{}{
-	interfaces.KeySidecars: {},
-}
+// "sidecars" is now mapped in v0.7.0 Task 37 as sibling AppServiceSpec entries.
+var doUnsupportedCanonicalKeys = map[string]struct{}{}
 
 // SupportedCanonicalKeys returns the canonical IaC config keys that this DO provider
 // currently maps. Keys in doUnsupportedCanonicalKeys are excluded until their Task
