@@ -11,8 +11,9 @@ import (
 )
 
 type mockFirewallClient struct {
-	fw  *godo.Firewall
-	err error
+	fw      *godo.Firewall
+	err     error
+	listErr error
 }
 
 func (m *mockFirewallClient) Create(_ context.Context, _ *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
@@ -20,6 +21,15 @@ func (m *mockFirewallClient) Create(_ context.Context, _ *godo.FirewallRequest) 
 }
 func (m *mockFirewallClient) Get(_ context.Context, _ string) (*godo.Firewall, *godo.Response, error) {
 	return m.fw, nil, m.err
+}
+func (m *mockFirewallClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.Firewall, *godo.Response, error) {
+	if m.listErr != nil {
+		return nil, nil, m.listErr
+	}
+	if m.fw == nil {
+		return nil, nil, nil
+	}
+	return []godo.Firewall{*m.fw}, nil, nil
 }
 func (m *mockFirewallClient) Update(_ context.Context, _ string, _ *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
 	return m.fw, nil, m.err
@@ -201,5 +211,57 @@ func TestFirewallDriver_HealthCheck_Unhealthy(t *testing.T) {
 	}
 	if result.Healthy {
 		t.Errorf("expected unhealthy for firewall with status 'waiting'")
+	}
+}
+
+func TestFirewallDriver_SupportsUpsert(t *testing.T) {
+	d := drivers.NewFirewallDriverWithClient(&mockFirewallClient{})
+	if !d.SupportsUpsert() {
+		t.Error("FirewallDriver.SupportsUpsert() should return true")
+	}
+}
+
+func TestFirewallDriver_Read_NameBased(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	// Read with empty ProviderID triggers name-based lookup.
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-fw",
+	})
+	if err != nil {
+		t.Fatalf("Read by name: %v", err)
+	}
+	if out.ProviderID != "fw-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "fw-123")
+	}
+	if out.Name != "my-fw" {
+		t.Errorf("Name = %q, want %q", out.Name, "my-fw")
+	}
+}
+
+func TestFirewallDriver_Read_NameBased_NotFound(t *testing.T) {
+	mock := &mockFirewallClient{fw: nil}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "missing-fw"})
+	if err == nil {
+		t.Fatal("expected ErrResourceNotFound for unknown name, got nil")
+	}
+}
+
+// TestFirewallDriver_Read_NilClientReturn_NoPanic is a regression test for the
+// nil-pointer dereference in fwOutput that would occur if the godo client
+// returns (nil, nil, nil) for a Get call. The nil guard added to Read ensures
+// a descriptive error is returned instead of a panic.
+func TestFirewallDriver_Read_NilClientReturn_NoPanic(t *testing.T) {
+	mock := &mockFirewallClient{fw: nil, err: nil} // client returns nil, nil, nil
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-fw", ProviderID: "fw-123",
+	})
+	if err == nil {
+		t.Fatal("expected error for nil firewall returned by client, got nil")
 	}
 }

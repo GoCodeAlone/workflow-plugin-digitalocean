@@ -12,6 +12,7 @@ import (
 type FirewallClient interface {
 	Create(ctx context.Context, req *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error)
 	Get(ctx context.Context, fwID string) (*godo.Firewall, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]godo.Firewall, *godo.Response, error)
 	Update(ctx context.Context, fwID string, req *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error)
 	Delete(ctx context.Context, fwID string) (*godo.Response, error)
 }
@@ -40,12 +41,44 @@ func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	return fwOutput(fw), nil
 }
 
+// SupportsUpsert reports that FirewallDriver can locate a resource by name alone
+// (empty ProviderID), enabling the ErrResourceAlreadyExists → upsert path.
+func (d *FirewallDriver) SupportsUpsert() bool { return true }
+
 func (d *FirewallDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	if ref.ProviderID == "" {
+		return d.findFirewallByName(ctx, ref.Name)
+	}
 	fw, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("firewall read %q: %w", ref.Name, WrapGodoError(err))
 	}
+	if fw == nil {
+		return nil, fmt.Errorf("firewall read %q: provider returned nil resource", ref.Name)
+	}
 	return fwOutput(fw), nil
+}
+
+// findFirewallByName iterates the paginated firewall list and returns the first
+// firewall whose Name matches. Returns ErrResourceNotFound if no match is found.
+func (d *FirewallDriver) findFirewallByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		fws, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("firewall list: %w", WrapGodoError(err))
+		}
+		for i := range fws {
+			if fws[i].Name == name {
+				return fwOutput(&fws[i]), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("firewall %q: %w", name, ErrResourceNotFound)
 }
 
 func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
