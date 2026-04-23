@@ -25,6 +25,15 @@ func (m *mockDatabaseClient) Create(_ context.Context, req *godo.DatabaseCreateR
 func (m *mockDatabaseClient) Get(_ context.Context, _ string) (*godo.Database, *godo.Response, error) {
 	return m.db, nil, m.err
 }
+func (m *mockDatabaseClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.Database, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	if m.db == nil {
+		return nil, nil, nil
+	}
+	return []godo.Database{*m.db}, nil, nil
+}
 func (m *mockDatabaseClient) Resize(_ context.Context, _ string, _ *godo.DatabaseResizeRequest) (*godo.Response, error) {
 	return nil, m.err
 }
@@ -342,5 +351,41 @@ func TestDatabaseDriver_HealthCheck_Unhealthy(t *testing.T) {
 	}
 	if result.Healthy {
 		t.Errorf("expected unhealthy for migrating db")
+	}
+}
+
+func TestDatabaseDriver_SupportsUpsert(t *testing.T) {
+	d := drivers.NewDatabaseDriverWithClient(&mockDatabaseClient{}, "nyc3")
+	if !d.SupportsUpsert() {
+		t.Error("DatabaseDriver.SupportsUpsert() should return true")
+	}
+}
+
+func TestDatabaseDriver_Read_NameBased(t *testing.T) {
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	// Read with empty ProviderID triggers name-based lookup.
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-db",
+	})
+	if err != nil {
+		t.Fatalf("Read by name: %v", err)
+	}
+	if out.ProviderID != "db-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "db-123")
+	}
+	if out.Name != "my-db" {
+		t.Errorf("Name = %q, want %q", out.Name, "my-db")
+	}
+}
+
+func TestDatabaseDriver_Read_NameBased_NotFound(t *testing.T) {
+	mock := &mockDatabaseClient{db: nil}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "missing-db"})
+	if err == nil {
+		t.Fatal("expected ErrResourceNotFound for unknown name, got nil")
 	}
 }
