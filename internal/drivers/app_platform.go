@@ -340,14 +340,17 @@ func imageSpecFromMap(m map[string]any) (*godo.ImageSourceSpec, error) {
 }
 
 // envVarsFromConfig converts the "env_vars" map in spec config to App Platform
-// environment variable definitions. Values listed under "env_vars_secret" (canonical)
-// or "secret_env_vars" (legacy alias) are marked as SECRET so DigitalOcean stores them
-// encrypted. The canonical key takes precedence when both are present.
+// environment variable definitions. Secret vars use "env_vars_secret" (canonical key).
+// "secret_env_vars" is a legacy alias: it is used only when "env_vars_secret" is
+// absent from the config entirely (key-presence check, not length check).
 func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
 	raw, _ := cfg["env_vars"].(map[string]any)
-	// Support both canonical key ("env_vars_secret") and legacy alias ("secret_env_vars").
-	secrets, _ := cfg["env_vars_secret"].(map[string]any)
-	if len(secrets) == 0 {
+	// Prefer the canonical key; fall back to the legacy alias only when the
+	// canonical key is not present at all (not just empty).
+	var secrets map[string]any
+	if v, ok := cfg["env_vars_secret"]; ok {
+		secrets, _ = v.(map[string]any)
+	} else {
 		secrets, _ = cfg["secret_env_vars"].(map[string]any)
 	}
 	if len(raw) == 0 && len(secrets) == 0 {

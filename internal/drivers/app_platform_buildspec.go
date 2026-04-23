@@ -361,7 +361,16 @@ func alertSpecFromMap(m map[string]any) *godo.AppAlertSpec {
 	if win := strFromConfig(m, "window", ""); win != "" {
 		spec.Window = godo.AppAlertSpecWindow(strings.ToUpper(win))
 	}
-	if v, ok := m["value"].(float64); ok {
+	// YAML decode produces float64 for decimals and int for whole numbers;
+	// accept all numeric types so alert thresholds work regardless of YAML representation.
+	switch v := m["value"].(type) {
+	case float64:
+		spec.Value = float32(v)
+	case float32:
+		spec.Value = v
+	case int:
+		spec.Value = float32(v)
+	case int64:
 		spec.Value = float32(v)
 	}
 	if disabled, ok := m["disabled"].(bool); ok {

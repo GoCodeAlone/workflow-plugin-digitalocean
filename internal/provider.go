@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
+	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
 )
@@ -108,11 +108,25 @@ func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 	return d, nil
 }
 
-// SupportedCanonicalKeys returns the canonical IaC config key set that the DO provider supports.
-// DO App Platform supports all canonical keys; provider_specific.digitalocean is used for
-// DO-only fields (instance_size_slug, features, disable_edge_cache, etc.).
+// doUnsupportedCanonicalKeys lists canonical keys that the DO plugin does not yet map.
+// Each entry is removed from SupportedCanonicalKeys() so wfctl validate can warn callers.
+// "sidecars" is implemented in v0.7.0 Task 37 (feat/v0.7.0-sidecars).
+var doUnsupportedCanonicalKeys = map[string]struct{}{
+	interfaces.KeySidecars: {},
+}
+
+// SupportedCanonicalKeys returns the canonical IaC config keys that this DO provider
+// currently maps. Keys in doUnsupportedCanonicalKeys are excluded until their Task
+// implementation lands (see comments there).
 func (p *DOProvider) SupportedCanonicalKeys() []string {
-	return interfaces.CanonicalKeys()
+	all := interfaces.CanonicalKeys()
+	out := make([]string, 0, len(all))
+	for _, k := range all {
+		if _, unsupported := doUnsupportedCanonicalKeys[k]; !unsupported {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // ResolveSizing maps abstract size tiers to DigitalOcean SKUs.

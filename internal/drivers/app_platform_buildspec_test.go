@@ -46,26 +46,44 @@ func buildSpecViaUpdate(t *testing.T, cfg map[string]any) *godo.AppSpec {
 // ── SupportedCanonicalKeys ───────────────────────────────────────────────────
 
 func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
-	// We can't import internal directly; use drivers package to test buildspec.
-	// The DOProvider test lives in internal package. Here we just verify that
-	// buildAppSpec (via Create) handles the full canonical key set without panicking.
-	required := []string{
-		"name", "region", "image", "http_port", "instance_count", "size",
-		"env_vars", "autoscaling", "routes", "health_check", "domains",
-		"jobs", "workers", "static_sites", "sidecars", "provider_specific",
-	}
-	// All canonical keys should be accepted without error.
+	// Verify buildAppSpec accepts all supported canonical keys without error.
+	// The full SupportedCanonicalKeys() assertion lives in internal/provider_test.go;
+	// here we exercise that the builder handles a richly-populated canonical config.
 	cfg := map[string]any{
 		"image":          "registry.digitalocean.com/myrepo/myapp:v1",
 		"http_port":      8080,
 		"instance_count": 1,
+		"size":           "m",
+		"env_vars":       map[string]any{"FOO": "bar"},
+		"autoscaling":    map[string]any{"min": 1, "max": 3},
+		"routes":         []any{map[string]any{"path": "/"}},
+		"health_check":   map[string]any{"http_path": "/healthz"},
+		"domains":        []any{map[string]any{"domain": "x.example.com"}},
+		"jobs":           []any{map[string]any{"name": "j", "kind": "pre_deploy", "run_command": "/j"}},
+		"workers":        []any{map[string]any{"name": "w", "run_command": "/w"}},
+		"static_sites":   []any{map[string]any{"name": "s", "build_command": "npm run build", "output_dir": "dist"}},
+		// sidecars are declared in SupportedCanonicalKeys but mapped in Task #4
+		"provider_specific": map[string]any{"digitalocean": map[string]any{"features": []any{"buildpack-stack=ubuntu-22"}}},
 	}
 	spec := buildSpecViaCreate(t, cfg)
 	if spec == nil {
 		t.Fatal("expected non-nil AppSpec")
 	}
-	// Just ensure all the required key names are checked.
-	_ = required
+	if len(spec.Services) != 1 {
+		t.Errorf("expected 1 service, got %d", len(spec.Services))
+	}
+	if len(spec.Jobs) != 1 {
+		t.Errorf("expected 1 job, got %d", len(spec.Jobs))
+	}
+	if len(spec.Workers) != 1 {
+		t.Errorf("expected 1 worker, got %d", len(spec.Workers))
+	}
+	if len(spec.StaticSites) != 1 {
+		t.Errorf("expected 1 static site, got %d", len(spec.StaticSites))
+	}
+	if len(spec.Domains) != 1 {
+		t.Errorf("expected 1 domain, got %d", len(spec.Domains))
+	}
 }
 
 // ── instanceSizeSlug ────────────────────────────────────────────────────────
@@ -357,6 +375,50 @@ func TestBuildAppSpec_Termination(t *testing.T) {
 	}
 	if term.GracePeriodSeconds != 60 {
 		t.Errorf("GracePeriodSeconds = %d, want 60", term.GracePeriodSeconds)
+	}
+}
+
+// ── Alerts — numeric value coercion ─────────────────────────────────────────
+
+func TestBuildAppSpec_Alerts_IntValue(t *testing.T) {
+	// YAML decodes whole numbers as int; ensure alertSpecFromMap handles it.
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"alerts": []any{
+			map[string]any{
+				"rule":     "CPU_UTILIZATION",
+				"operator": "GREATER_THAN",
+				"window":   "FIVE_MINUTES",
+				"value":    80, // int, not float64
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Services[0].Alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(spec.Services[0].Alerts))
+	}
+	a := spec.Services[0].Alerts[0]
+	if a.Value != 80.0 {
+		t.Errorf("Alert.Value = %v, want 80.0 (coerced from int)", a.Value)
+	}
+}
+
+func TestBuildAppSpec_Alerts_Float64Value(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"alerts": []any{
+			map[string]any{
+				"rule":  "MEM_UTILIZATION",
+				"value": 75.5, // float64
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Services[0].Alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(spec.Services[0].Alerts))
+	}
+	if spec.Services[0].Alerts[0].Value != 75.5 {
+		t.Errorf("Alert.Value = %v, want 75.5", spec.Services[0].Alerts[0].Value)
 	}
 }
 
