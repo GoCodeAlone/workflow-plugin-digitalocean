@@ -95,6 +95,29 @@ func TestDOProvider_ResourceDriver_Unknown(t *testing.T) {
 	}
 }
 
+func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
+	p := NewDOProvider()
+	keys := p.SupportedCanonicalKeys()
+	if len(keys) == 0 {
+		t.Fatal("SupportedCanonicalKeys returned empty slice")
+	}
+	// DO provider advertises the full canonical set.
+	keySet := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keySet[k] = true
+	}
+	required := []string{
+		"name", "region", "image", "http_port", "instance_count", "size",
+		"env_vars", "autoscaling", "routes", "health_check", "domains",
+		"jobs", "workers", "static_sites", "sidecars", "provider_specific",
+	}
+	for _, k := range required {
+		if !keySet[k] {
+			t.Errorf("SupportedCanonicalKeys missing %q", k)
+		}
+	}
+}
+
 func TestConfigHash_Deterministic(t *testing.T) {
 	cfg := map[string]any{"b": 2, "a": 1, "c": "three"}
 	h1 := configHash(cfg)

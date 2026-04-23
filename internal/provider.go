@@ -108,6 +108,13 @@ func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 	return d, nil
 }
 
+// SupportedCanonicalKeys returns the canonical IaC config key set that the DO provider supports.
+// DO App Platform supports all canonical keys; provider_specific.digitalocean is used for
+// DO-only fields (instance_size_slug, features, disable_edge_cache, etc.).
+func (p *DOProvider) SupportedCanonicalKeys() []string {
+	return interfaces.CanonicalKeys()
+}
+
 // ResolveSizing maps abstract size tiers to DigitalOcean SKUs.
 func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hints *interfaces.ResourceHints) (*interfaces.ProviderSizing, error) {
 	return resolveSizing(resourceType, size, hints)
