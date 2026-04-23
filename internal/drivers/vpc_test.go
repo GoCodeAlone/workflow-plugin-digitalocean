@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -11,8 +12,9 @@ import (
 )
 
 type mockVPCClient struct {
-	vpc *godo.VPC
-	err error
+	vpc     *godo.VPC
+	err     error
+	listErr error
 }
 
 func (m *mockVPCClient) Create(_ context.Context, _ *godo.VPCCreateRequest) (*godo.VPC, *godo.Response, error) {
@@ -20,6 +22,15 @@ func (m *mockVPCClient) Create(_ context.Context, _ *godo.VPCCreateRequest) (*go
 }
 func (m *mockVPCClient) Get(_ context.Context, _ string) (*godo.VPC, *godo.Response, error) {
 	return m.vpc, nil, m.err
+}
+func (m *mockVPCClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.VPC, *godo.Response, error) {
+	if m.listErr != nil {
+		return nil, nil, m.listErr
+	}
+	if m.vpc == nil {
+		return nil, nil, nil
+	}
+	return []*godo.VPC{m.vpc}, nil, nil
 }
 func (m *mockVPCClient) Update(_ context.Context, _ string, _ *godo.VPCUpdateRequest) (*godo.VPC, *godo.Response, error) {
 	return m.vpc, nil, m.err
@@ -198,5 +209,41 @@ func TestVPCDriver_Diff_IPRangeChange(t *testing.T) {
 	}
 	if !result.NeedsReplace {
 		t.Error("expected NeedsReplace for ip_range change")
+	}
+}
+
+func TestVPCDriver_SupportsUpsert(t *testing.T) {
+	d := drivers.NewVPCDriverWithClient(&mockVPCClient{}, "nyc3")
+	if !d.SupportsUpsert() {
+		t.Error("VPCDriver.SupportsUpsert() should return true")
+	}
+}
+
+func TestVPCDriver_Read_NameBased(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	// Read with empty ProviderID triggers name-based lookup.
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-vpc",
+	})
+	if err != nil {
+		t.Fatalf("Read by name: %v", err)
+	}
+	if out.ProviderID != "vpc-123" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "vpc-123")
+	}
+	if out.Name != "my-vpc" {
+		t.Errorf("Name = %q, want %q", out.Name, "my-vpc")
+	}
+}
+
+func TestVPCDriver_Read_NameBased_NotFound(t *testing.T) {
+	mock := &mockVPCClient{vpc: nil}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "missing-vpc"})
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Fatalf("expected ErrResourceNotFound, got: %v", err)
 	}
 }

@@ -344,3 +344,111 @@ func TestDOProvider_Apply_NoUpsertForUnsupportedDriver(t *testing.T) {
 		t.Errorf("updateCalls = %d, want 0", fake.updateCalls)
 	}
 }
+
+// ── integration: upsert across all four driver types ─────────────────────────
+
+// multiUpsertFakeDriver is a per-resource-type fake that always returns
+// ErrResourceAlreadyExists on Create, implements SupportsUpsert, and records
+// all call counts and the ProviderID passed to Update so assertions can verify
+// the full upsert path.
+type multiUpsertFakeDriver struct {
+	providerID        string
+	createCalls       int
+	readCalls         int
+	updateCalls       int
+	updatedProviderID string
+}
+
+func (f *multiUpsertFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.createCalls++
+	return nil, fmt.Errorf("already exists: %w", interfaces.ErrResourceAlreadyExists)
+}
+func (f *multiUpsertFakeDriver) Read(_ context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	f.readCalls++
+	return &interfaces.ResourceOutput{Name: ref.Name, Type: ref.Type, ProviderID: f.providerID}, nil
+}
+func (f *multiUpsertFakeDriver) Update(_ context.Context, ref interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.updateCalls++
+	f.updatedProviderID = ref.ProviderID
+	return &interfaces.ResourceOutput{Name: ref.Name, Type: ref.Type, ProviderID: ref.ProviderID}, nil
+}
+func (f *multiUpsertFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
+func (f *multiUpsertFakeDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	return nil, nil
+}
+func (f *multiUpsertFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *multiUpsertFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *multiUpsertFakeDriver) SensitiveKeys() []string { return nil }
+func (f *multiUpsertFakeDriver) SupportsUpsert() bool    { return true }
+
+// TestDOProvider_Apply_UpsertAllDrivers verifies that when VPC, Firewall,
+// Database, and container_service resources all pre-exist (Create returns
+// ErrResourceAlreadyExists), Apply upserts every one of them: Read is called
+// with empty ProviderID, then Update is called with the discovered ProviderID.
+func TestDOProvider_Apply_UpsertAllDrivers(t *testing.T) {
+	resources := []struct {
+		rtype      string
+		name       string
+		providerID string
+	}{
+		{"infra.vpc", "bmw-vpc", "vpc-aaa"},
+		{"infra.firewall", "bmw-fw", "fw-bbb"},
+		{"infra.database", "bmw-db", "db-ccc"},
+		{"infra.container_service", "bmw-app", "app-ddd"},
+	}
+
+	fakes := make(map[string]*multiUpsertFakeDriver, len(resources))
+	driverMap := make(map[string]interfaces.ResourceDriver, len(resources))
+	for _, r := range resources {
+		f := &multiUpsertFakeDriver{providerID: r.providerID}
+		fakes[r.rtype] = f
+		driverMap[r.rtype] = f
+	}
+
+	p := &DOProvider{drivers: driverMap}
+
+	actions := make([]interfaces.PlanAction, 0, len(resources))
+	for _, r := range resources {
+		actions = append(actions, interfaces.PlanAction{
+			Action: "create",
+			Resource: interfaces.ResourceSpec{
+				Name:   r.name,
+				Type:   r.rtype,
+				Config: map[string]any{},
+			},
+		})
+	}
+	plan := &interfaces.IaCPlan{ID: "plan-multi", Actions: actions}
+
+	result, err := p.Apply(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply returned errors: %v", result.Errors)
+	}
+	if len(result.Resources) != len(resources) {
+		t.Errorf("result.Resources len = %d, want %d", len(result.Resources), len(resources))
+	}
+
+	for _, r := range resources {
+		f := fakes[r.rtype]
+		if f.createCalls != 1 {
+			t.Errorf("%s: createCalls = %d, want 1", r.rtype, f.createCalls)
+		}
+		if f.readCalls != 1 {
+			t.Errorf("%s: readCalls = %d, want 1", r.rtype, f.readCalls)
+		}
+		if f.updateCalls != 1 {
+			t.Errorf("%s: updateCalls = %d, want 1", r.rtype, f.updateCalls)
+		}
+		// Verify the discovered ProviderID from Read was propagated into Update.
+		if f.updatedProviderID != r.providerID {
+			t.Errorf("%s: Update called with ProviderID %q, want %q", r.rtype, f.updatedProviderID, r.providerID)
+		}
+	}
+}

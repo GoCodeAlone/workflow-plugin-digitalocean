@@ -12,6 +12,7 @@ import (
 type DatabaseClient interface {
 	Create(ctx context.Context, req *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error)
 	Get(ctx context.Context, databaseID string) (*godo.Database, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]godo.Database, *godo.Response, error)
 	Resize(ctx context.Context, databaseID string, req *godo.DatabaseResizeRequest) (*godo.Response, error)
 	Delete(ctx context.Context, databaseID string) (*godo.Response, error)
 	UpdateFirewallRules(ctx context.Context, databaseID string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error)
@@ -58,12 +59,41 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	return dbOutput(db), nil
 }
 
+// SupportsUpsert reports that DatabaseDriver can locate a resource by name alone
+// (empty ProviderID), enabling the ErrResourceAlreadyExists → upsert path.
+func (d *DatabaseDriver) SupportsUpsert() bool { return true }
+
 func (d *DatabaseDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	if ref.ProviderID == "" {
+		return d.findDatabaseByName(ctx, ref.Name)
+	}
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("database read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return dbOutput(db), nil
+}
+
+// findDatabaseByName iterates the paginated database list and returns the first
+// database whose Name matches. Returns ErrResourceNotFound if no match is found.
+func (d *DatabaseDriver) findDatabaseByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		dbs, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("database list: %w", WrapGodoError(err))
+		}
+		for i := range dbs {
+			if dbs[i].Name == name {
+				return dbOutput(&dbs[i]), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("database %q: %w", name, ErrResourceNotFound)
 }
 
 func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {

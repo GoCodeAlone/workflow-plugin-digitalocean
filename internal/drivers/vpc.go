@@ -12,6 +12,7 @@ import (
 type VPCClient interface {
 	Create(ctx context.Context, req *godo.VPCCreateRequest) (*godo.VPC, *godo.Response, error)
 	Get(ctx context.Context, vpcID string) (*godo.VPC, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.VPC, *godo.Response, error)
 	Update(ctx context.Context, vpcID string, req *godo.VPCUpdateRequest) (*godo.VPC, *godo.Response, error)
 	Delete(ctx context.Context, vpcID string) (*godo.Response, error)
 }
@@ -49,12 +50,41 @@ func (d *VPCDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 	return vpcOutput(vpc), nil
 }
 
+// SupportsUpsert reports that VPCDriver can locate a resource by name alone
+// (empty ProviderID), enabling the ErrResourceAlreadyExists → upsert path.
+func (d *VPCDriver) SupportsUpsert() bool { return true }
+
 func (d *VPCDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	if ref.ProviderID == "" {
+		return d.findVPCByName(ctx, ref.Name)
+	}
 	vpc, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("vpc read %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return vpcOutput(vpc), nil
+}
+
+// findVPCByName iterates the paginated VPC list and returns the first VPC whose
+// Name matches. Returns ErrResourceNotFound if no match is found.
+func (d *VPCDriver) findVPCByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		vpcs, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("vpc list: %w", WrapGodoError(err))
+		}
+		for _, vpc := range vpcs {
+			if vpc.Name == name {
+				return vpcOutput(vpc), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("vpc %q: %w", name, ErrResourceNotFound)
 }
 
 func (d *VPCDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
