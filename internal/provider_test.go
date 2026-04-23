@@ -110,7 +110,7 @@ func TestDOProvider_SupportedCanonicalKeys(t *testing.T) {
 	supported := []string{
 		"name", "region", "image", "http_port", "instance_count", "size",
 		"env_vars", "env_vars_secret", "autoscaling", "routes", "health_check",
-		"liveness_check", "cors", "internal_ports", "build_command", "run_command",
+		"liveness_check", "cors", "protocol", "internal_ports", "build_command", "run_command",
 		"dockerfile_path", "source_dir", "termination", "domains", "alerts",
 		"log_destinations", "ingress", "egress", "maintenance", "vpc_ref",
 		"jobs", "workers", "static_sites", "sidecars", "provider_specific",
