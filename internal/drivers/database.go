@@ -139,7 +139,7 @@ func (d *DatabaseDriver) SensitiveKeys() []string {
 
 // trustedSourceCreateRulesFromConfig converts canonical "trusted_sources" to
 // []*godo.DatabaseCreateFirewallRule for use in a DatabaseCreateRequest.
-// Each entry must have "type" (ip_addr|k8s|app|droplet_id|tag) and "value".
+// Each entry must have "type" (ip_addr|k8s|app|droplet|tag) and "value".
 func trustedSourceCreateRulesFromConfig(cfg map[string]any) []*godo.DatabaseCreateFirewallRule {
 	raw, ok := cfg["trusted_sources"].([]any)
 	if !ok || len(raw) == 0 {
