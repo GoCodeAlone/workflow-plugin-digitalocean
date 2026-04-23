@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -385,7 +386,7 @@ func TestDatabaseDriver_Read_NameBased_NotFound(t *testing.T) {
 	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
 
 	_, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "missing-db"})
-	if err == nil {
-		t.Fatal("expected ErrResourceNotFound for unknown name, got nil")
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Fatalf("expected ErrResourceNotFound, got: %v", err)
 	}
 }

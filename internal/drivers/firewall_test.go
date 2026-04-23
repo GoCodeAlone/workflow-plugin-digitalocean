@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -245,8 +246,8 @@ func TestFirewallDriver_Read_NameBased_NotFound(t *testing.T) {
 	d := drivers.NewFirewallDriverWithClient(mock)
 
 	_, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "missing-fw"})
-	if err == nil {
-		t.Fatal("expected ErrResourceNotFound for unknown name, got nil")
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Fatalf("expected ErrResourceNotFound, got: %v", err)
 	}
 }
 
@@ -263,5 +264,26 @@ func TestFirewallDriver_Read_NilClientReturn_NoPanic(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for nil firewall returned by client, got nil")
+	}
+}
+
+// TestFirewallDriver_HealthCheck_NilClientReturn verifies that HealthCheck does
+// not panic when the godo client returns (nil, nil, nil). The nil guard ensures
+// a non-healthy result with a descriptive message is returned instead.
+func TestFirewallDriver_HealthCheck_NilClientReturn(t *testing.T) {
+	mock := &mockFirewallClient{fw: nil, err: nil}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name: "my-fw", ProviderID: "fw-123",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false for nil firewall")
+	}
+	if result.Message == "" {
+		t.Error("expected non-empty Message for nil firewall")
 	}
 }

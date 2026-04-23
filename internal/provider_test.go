@@ -349,12 +349,14 @@ func TestDOProvider_Apply_NoUpsertForUnsupportedDriver(t *testing.T) {
 
 // multiUpsertFakeDriver is a per-resource-type fake that always returns
 // ErrResourceAlreadyExists on Create, implements SupportsUpsert, and records
-// all call counts so assertions can verify the full upsert path.
+// all call counts and the ProviderID passed to Update so assertions can verify
+// the full upsert path.
 type multiUpsertFakeDriver struct {
-	providerID  string
-	createCalls int
-	readCalls   int
-	updateCalls int
+	providerID        string
+	createCalls       int
+	readCalls         int
+	updateCalls       int
+	updatedProviderID string
 }
 
 func (f *multiUpsertFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -367,6 +369,7 @@ func (f *multiUpsertFakeDriver) Read(_ context.Context, ref interfaces.ResourceR
 }
 func (f *multiUpsertFakeDriver) Update(_ context.Context, ref interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	f.updateCalls++
+	f.updatedProviderID = ref.ProviderID
 	return &interfaces.ResourceOutput{Name: ref.Name, Type: ref.Type, ProviderID: ref.ProviderID}, nil
 }
 func (f *multiUpsertFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
@@ -442,6 +445,10 @@ func TestDOProvider_Apply_UpsertAllDrivers(t *testing.T) {
 		}
 		if f.updateCalls != 1 {
 			t.Errorf("%s: updateCalls = %d, want 1", r.rtype, f.updateCalls)
+		}
+		// Verify the discovered ProviderID from Read was propagated into Update.
+		if f.updatedProviderID != r.providerID {
+			t.Errorf("%s: Update called with ProviderID %q, want %q", r.rtype, f.updatedProviderID, r.providerID)
 		}
 	}
 }

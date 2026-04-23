@@ -110,6 +110,9 @@ func (d *FirewallDriver) HealthCheck(ctx context.Context, ref interfaces.Resourc
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
+	if fw == nil {
+		return &interfaces.HealthResult{Healthy: false, Message: "provider returned nil firewall"}, nil
+	}
 	healthy := fw.Status == "succeeded"
 	return &interfaces.HealthResult{Healthy: healthy, Message: fw.Status}, nil
 }
@@ -120,8 +123,9 @@ func (d *FirewallDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ in
 
 // firewallRequest builds a godo FirewallRequest from a ResourceSpec.
 // Config keys:
-//   inbound_rules  []map[string]any  — each: {protocol, ports, sources}
-//   outbound_rules []map[string]any  — each: {protocol, ports, destinations}
+//
+//	inbound_rules  []map[string]any  — each: {protocol, ports, sources}
+//	outbound_rules []map[string]any  — each: {protocol, ports, destinations}
 func firewallRequest(spec interfaces.ResourceSpec) *godo.FirewallRequest {
 	req := &godo.FirewallRequest{Name: spec.Name}
 
