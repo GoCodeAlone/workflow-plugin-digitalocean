@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -143,5 +145,107 @@ func TestConfigHash_Empty(t *testing.T) {
 	h := configHash(nil)
 	if h != "" {
 		t.Errorf("expected empty hash for nil config, got %q", h)
+	}
+}
+
+// ── fake driver for Apply upsert test ─────────────────────────────────────────
+
+// upsertFakeDriver is a minimal ResourceDriver that:
+//   - returns ErrResourceAlreadyExists on the first Create call
+//   - returns a fixed ResourceOutput on Read (simulating discovery by name)
+//   - records Update calls so the test can assert the upsert path was taken
+type upsertFakeDriver struct {
+	createCalls int
+	updateCalls int
+	readCalls   int
+	updatedRef  interfaces.ResourceRef
+}
+
+func (f *upsertFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.createCalls++
+	return nil, fmt.Errorf("create conflict: %w", interfaces.ErrResourceAlreadyExists)
+}
+
+func (f *upsertFakeDriver) Read(_ context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	f.readCalls++
+	return &interfaces.ResourceOutput{
+		Name:       ref.Name,
+		Type:       ref.Type,
+		ProviderID: "discovered-provider-id",
+	}, nil
+}
+
+func (f *upsertFakeDriver) Update(_ context.Context, ref interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.updateCalls++
+	f.updatedRef = ref
+	return &interfaces.ResourceOutput{
+		Name:       ref.Name,
+		Type:       ref.Type,
+		ProviderID: ref.ProviderID,
+	}, nil
+}
+
+func (f *upsertFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
+func (f *upsertFakeDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	return nil, nil
+}
+func (f *upsertFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *upsertFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *upsertFakeDriver) SensitiveKeys() []string { return nil }
+
+// TestDOProvider_Apply_UpsertOnAlreadyExists verifies that when a create action
+// hits ErrResourceAlreadyExists, Apply:
+//  1. Calls Read (by name, empty ProviderID) to discover the existing ProviderID.
+//  2. Calls Update with the discovered ProviderID.
+//  3. Returns the resource in ApplyResult.Resources (no errors).
+func TestDOProvider_Apply_UpsertOnAlreadyExists(t *testing.T) {
+	fake := &upsertFakeDriver{}
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.container_service": fake,
+		},
+	}
+
+	spec := interfaces.ResourceSpec{
+		Name:   "bmw-app",
+		Type:   "infra.container_service",
+		Config: map[string]any{"image": "registry/bmw:latest"},
+	}
+	plan := &interfaces.IaCPlan{
+		ID:      "plan-test",
+		Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}},
+	}
+
+	result, err := p.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply returned errors: %v", result.Errors)
+	}
+
+	// Create was attempted once.
+	if fake.createCalls != 1 {
+		t.Errorf("createCalls = %d, want 1", fake.createCalls)
+	}
+	// Read was called to discover the ProviderID.
+	if fake.readCalls != 1 {
+		t.Errorf("readCalls = %d, want 1", fake.readCalls)
+	}
+	// Update was called with the discovered ProviderID.
+	if fake.updateCalls != 1 {
+		t.Errorf("updateCalls = %d, want 1", fake.updateCalls)
+	}
+	if fake.updatedRef.ProviderID != "discovered-provider-id" {
+		t.Errorf("updatedRef.ProviderID = %q, want %q", fake.updatedRef.ProviderID, "discovered-provider-id")
+	}
+
+	// Resource appears in result.
+	if len(result.Resources) != 1 || result.Resources[0].Name != "bmw-app" {
+		t.Errorf("result.Resources = %v, want [{bmw-app ...}]", result.Resources)
 	}
 }

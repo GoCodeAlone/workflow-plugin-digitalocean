@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -179,6 +180,22 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 		switch action.Action {
 		case "create":
 			out, err = d.Create(ctx, action.Resource)
+			if errors.Is(err, interfaces.ErrResourceAlreadyExists) {
+				// Resource exists in the provider but is not tracked in local
+				// state (e.g. manually created, or state was wiped). Upsert:
+				// discover the provider ID by reading by name, then update.
+				ref := interfaces.ResourceRef{
+					Name: action.Resource.Name,
+					Type: action.Resource.Type,
+				}
+				existing, readErr := d.Read(ctx, ref)
+				if readErr != nil {
+					err = fmt.Errorf("upsert: read after AlreadyExists: %w", readErr)
+					break
+				}
+				ref.ProviderID = existing.ProviderID
+				out, err = d.Update(ctx, ref, action.Resource)
+			}
 		case "update":
 			ref := interfaces.ResourceRef{
 				Name:       action.Resource.Name,
