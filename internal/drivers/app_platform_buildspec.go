@@ -72,10 +72,18 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		}
 	}
 
+	// Sidecars run as sibling AppServiceSpec entries (DO App Platform does not have
+	// a native sidecar concept; each sidecar becomes an independent service component).
+	sidecars, err := sidecarsFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("app platform sidecars: %w", err)
+	}
+	services := append([]*godo.AppServiceSpec{svc}, sidecars...)
+
 	spec := &godo.AppSpec{
 		Name:                         name,
 		Region:                       region,
-		Services:                     []*godo.AppServiceSpec{svc},
+		Services:                     services,
 		Jobs:                         jobsFromConfig(cfg),
 		Workers:                      workersFromConfig(cfg),
 		StaticSites:                  staticSitesFromConfig(cfg),
@@ -719,6 +727,59 @@ func stringsFromConfig(cfg map[string]any, key string) []string {
 		}
 	}
 	return out
+}
+
+// sidecarsFromConfig converts canonical "sidecars" list to sibling []*godo.AppServiceSpec.
+// DO App Platform has no native sidecar concept; each sidecar becomes an independent
+// service component in the same app. Components communicate via the app's internal
+// networking (platform-managed DNS/routing), not via a shared Linux network namespace.
+// An invalid image ref in any sidecar is returned as an error so misconfiguration fails fast.
+func sidecarsFromConfig(cfg map[string]any) ([]*godo.AppServiceSpec, error) {
+	raw, ok := cfg["sidecars"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]*godo.AppServiceSpec, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strFromConfig(m, "name", "")
+		if name == "" {
+			continue
+		}
+		svc := &godo.AppServiceSpec{
+			Name:       name,
+			RunCommand: strFromConfig(m, "run_command", ""),
+			Envs:       envVarsFromConfig(m),
+		}
+		if imgStr := strFromConfig(m, "image", ""); imgStr != "" {
+			img, err := ParseImageRef(imgStr)
+			if err != nil {
+				return nil, fmt.Errorf("sidecar %q: %w", name, err)
+			}
+			svc.Image = img
+		}
+		// Map the first public port to HTTPPort if specified.
+		if ports, ok := m["ports"].([]any); ok {
+			for _, p := range ports {
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				pub, _ := pm["public"].(bool)
+				if pub {
+					if port, ok2 := intFromConfig(pm, "port", 0); ok2 && port > 0 {
+						svc.HTTPPort = int64(port)
+						break
+					}
+				}
+			}
+		}
+		out = append(out, svc)
+	}
+	return out, nil
 }
 
 // stringMatchesFromConfig converts a []any of strings to []*godo.AppStringMatch using exact matching.

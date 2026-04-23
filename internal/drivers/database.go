@@ -14,6 +14,7 @@ type DatabaseClient interface {
 	Get(ctx context.Context, databaseID string) (*godo.Database, *godo.Response, error)
 	Resize(ctx context.Context, databaseID string, req *godo.DatabaseResizeRequest) (*godo.Response, error)
 	Delete(ctx context.Context, databaseID string) (*godo.Response, error)
+	UpdateFirewallRules(ctx context.Context, databaseID string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error)
 }
 
 // DatabaseDriver manages DigitalOcean Managed Databases (infra.database).
@@ -47,6 +48,7 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 		SizeSlug:   size,
 		Region:     region,
 		NumNodes:   numNodes,
+		Rules:      trustedSourceCreateRulesFromConfig(spec.Config),
 	}
 
 	db, _, err := d.client.Create(ctx, req)
@@ -73,6 +75,16 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("database update %q: %w", ref.Name, WrapGodoError(err))
+	}
+	// Sync firewall rules when trusted_sources key is present in config.
+	// "present but empty" clears all rules; absent key leaves existing rules unchanged.
+	if rules, ok := trustedSourceFirewallRulesFromConfig(spec.Config); ok {
+		_, err = d.client.UpdateFirewallRules(ctx, ref.ProviderID, &godo.DatabaseUpdateFirewallRulesRequest{
+			Rules: rules,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
+		}
 	}
 	return d.Read(ctx, ref)
 }
@@ -126,12 +138,70 @@ func (d *DatabaseDriver) SensitiveKeys() []string {
 	return []string{"uri", "password", "user"}
 }
 
+// trustedSourceCreateRulesFromConfig converts canonical "trusted_sources" to
+// []*godo.DatabaseCreateFirewallRule for use in a DatabaseCreateRequest.
+// Each entry must have "type" (ip_addr|k8s|app|droplet|tag) and "value".
+func trustedSourceCreateRulesFromConfig(cfg map[string]any) []*godo.DatabaseCreateFirewallRule {
+	raw, ok := cfg["trusted_sources"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	rules := make([]*godo.DatabaseCreateFirewallRule, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" {
+			continue
+		}
+		rules = append(rules, &godo.DatabaseCreateFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules
+}
+
+// trustedSourceFirewallRulesFromConfig converts canonical "trusted_sources" to
+// ([]*godo.DatabaseFirewallRule, bool) for use in a DatabaseUpdateFirewallRulesRequest.
+// The bool indicates whether the "trusted_sources" key was present in config at all:
+//   - false → key absent → caller should leave existing firewall rules unchanged.
+//   - true, empty slice → key present but empty → caller should clear all rules.
+//   - true, non-empty slice → key present with rules → caller should apply the rules.
+func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool) {
+	raw, ok := cfg["trusted_sources"]
+	if !ok {
+		return nil, false // key absent: leave existing rules unchanged
+	}
+	list, _ := raw.([]any)
+	rules := make([]*godo.DatabaseFirewallRule, 0, len(list))
+	for _, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" {
+			continue
+		}
+		rules = append(rules, &godo.DatabaseFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules, true
+}
+
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 	outputs := map[string]any{
-		"engine":   db.EngineSlug,
-		"region":   db.RegionSlug,
-		"size":     db.SizeSlug,
-		"version":  db.VersionSlug,
+		"engine":  db.EngineSlug,
+		"region":  db.RegionSlug,
+		"size":    db.SizeSlug,
+		"version": db.VersionSlug,
 	}
 	if db.Connection != nil {
 		outputs["host"] = db.Connection.Host

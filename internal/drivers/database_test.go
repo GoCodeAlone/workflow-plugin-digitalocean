@@ -11,11 +11,15 @@ import (
 )
 
 type mockDatabaseClient struct {
-	db  *godo.Database
-	err error
+	db              *godo.Database
+	err             error
+	firewallErr     error
+	lastCreateReq   *godo.DatabaseCreateRequest
+	lastFirewallReq *godo.DatabaseUpdateFirewallRulesRequest
 }
 
-func (m *mockDatabaseClient) Create(_ context.Context, _ *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error) {
+func (m *mockDatabaseClient) Create(_ context.Context, req *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error) {
+	m.lastCreateReq = req
 	return m.db, nil, m.err
 }
 func (m *mockDatabaseClient) Get(_ context.Context, _ string) (*godo.Database, *godo.Response, error) {
@@ -26,6 +30,10 @@ func (m *mockDatabaseClient) Resize(_ context.Context, _ string, _ *godo.Databas
 }
 func (m *mockDatabaseClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
+}
+func (m *mockDatabaseClient) UpdateFirewallRules(_ context.Context, _ string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error) {
+	m.lastFirewallReq = req
+	return nil, m.firewallErr
 }
 
 func testDatabase() *godo.Database {
@@ -156,6 +164,112 @@ func TestDatabaseDriver_Delete_Error(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestDatabaseDriver_Create_WithTrustedSources(t *testing.T) {
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "ip_addr", "value": "10.0.0.1/32"},
+				map[string]any{"type": "k8s", "value": "k8s-cluster-uuid"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastCreateReq == nil {
+		t.Fatal("no create request captured")
+	}
+	if len(mock.lastCreateReq.Rules) != 2 {
+		t.Fatalf("expected 2 firewall rules, got %d", len(mock.lastCreateReq.Rules))
+	}
+	if mock.lastCreateReq.Rules[0].Type != "ip_addr" || mock.lastCreateReq.Rules[0].Value != "10.0.0.1/32" {
+		t.Errorf("rule[0] = {%s %s}, want {ip_addr 10.0.0.1/32}",
+			mock.lastCreateReq.Rules[0].Type, mock.lastCreateReq.Rules[0].Value)
+	}
+	if mock.lastCreateReq.Rules[1].Type != "k8s" || mock.lastCreateReq.Rules[1].Value != "k8s-cluster-uuid" {
+		t.Errorf("rule[1] = {%s %s}, want {k8s k8s-cluster-uuid}",
+			mock.lastCreateReq.Rules[1].Type, mock.lastCreateReq.Rules[1].Value)
+	}
+}
+
+func TestDatabaseDriver_Update_WithTrustedSources(t *testing.T) {
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size": "db-s-2vcpu-4gb",
+			"trusted_sources": []any{
+				map[string]any{"type": "ip_addr", "value": "192.168.1.0/24"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules was not called")
+	}
+	if len(mock.lastFirewallReq.Rules) != 1 {
+		t.Fatalf("expected 1 firewall rule, got %d", len(mock.lastFirewallReq.Rules))
+	}
+	if mock.lastFirewallReq.Rules[0].Type != "ip_addr" || mock.lastFirewallReq.Rules[0].Value != "192.168.1.0/24" {
+		t.Errorf("rule[0] = {%s %s}, want {ip_addr 192.168.1.0/24}",
+			mock.lastFirewallReq.Rules[0].Type, mock.lastFirewallReq.Rules[0].Value)
+	}
+}
+
+func TestDatabaseDriver_Update_NoTrustedSources_SkipsFirewall(t *testing.T) {
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name:   "my-db",
+		Config: map[string]any{"size": "db-s-2vcpu-4gb"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastFirewallReq != nil {
+		t.Error("UpdateFirewallRules should not be called when trusted_sources is absent")
+	}
+}
+
+func TestDatabaseDriver_Update_EmptyTrustedSources_ClearsFirewall(t *testing.T) {
+	// trusted_sources present but empty → UpdateFirewallRules called with empty rules (clears all).
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size":            "db-s-2vcpu-4gb",
+			"trusted_sources": []any{}, // key present, but empty
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules must be called when trusted_sources key is present (even if empty)")
+	}
+	if len(mock.lastFirewallReq.Rules) != 0 {
+		t.Errorf("expected 0 rules to clear firewall, got %d", len(mock.lastFirewallReq.Rules))
 	}
 }
 
