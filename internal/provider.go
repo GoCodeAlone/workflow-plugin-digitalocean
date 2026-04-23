@@ -213,7 +213,7 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 					break
 				}
 				if existing.ProviderID == "" {
-					err = fmt.Errorf("upsert: resource %q found by name but returned empty ProviderID; cannot update", ref.Name)
+					err = fmt.Errorf("upsert: resource %q found by name but ProviderID is empty; cannot update: %w", ref.Name, createErr)
 					break
 				}
 				ref.ProviderID = existing.ProviderID

@@ -325,6 +325,10 @@ func TestDOProvider_Apply_NoUpsertForUnsupportedDriver(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
+	// Create was attempted once before the conflict was detected.
+	if fake.createCalls != 1 {
+		t.Errorf("createCalls = %d, want 1", fake.createCalls)
+	}
 	// Apply must return an action error — upsert is not available.
 	if len(result.Errors) != 1 {
 		t.Fatalf("expected 1 action error, got %d: %v", len(result.Errors), result.Errors)
