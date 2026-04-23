@@ -165,6 +165,15 @@ func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, 
 	return plan, nil
 }
 
+// upsertSupporter is an optional interface for ResourceDrivers that support
+// locating a resource by name alone (empty ProviderID) in their Read method.
+// Only drivers that implement name-based discovery should implement this
+// interface. Apply gates the ErrResourceAlreadyExists → upsert path on it to
+// prevent calling Read with an empty ProviderID on drivers that require one.
+type upsertSupporter interface {
+	SupportsUpsert() bool
+}
+
 // Apply executes the plan.
 func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
 	result := &interfaces.ApplyResult{PlanID: plan.ID}
@@ -181,9 +190,16 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 		case "create":
 			out, err = d.Create(ctx, action.Resource)
 			if errors.Is(err, interfaces.ErrResourceAlreadyExists) {
-				// Resource exists in the provider but is not tracked in local
-				// state (e.g. manually created, or state was wiped). Upsert:
-				// discover the provider ID by reading by name, then update.
+				// Upsert: resource exists in the provider but is absent from
+				// local state. Only attempt upsert if the driver supports
+				// name-based discovery (SupportsUpsert returns true).
+				// Drivers that pass ProviderID directly to their API client
+				// (VPC, database, firewall, etc.) do not support this path.
+				us, ok := d.(upsertSupporter)
+				if !ok || !us.SupportsUpsert() {
+					// Propagate original error; upsert not available for this type.
+					break
+				}
 				createErr := err
 				ref := interfaces.ResourceRef{
 					Name: action.Resource.Name,
@@ -194,6 +210,10 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 					// Preserve createErr so ErrResourceAlreadyExists remains
 					// in the error chain for callers using errors.Is.
 					err = fmt.Errorf("upsert: read after conflict: %w", errors.Join(createErr, readErr))
+					break
+				}
+				if existing.ProviderID == "" {
+					err = fmt.Errorf("upsert: resource %q found by name but ProviderID is empty; cannot update: %w", ref.Name, createErr)
 					break
 				}
 				ref.ProviderID = existing.ProviderID

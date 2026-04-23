@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -200,11 +201,16 @@ func (f *upsertFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ 
 }
 func (f *upsertFakeDriver) SensitiveKeys() []string { return nil }
 
+// SupportsUpsert opts this fake into the upsert path, mirroring AppPlatformDriver.
+func (f *upsertFakeDriver) SupportsUpsert() bool { return true }
+
 // TestDOProvider_Apply_UpsertOnAlreadyExists verifies that when a create action
 // hits ErrResourceAlreadyExists, Apply:
-//  1. Calls Read (by name, empty ProviderID) to discover the existing ProviderID.
-//  2. Calls Update with the discovered ProviderID.
-//  3. Returns the resource in ApplyResult.Resources (no errors).
+//  1. Gates on SupportsUpsert — only proceeds for drivers that opt in.
+//  2. Calls Read (by name, empty ProviderID) to discover the existing ProviderID.
+//  3. Validates existing.ProviderID is non-empty before calling Update.
+//  4. Calls Update with the discovered ProviderID.
+//  5. Returns the resource in ApplyResult.Resources (no errors).
 func TestDOProvider_Apply_UpsertOnAlreadyExists(t *testing.T) {
 	fake := &upsertFakeDriver{}
 	p := &DOProvider{
@@ -256,5 +262,85 @@ func TestDOProvider_Apply_UpsertOnAlreadyExists(t *testing.T) {
 	// Resource appears in result.
 	if len(result.Resources) != 1 || result.Resources[0].Name != "bmw-app" {
 		t.Errorf("result.Resources = %v, want [{bmw-app ...}]", result.Resources)
+	}
+}
+
+// noUpsertFakeDriver is a ResourceDriver that returns ErrResourceAlreadyExists
+// on Create but does NOT implement SupportsUpsert. It simulates drivers like
+// VPC/database/firewall that require ProviderID for Read.
+// SupportsUpsert is intentionally absent so it does not satisfy upsertSupporter.
+type noUpsertFakeDriver struct {
+	createCalls int
+	readCalls   int
+	updateCalls int
+}
+
+func (f *noUpsertFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.createCalls++
+	return nil, fmt.Errorf("create conflict: %w", interfaces.ErrResourceAlreadyExists)
+}
+func (f *noUpsertFakeDriver) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	f.readCalls++
+	return nil, nil
+}
+func (f *noUpsertFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.updateCalls++
+	return nil, nil
+}
+func (f *noUpsertFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
+func (f *noUpsertFakeDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	return nil, nil
+}
+func (f *noUpsertFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *noUpsertFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *noUpsertFakeDriver) SensitiveKeys() []string { return nil }
+
+// TestDOProvider_Apply_NoUpsertForUnsupportedDriver verifies that when a driver
+// does not implement SupportsUpsert, Apply does NOT call Read or Update — it
+// surfaces the original ErrResourceAlreadyExists as an action error.
+func TestDOProvider_Apply_NoUpsertForUnsupportedDriver(t *testing.T) {
+	fake := &noUpsertFakeDriver{}
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.database": fake,
+		},
+	}
+
+	spec := interfaces.ResourceSpec{
+		Name:   "bmw-db",
+		Type:   "infra.database",
+		Config: map[string]any{"engine": "postgres"},
+	}
+	plan := &interfaces.IaCPlan{
+		ID:      "plan-test",
+		Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}},
+	}
+
+	result, err := p.Apply(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Create was attempted once before the conflict was detected.
+	if fake.createCalls != 1 {
+		t.Errorf("createCalls = %d, want 1", fake.createCalls)
+	}
+	// Apply must return an action error — upsert is not available.
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 action error, got %d: %v", len(result.Errors), result.Errors)
+	}
+	if !strings.Contains(result.Errors[0].Error, interfaces.ErrResourceAlreadyExists.Error()) {
+		t.Errorf("action error should mention ErrResourceAlreadyExists, got: %s", result.Errors[0].Error)
+	}
+	// Read and Update must not have been called.
+	if fake.readCalls != 0 {
+		t.Errorf("readCalls = %d, want 0 (no upsert for unsupported driver)", fake.readCalls)
+	}
+	if fake.updateCalls != 0 {
+		t.Errorf("updateCalls = %d, want 0", fake.updateCalls)
 	}
 }
