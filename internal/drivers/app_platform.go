@@ -58,6 +58,12 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 	return appOutput(app), nil
 }
 
+// SupportsUpsert reports that AppPlatformDriver can locate a resource by name
+// alone (empty ProviderID), enabling the ErrResourceAlreadyExists → upsert path
+// in DOProvider.Apply. Other drivers that require ProviderID in Read do not
+// implement this method and are excluded from the upsert path.
+func (d *AppPlatformDriver) SupportsUpsert() bool { return true }
+
 func (d *AppPlatformDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	if ref.ProviderID == "" {
 		return d.findAppByName(ctx, ref.Name)
