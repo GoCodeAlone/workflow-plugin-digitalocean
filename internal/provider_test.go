@@ -345,7 +345,7 @@ func TestDOProvider_Apply_NoUpsertForUnsupportedDriver(t *testing.T) {
 	}
 }
 
-// ── integration: upsert across all three new drivers ─────────────────────────
+// ── integration: upsert across all four driver types ─────────────────────────
 
 // multiUpsertFakeDriver is a per-resource-type fake that always returns
 // ErrResourceAlreadyExists on Create, implements SupportsUpsert, and records
