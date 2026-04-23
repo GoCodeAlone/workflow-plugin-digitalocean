@@ -248,6 +248,31 @@ func TestDatabaseDriver_Update_NoTrustedSources_SkipsFirewall(t *testing.T) {
 	}
 }
 
+func TestDatabaseDriver_Update_EmptyTrustedSources_ClearsFirewall(t *testing.T) {
+	// trusted_sources present but empty → UpdateFirewallRules called with empty rules (clears all).
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size":            "db-s-2vcpu-4gb",
+			"trusted_sources": []any{}, // key present, but empty
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules must be called when trusted_sources key is present (even if empty)")
+	}
+	if len(mock.lastFirewallReq.Rules) != 0 {
+		t.Errorf("expected 0 rules to clear firewall, got %d", len(mock.lastFirewallReq.Rules))
+	}
+}
+
 func TestDatabaseDriver_Diff_HasChanges(t *testing.T) {
 	mock := &mockDatabaseClient{}
 	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")

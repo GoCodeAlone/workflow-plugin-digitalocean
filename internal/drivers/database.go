@@ -76,8 +76,9 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	if err != nil {
 		return nil, fmt.Errorf("database update %q: %w", ref.Name, WrapGodoError(err))
 	}
-	// Sync firewall rules when trusted_sources is specified.
-	if rules := trustedSourceFirewallRulesFromConfig(spec.Config); rules != nil {
+	// Sync firewall rules when trusted_sources key is present in config.
+	// "present but empty" clears all rules; absent key leaves existing rules unchanged.
+	if rules, ok := trustedSourceFirewallRulesFromConfig(spec.Config); ok {
 		_, err = d.client.UpdateFirewallRules(ctx, ref.ProviderID, &godo.DatabaseUpdateFirewallRulesRequest{
 			Rules: rules,
 		})
@@ -165,14 +166,19 @@ func trustedSourceCreateRulesFromConfig(cfg map[string]any) []*godo.DatabaseCrea
 }
 
 // trustedSourceFirewallRulesFromConfig converts canonical "trusted_sources" to
-// []*godo.DatabaseFirewallRule for use in a DatabaseUpdateFirewallRulesRequest.
-func trustedSourceFirewallRulesFromConfig(cfg map[string]any) []*godo.DatabaseFirewallRule {
-	raw, ok := cfg["trusted_sources"].([]any)
-	if !ok || len(raw) == 0 {
-		return nil
+// ([]*godo.DatabaseFirewallRule, bool) for use in a DatabaseUpdateFirewallRulesRequest.
+// The bool indicates whether the "trusted_sources" key was present in config at all:
+//   - false → key absent → caller should leave existing firewall rules unchanged.
+//   - true, empty slice → key present but empty → caller should clear all rules.
+//   - true, non-empty slice → key present with rules → caller should apply the rules.
+func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool) {
+	raw, ok := cfg["trusted_sources"]
+	if !ok {
+		return nil, false // key absent: leave existing rules unchanged
 	}
-	rules := make([]*godo.DatabaseFirewallRule, 0, len(raw))
-	for _, v := range raw {
+	list, _ := raw.([]any)
+	rules := make([]*godo.DatabaseFirewallRule, 0, len(list))
+	for _, v := range list {
 		m, ok := v.(map[string]any)
 		if !ok {
 			continue
@@ -187,7 +193,7 @@ func trustedSourceFirewallRulesFromConfig(cfg map[string]any) []*godo.DatabaseFi
 			Value: ruleValue,
 		})
 	}
-	return rules
+	return rules, true
 }
 
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
