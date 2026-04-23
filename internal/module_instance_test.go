@@ -662,6 +662,86 @@ func TestDoModuleInstance_InvokeMethod_ResolveSizing_NoHints(t *testing.T) {
 	}
 }
 
+// ── IaCProvider.BootstrapStateBackend dispatch test ───────────────────────────
+
+func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_Dispatches(t *testing.T) {
+	fake := &fakeIaCProvider{
+		bootstrapResult: &interfaces.BootstrapResult{
+			Bucket:   "bmw-state",
+			Region:   "nyc3",
+			Endpoint: "https://nyc3.digitaloceanspaces.com",
+			EnvVars:  map[string]string{"WFCTL_STATE_BUCKET": "bmw-state", "SPACES_BUCKET": "bmw-state"},
+		},
+	}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{
+		"cfg": map[string]any{
+			"bucket":    "bmw-state",
+			"region":    "nyc3",
+			"accessKey": "k",
+			"secretKey": "s",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BootstrapStateBackend dispatch: %v", err)
+	}
+	if !fake.bootstrapCalled {
+		t.Error("expected BootstrapStateBackend to be called on the provider")
+	}
+	if result["bucket"] != "bmw-state" {
+		t.Errorf("bucket = %q, want %q", result["bucket"], "bmw-state")
+	}
+	if result["region"] != "nyc3" {
+		t.Errorf("region = %q, want %q", result["region"], "nyc3")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilResult(t *testing.T) {
+	// Provider returns (nil, nil) — method should return empty map, not panic.
+	fake := &fakeIaCProvider{bootstrapResult: nil}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error for nil result: %v", err)
+	}
+	if result == nil {
+		t.Error("expected non-nil result map")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilCfgArg(t *testing.T) {
+	// Missing cfg arg should be treated as empty map, not panic.
+	fake := &fakeIaCProvider{bootstrapResult: &interfaces.BootstrapResult{Bucket: "b"}}
+	mi := &doModuleInstance{provider: fake}
+
+	_, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{})
+	if err != nil {
+		t.Fatalf("nil cfg arg should not error: %v", err)
+	}
+	if fake.bootstrapCfg == nil {
+		t.Error("expected non-nil cfg passed to provider (empty map)")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilArgs(t *testing.T) {
+	// InvokeMethod may be called with nil args — must not panic.
+	fake := &fakeIaCProvider{bootstrapResult: &interfaces.BootstrapResult{Bucket: "b"}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", nil)
+	if err != nil {
+		t.Fatalf("nil args should not error: %v", err)
+	}
+	if result == nil {
+		t.Error("expected non-nil result map")
+	}
+	if !fake.bootstrapCalled {
+		t.Error("expected BootstrapStateBackend to be called on the provider")
+	}
+}
+
 // ── stub driver ───────────────────────────────────────────────────────────────
 
 type stubResourceDriver struct {
@@ -746,15 +826,18 @@ type fakeIaCProvider struct {
 	importCalled        bool
 	resolveSizingCalled bool
 	resolveSizingHints  *interfaces.ResourceHints
+	bootstrapCalled     bool
+	bootstrapCfg        map[string]any
 
 	// return values
-	planResult    *interfaces.IaCPlan
-	applyResult   *interfaces.ApplyResult
-	destroyResult *interfaces.DestroyResult
-	statusResult  []interfaces.ResourceStatus
-	driftResult   []interfaces.DriftResult
-	importResult  *interfaces.ResourceState
-	sizingResult  *interfaces.ProviderSizing
+	planResult      *interfaces.IaCPlan
+	applyResult     *interfaces.ApplyResult
+	destroyResult   *interfaces.DestroyResult
+	statusResult    []interfaces.ResourceStatus
+	driftResult     []interfaces.DriftResult
+	importResult    *interfaces.ResourceState
+	sizingResult    *interfaces.ProviderSizing
+	bootstrapResult *interfaces.BootstrapResult
 }
 
 func (f *fakeIaCProvider) Name() string                                         { return "fake" }
@@ -796,6 +879,8 @@ func (f *fakeIaCProvider) ResolveSizing(_ string, _ interfaces.Size, hints *inte
 	return f.sizingResult, nil
 }
 func (f *fakeIaCProvider) SupportedCanonicalKeys() []string { return interfaces.CanonicalKeys() }
-func (f *fakeIaCProvider) BootstrapStateBackend(_ context.Context, _ map[string]any) (*interfaces.BootstrapResult, error) {
-	return nil, nil
+func (f *fakeIaCProvider) BootstrapStateBackend(_ context.Context, cfg map[string]any) (*interfaces.BootstrapResult, error) {
+	f.bootstrapCalled = true
+	f.bootstrapCfg = cfg
+	return f.bootstrapResult, nil
 }
