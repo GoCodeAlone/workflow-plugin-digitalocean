@@ -107,7 +107,7 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 func (d *DropletDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
 	id, err := providerIDToInt(ref.ProviderID)
 	if err != nil {
-		return &interfaces.HealthResult{Healthy: false, Message: fmt.Sprintf("invalid ProviderID %q: %s", ref.ProviderID, err)}, nil
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {

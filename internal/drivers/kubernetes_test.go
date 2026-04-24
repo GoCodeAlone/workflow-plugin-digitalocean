@@ -43,7 +43,7 @@ func (m *mockK8sClient) UpdateNodePool(_ context.Context, _, _ string, _ *godo.K
 
 func testCluster() *godo.KubernetesCluster {
 	return &godo.KubernetesCluster{
-		ID:          "k8s-123",
+		ID:          "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name:        "my-cluster",
 		RegionSlug:  "nyc3",
 		VersionSlug: "1.29",
@@ -71,8 +71,8 @@ func TestKubernetesDriver_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if out.ProviderID != "k8s-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestKubernetesDriver_HealthCheck_Running(t *testing.T) {
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
 		Name:       "my-cluster",
-		ProviderID: "k8s-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -110,13 +110,13 @@ func TestKubernetesDriver_Read_Success(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if out.ProviderID != "k8s-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -125,13 +125,13 @@ func TestKubernetesDriver_Update_Success(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	out, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{Name: "my-cluster", Config: map[string]any{}})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if out.ProviderID != "k8s-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -140,7 +140,7 @@ func TestKubernetesDriver_Update_Error(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{Name: "my-cluster", Config: map[string]any{}})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -152,7 +152,7 @@ func TestKubernetesDriver_Delete_Success(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -164,7 +164,7 @@ func TestKubernetesDriver_Delete_Error(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -188,7 +188,7 @@ func TestKubernetesDriver_Diff_NoChanges(t *testing.T) {
 	mock := &mockK8sClient{}
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
-	current := &interfaces.ResourceOutput{ProviderID: "k8s-123"}
+	current := &interfaces.ResourceOutput{ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "my-cluster"}, current)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
@@ -200,7 +200,7 @@ func TestKubernetesDriver_Diff_NoChanges(t *testing.T) {
 
 func TestKubernetesDriver_HealthCheck_Unhealthy(t *testing.T) {
 	cluster := &godo.KubernetesCluster{
-		ID:   "k8s-123",
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name: "my-cluster",
 		Status: &godo.KubernetesClusterStatus{
 			State:   godo.KubernetesClusterStatusProvisioning,
@@ -211,7 +211,7 @@ func TestKubernetesDriver_HealthCheck_Unhealthy(t *testing.T) {
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-cluster", ProviderID: "k8s-123",
+		Name: "my-cluster", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -227,13 +227,13 @@ func TestKubernetesDriver_Scale(t *testing.T) {
 
 	out, err := d.Scale(context.Background(), interfaces.ResourceRef{
 		Name:       "my-cluster",
-		ProviderID: "k8s-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, 5)
 	if err != nil {
 		t.Fatalf("Scale: %v", err)
 	}
-	if out.ProviderID != "k8s-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
