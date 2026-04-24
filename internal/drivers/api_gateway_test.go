@@ -22,6 +22,12 @@ func (m *mockAPIGatewayClient) Create(_ context.Context, _ *godo.AppCreateReques
 func (m *mockAPIGatewayClient) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
 	return m.app, nil, m.err
 }
+func (m *mockAPIGatewayClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	if m.app != nil {
+		return []*godo.App{m.app}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockAPIGatewayClient) Update(_ context.Context, _ string, _ *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	return m.app, nil, m.err
 }
