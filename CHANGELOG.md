@@ -2,6 +2,30 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## [v0.7.8] - 2026-04-24
+
+### Added
+
+- `AppPlatformDriver.Troubleshoot` implements `interfaces.Troubleshooter` from workflow
+  v0.18.10. On deploy health-check failure wfctl automatically fetches the app's
+  in-progress/pending/active deployment slots (prioritised in that order) plus up to
+  5 recent historical deployments, synthesises `[]Diagnostic` entries with per-phase
+  root-cause lines extracted from `Progress.SummarySteps` and `Progress.Steps`, and
+  surfaces them in CI output — no DO console trip required to diagnose failures.
+- `pickTroubleshootDeployments` helper: priority-ordered candidate selection with dedup.
+- `buildDiagnosticFor` helper: structured Diagnostic extraction per deployment.
+- `extractCause` helper: scans log tail / reason messages for common error patterns
+  (`Error:`, `exit status`, `panic:`, `fatal:`, `failed to`, …) with last-line fallback.
+- `ResourceDriver.Troubleshoot` gRPC dispatch in plugin `InvokeMethod`; returns
+  `codes.Unimplemented` for drivers that don't implement `Troubleshooter` so wfctl
+  silently no-ops without error.
+
+### Changed
+
+- Depends on workflow v0.18.10 (was v0.18.9) once tagged.
+- `AppPlatformDriver.Troubleshoot`: empty `ProviderID` now returns `(nil, nil)` instead
+  of an error; `ListDeployments` errors are best-effort (swallowed, slot-based data used).
+
 ## [v0.7.7] - 2026-04-24
 
 ### Fixed
