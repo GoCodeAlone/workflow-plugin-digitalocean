@@ -54,6 +54,9 @@ func (d *LoadBalancerDriver) Create(ctx context.Context, spec interfaces.Resourc
 	if err != nil {
 		return nil, fmt.Errorf("load balancer create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if lb == nil || lb.ID == "" {
+		return nil, fmt.Errorf("load balancer create %q: API returned load balancer with empty ID", spec.Name)
+	}
 	return lbOutput(lb), nil
 }
 

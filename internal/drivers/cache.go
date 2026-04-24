@@ -52,6 +52,9 @@ func (d *CacheDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) 
 	if err != nil {
 		return nil, fmt.Errorf("cache create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if db == nil || db.ID == "" {
+		return nil, fmt.Errorf("cache create %q: API returned cache with empty ID", spec.Name)
+	}
 	return cacheOutput(db), nil
 }
 

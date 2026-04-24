@@ -47,6 +47,9 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 	if err != nil {
 		return nil, fmt.Errorf("droplet create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if droplet == nil || droplet.ID == 0 {
+		return nil, fmt.Errorf("droplet create %q: API returned droplet with empty ID", spec.Name)
+	}
 	return dropletOutput(droplet), nil
 }
 

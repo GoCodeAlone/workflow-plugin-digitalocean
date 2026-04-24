@@ -230,3 +230,37 @@ func TestKubernetesDriver_Scale(t *testing.T) {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "k8s-123")
 	}
 }
+
+func TestKubernetesDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but cluster has empty ID — guard must reject it.
+	mock := &mockK8sClient{cluster: &godo.KubernetesCluster{Name: "my-cluster"}}
+	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cluster",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestKubernetesDriver_Create_ProviderIDIsUUID(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockK8sClient{cluster: testCluster()}
+	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cluster",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-cluster" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-cluster", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

@@ -51,6 +51,9 @@ func (d *CertificateDriver) Create(ctx context.Context, spec interfaces.Resource
 	if err != nil {
 		return nil, fmt.Errorf("certificate create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if cert == nil || cert.ID == "" {
+		return nil, fmt.Errorf("certificate create %q: API returned certificate with empty ID", spec.Name)
+	}
 	return certOutput(cert, spec.Name), nil
 }
 

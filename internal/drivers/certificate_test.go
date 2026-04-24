@@ -194,3 +194,37 @@ func TestCertificateDriver_HealthCheck_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy for pending certificate")
 	}
 }
+
+func TestCertificateDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but certificate has empty ID — guard must reject it.
+	mock := &mockCertClient{cert: &godo.Certificate{Name: "my-cert"}}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cert",
+		Config: map[string]any{"type": "lets_encrypt"},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestCertificateDriver_Create_ProviderIDIsUUID(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockCertClient{cert: testCertificate()}
+	d := drivers.NewCertificateDriverWithClient(mock)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cert",
+		Config: map[string]any{"type": "lets_encrypt"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-cert" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-cert", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

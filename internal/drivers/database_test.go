@@ -390,3 +390,37 @@ func TestDatabaseDriver_Read_NameBased_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrResourceNotFound, got: %v", err)
 	}
 }
+
+func TestDatabaseDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but database has empty ID — guard must reject it.
+	mock := &mockDatabaseClient{db: &godo.Database{Name: "my-db"}}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-db",
+		Config: map[string]any{"engine": "pg"},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestDatabaseDriver_Create_ProviderIDIsUUID(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-db",
+		Config: map[string]any{"engine": "pg"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-db" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-db", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}
