@@ -67,7 +67,7 @@ func (m *mockAppClient) Delete(_ context.Context, _ string) (*godo.Response, err
 
 func testApp() *godo.App {
 	return &godo.App{
-		ID:      "app-123",
+		ID:      "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		LiveURL: "https://test.app.example.com",
 		Spec:    &godo.AppSpec{Name: "my-app"},
 		ActiveDeployment: &godo.Deployment{
@@ -93,8 +93,8 @@ func TestAppPlatformDriver_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if out.ProviderID != "app-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 	if out.Status != "running" {
 		t.Errorf("Status = %q, want %q", out.Status, "running")
@@ -107,13 +107,13 @@ func TestAppPlatformDriver_Read(t *testing.T) {
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
 		Name:       "my-app",
-		ProviderID: "app-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if out.ProviderID != "app-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -123,7 +123,7 @@ func TestAppPlatformDriver_Delete(t *testing.T) {
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
 		Name:       "my-app",
-		ProviderID: "app-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -136,7 +136,7 @@ func TestAppPlatformDriver_HealthCheck(t *testing.T) {
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
 		Name:       "my-app",
-		ProviderID: "app-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -164,7 +164,7 @@ func TestAppPlatformDriver_Update_Success(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	out, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
 		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2", "instance_count": 3},
@@ -172,8 +172,8 @@ func TestAppPlatformDriver_Update_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if out.ProviderID != "app-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -182,7 +182,7 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
 		Config: map[string]any{},
@@ -200,7 +200,7 @@ func TestAppPlatformDriver_Update_TriggersCreateDeployment(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
 		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
@@ -224,7 +224,7 @@ func TestAppPlatformDriver_Update_CreateDeploymentFails(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
 		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
@@ -245,7 +245,7 @@ func TestAppPlatformDriver_Update_CreateDeploymentSentinelPropagates(t *testing.
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
 		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
@@ -260,7 +260,7 @@ func TestAppPlatformDriver_Delete_Error(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -361,7 +361,7 @@ func TestAppPlatformDriver_Update_EnvVars(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name: "my-app",
 		Config: map[string]any{
@@ -405,7 +405,7 @@ func TestAppPlatformDriver_Create_NoEnvVars(t *testing.T) {
 
 func TestAppPlatformDriver_HealthCheck_Unhealthy(t *testing.T) {
 	app := &godo.App{
-		ID:   "app-123",
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Spec: &godo.AppSpec{Name: "my-app"},
 		// ActiveDeployment nil => pending/unhealthy
 	}
@@ -413,7 +413,7 @@ func TestAppPlatformDriver_HealthCheck_Unhealthy(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "app-123",
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -680,7 +680,7 @@ func TestAppPlatformDriver_Update_BuildsNestedImageSpec(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "bmw-app", ProviderID: "app-123",
+		Name: "bmw-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name: "bmw-app",
 		Config: map[string]any{
@@ -763,13 +763,13 @@ func TestAppPlatformDriver_Read_ByID_StillWorks(t *testing.T) {
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
 		Name:       "my-app",
-		ProviderID: "app-123",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read by ID: unexpected error: %v", err)
 	}
-	if out.ProviderID != "app-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -845,14 +845,14 @@ func TestTroubleshoot_ReturnsDiagnostics(t *testing.T) {
 	// ListDeployments. The app has no current deployment slots, so both
 	// historical error deployments should produce diagnostics.
 	mock := &mockAppClient{
-		app: &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
+		app: &godo.App{ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5", Spec: &godo.AppSpec{Name: "my-app"}},
 		deployments: []*godo.Deployment{
 			{ID: "dep-abc", Phase: godo.DeploymentPhase_Error, Cause: "image pull failed"},
 			{ID: "dep-xyz", Phase: godo.DeploymentPhase_Canceled, Cause: "superseded"},
 		},
 	}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
-	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "app-123"}
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
 	diags, err := d.Troubleshoot(context.Background(), ref, "no deployment found")
 	if err != nil {
 		t.Fatalf("Troubleshoot: %v", err)
@@ -889,11 +889,11 @@ func TestTroubleshoot_APIError(t *testing.T) {
 	// whatever deployment slots the app has. If the app itself has no
 	// slots and Get returns a valid app, result is empty (not an error).
 	mock := &mockAppClient{
-		app:                &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
+		app:                &godo.App{ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5", Spec: &godo.AppSpec{Name: "my-app"}},
 		listDeploymentsErr: errors.New("api timeout"),
 	}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
-	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "app-123"}
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
 	_, err := d.Troubleshoot(context.Background(), ref, "")
 	if err != nil {
 		t.Fatalf("ListDeployments error should not propagate; got: %v", err)

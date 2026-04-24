@@ -32,7 +32,7 @@ func buildSpecViaUpdate(t *testing.T, cfg map[string]any) *godo.AppSpec {
 	t.Helper()
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
-	_, err := d.Update(t.Context(), interfaces.ResourceRef{Name: "test-app", ProviderID: "app-1"},
+	_, err := d.Update(t.Context(), interfaces.ResourceRef{Name: "test-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"},
 		interfaces.ResourceSpec{Name: "test-app", Config: cfg})
 	if err != nil {
 		t.Fatalf("Update: %v", err)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -102,6 +103,11 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
@@ -111,12 +117,12 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 		return nil, fmt.Errorf("app platform build spec: %w", err)
 	}
 
-	app, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: appSpec})
+	app, _, err := d.client.Update(ctx, providerID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	// Trigger a new deployment — Update only changes the spec; DO does not auto-deploy.
-	dep, _, err := d.client.CreateDeployment(ctx, ref.ProviderID, &godo.DeploymentCreateRequest{ForceBuild: true})
+	dep, _, err := d.client.CreateDeployment(ctx, providerID, &godo.DeploymentCreateRequest{ForceBuild: true})
 	if err != nil {
 		return nil, fmt.Errorf("app platform create deployment %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -125,11 +131,39 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 }
 
 func (d *AppPlatformDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("app platform delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref.
+// If ref.ProviderID is already a valid UUID it is returned as-is.
+// If it looks like a name (legacy stale state), a name-based lookup is
+// performed and the real UUID is returned so callers never send a non-UUID
+// path parameter to the DO API.
+func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: app platform %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findAppByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("app platform state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
+// isUUIDLike returns true when s has the canonical UUID shape:
+// 36 characters with hyphens at positions 8, 13, 18, and 23.
+func isUUIDLike(s string) bool {
+	return len(s) == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-'
 }
 
 func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
