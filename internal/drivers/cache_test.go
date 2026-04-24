@@ -21,6 +21,12 @@ func (m *mockCacheClient) Create(_ context.Context, _ *godo.DatabaseCreateReques
 func (m *mockCacheClient) Get(_ context.Context, _ string) (*godo.Database, *godo.Response, error) {
 	return m.db, nil, m.err
 }
+func (m *mockCacheClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.Database, *godo.Response, error) {
+	if m.db != nil {
+		return []godo.Database{*m.db}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockCacheClient) Resize(_ context.Context, _ string, _ *godo.DatabaseResizeRequest) (*godo.Response, error) {
 	return nil, m.err
 }

@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -12,6 +13,7 @@ import (
 type CacheClient interface {
 	Create(ctx context.Context, req *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error)
 	Get(ctx context.Context, databaseID string) (*godo.Database, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]godo.Database, *godo.Response, error)
 	Resize(ctx context.Context, databaseID string, req *godo.DatabaseResizeRequest) (*godo.Response, error)
 	Delete(ctx context.Context, databaseID string) (*godo.Response, error)
 }
@@ -66,21 +68,70 @@ func (d *CacheDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*in
 	return cacheOutput(db), nil
 }
 
+// findCacheByName iterates the paginated database list (Redis engine only)
+// and returns the first entry whose Name matches. Returns ErrResourceNotFound
+// if no match is found.
+func (d *CacheDriver) findCacheByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		dbs, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("cache list: %w", WrapGodoError(err))
+		}
+		for i := range dbs {
+			if dbs[i].Name == name {
+				return cacheOutput(&dbs[i]), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("cache %q: %w", name, ErrResourceNotFound)
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *CacheDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: cache %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findCacheByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("cache state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *CacheDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
-	_, err := d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
+	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
 		SizeSlug: size,
 		NumNodes: numNodes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cache update %q: %w", ref.Name, WrapGodoError(err))
 	}
+	ref.ProviderID = providerID // pass healed ID to Read
 	return d.Read(ctx, ref)
 }
 
 func (d *CacheDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("cache delete %q: %w", ref.Name, WrapGodoError(err))
 	}
