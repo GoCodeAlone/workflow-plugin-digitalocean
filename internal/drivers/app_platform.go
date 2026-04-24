@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -22,6 +23,7 @@ type AppPlatformClient interface {
 	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
 	Update(ctx context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error)
 	CreateDeployment(ctx context.Context, appID string, req ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error)
+	ListDeployments(ctx context.Context, appID string, opts *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
 
@@ -101,6 +103,11 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
@@ -110,12 +117,12 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 		return nil, fmt.Errorf("app platform build spec: %w", err)
 	}
 
-	app, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: appSpec})
+	app, _, err := d.client.Update(ctx, providerID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	// Trigger a new deployment — Update only changes the spec; DO does not auto-deploy.
-	dep, _, err := d.client.CreateDeployment(ctx, ref.ProviderID, &godo.DeploymentCreateRequest{ForceBuild: true})
+	dep, _, err := d.client.CreateDeployment(ctx, providerID, &godo.DeploymentCreateRequest{ForceBuild: true})
 	if err != nil {
 		return nil, fmt.Errorf("app platform create deployment %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -124,11 +131,33 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 }
 
 func (d *AppPlatformDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("app platform delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref.
+// If ref.ProviderID is already a valid UUID it is returned as-is.
+// If it looks like a name (legacy stale state), a name-based lookup is
+// performed and the real UUID is returned so callers never send a non-UUID
+// path parameter to the DO API.
+func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: app platform %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findAppByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("app platform state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
 }
 
 func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
@@ -218,6 +247,148 @@ func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRe
 		return nil, fmt.Errorf("app platform scale update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(updated), nil
+}
+
+// troubleshootMaxDeployments is the maximum number of recent historical
+// deployments fetched by Troubleshoot (slot-based candidates are always
+// included; this cap applies separately to the historical listing pass).
+const troubleshootMaxDeployments = 5
+
+// Troubleshoot implements interfaces.Troubleshooter for AppPlatformDriver.
+// It fetches the app (to inspect its three deployment slots: InProgress,
+// Pending, Active) plus recent historical deployments, prioritises them, and
+// returns per-deployment Diagnostics so wfctl can render a structured failure
+// block on health-check timeout without requiring a DO console visit.
+func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.ResourceRef, _ string) ([]interfaces.Diagnostic, error) {
+	if ref.ProviderID == "" {
+		return nil, nil
+	}
+	app, _, err := d.client.Get(ctx, ref.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("troubleshoot: get app %q: %w", ref.Name, WrapGodoError(err))
+	}
+	if app == nil {
+		return nil, nil
+	}
+	hist, _, _ := d.client.ListDeployments(ctx, ref.ProviderID, &godo.ListOptions{Page: 1, PerPage: troubleshootMaxDeployments})
+	candidates := pickTroubleshootDeployments(app, hist)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var out []interfaces.Diagnostic
+	for _, dep := range candidates {
+		if diag := buildDiagnosticFor(dep); diag != nil {
+			out = append(out, *diag)
+		}
+	}
+	return out, nil
+}
+
+// pickTroubleshootDeployments returns up to 3 candidate deployments in priority
+// order: InProgress > Pending > Active, followed by unique historical entries.
+// All three deployment slots (InProgress, Pending, Active) are collected in
+// priority order; historical deployments fill remaining capacity up to 3 total.
+func pickTroubleshootDeployments(app *godo.App, historical []*godo.Deployment) []*godo.Deployment {
+	seen := map[string]bool{}
+	var result []*godo.Deployment
+	add := func(dep *godo.Deployment) {
+		if dep == nil || dep.ID == "" || seen[dep.ID] {
+			return
+		}
+		seen[dep.ID] = true
+		result = append(result, dep)
+	}
+	add(app.InProgressDeployment)
+	add(app.PendingDeployment)
+	add(app.ActiveDeployment)
+	for _, dep := range historical {
+		if len(result) >= 3 {
+			break
+		}
+		add(dep)
+	}
+	return result
+}
+
+// buildDiagnosticFor synthesises a Diagnostic from a single deployment's state.
+// It scans Progress.SummarySteps for a failed phase name (e.g. "pre_deploy",
+// "build") first, then falls back to leaf Progress.Steps, and finally to the
+// deployment-level Cause field.
+// Returns nil when there is nothing actionable to report (active/healthy).
+func buildDiagnosticFor(dep *godo.Deployment) *interfaces.Diagnostic {
+	cause, phase := deploymentCauseAndPhase(dep)
+	if cause == "" {
+		return nil
+	}
+	return &interfaces.Diagnostic{
+		ID:    dep.ID,
+		Phase: phase,
+		Cause: cause,
+		At:    dep.CreatedAt,
+	}
+}
+
+// deploymentCauseAndPhase extracts the most actionable (cause, phase) pair.
+// Priority: SummarySteps error > Steps error > dep.Cause > terminal phase.
+func deploymentCauseAndPhase(dep *godo.Deployment) (cause, phase string) {
+	if dep.Progress != nil {
+		// SummarySteps carry DO's high-level phase names ("pre_deploy", "build", …).
+		for _, step := range dep.Progress.SummarySteps {
+			if step.Status == godo.DeploymentProgressStepStatus_Error {
+				msg := ""
+				if step.Reason != nil {
+					msg = step.Reason.Message
+				}
+				if msg == "" {
+					msg = dep.Cause
+				}
+				if msg != "" {
+					return extractCause(msg), step.Name
+				}
+			}
+		}
+		// Fall back to leaf-level steps.
+		for _, step := range dep.Progress.Steps {
+			if step.Status == godo.DeploymentProgressStepStatus_Error &&
+				step.Reason != nil && step.Reason.Message != "" {
+				return extractCause(step.Reason.Message), string(dep.Phase)
+			}
+		}
+	}
+	if dep.Cause != "" {
+		return dep.Cause, string(dep.Phase)
+	}
+	// Report explicitly terminal phases even without a message.
+	switch dep.Phase {
+	case godo.DeploymentPhase_Error, godo.DeploymentPhase_Canceled:
+		return string(dep.Phase), string(dep.Phase)
+	}
+	return "", ""
+}
+
+// extractCause scans a log tail (or a short message) for common error
+// patterns and returns the first matching line. Falls back to the last
+// non-empty line when no pattern matches.
+func extractCause(tail string) string {
+	patterns := []string{
+		"Error:", "error:", "exit status", "exit code",
+		"failed to", "panic:", "fatal:", "FATAL",
+	}
+	for _, line := range strings.Split(tail, "\n") {
+		for _, p := range patterns {
+			if strings.Contains(line, p) {
+				return strings.TrimSpace(line)
+			}
+		}
+	}
+	// Fallback: last non-empty line.
+	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func appOutput(app *godo.App) *interfaces.ResourceOutput {
