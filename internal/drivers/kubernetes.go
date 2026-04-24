@@ -145,7 +145,11 @@ func (d *KubernetesDriver) Diff(_ context.Context, desired interfaces.ResourceSp
 }
 
 func (d *KubernetesDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	cluster, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -160,7 +164,11 @@ func (d *KubernetesDriver) HealthCheck(ctx context.Context, ref interfaces.Resou
 // Scale resizes the first node pool of the cluster to the given replica count
 // using godo.Kubernetes.UpdateNodePool.
 func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
-	cluster, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	cluster, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -169,12 +177,13 @@ func (d *KubernetesDriver) Scale(ctx context.Context, ref interfaces.ResourceRef
 	}
 	pool := cluster.NodePools[0]
 	count := replicas
-	_, _, err = d.client.UpdateNodePool(ctx, ref.ProviderID, pool.ID, &godo.KubernetesNodePoolUpdateRequest{
+	_, _, err = d.client.UpdateNodePool(ctx, providerID, pool.ID, &godo.KubernetesNodePoolUpdateRequest{
 		Count: &count,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes scale %q pool %q: %w", ref.Name, pool.ID, WrapGodoError(err))
 	}
+	ref.ProviderID = providerID
 	return d.Read(ctx, ref)
 }
 

@@ -25,12 +25,18 @@ type apiGatewayStateHealMock struct {
 
 	createApp *godo.App
 	createErr error
+
+	// getApp is returned by Get (used by HealthCheck after heal).
+	getApp *godo.App
 }
 
 func (m *apiGatewayStateHealMock) Create(_ context.Context, _ *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
 	return m.createApp, nil, m.createErr
 }
 func (m *apiGatewayStateHealMock) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
+	if m.getApp != nil {
+		return m.getApp, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in apiGatewayStateHealMock")
 }
 func (m *apiGatewayStateHealMock) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
@@ -144,5 +150,33 @@ func TestAPIGatewayDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestAPIGatewayDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &apiGatewayStateHealMock{
+		listApps: []*godo.App{{ID: uuid, Spec: &godo.AppSpec{Name: "my-gateway"}}},
+		getApp: &godo.App{
+			ID:   uuid,
+			Spec: &godo.AppSpec{Name: "my-gateway"},
+			ActiveDeployment: &godo.Deployment{
+				Phase: godo.DeploymentPhase_Active,
+			},
+		},
+	}
+	d := NewAPIGatewayDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-gateway", ProviderID: "my-gateway"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
 	}
 }

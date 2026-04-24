@@ -171,7 +171,11 @@ func (d *DatabaseDriver) Diff(_ context.Context, desired interfaces.ResourceSpec
 }
 
 func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -180,17 +184,22 @@ func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.Resourc
 }
 
 func (d *DatabaseDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("database scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	_, err = d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
+	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
 		SizeSlug: db.SizeSlug,
 		NumNodes: replicas,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("database scale %q: %w", ref.Name, WrapGodoError(err))
 	}
+	ref.ProviderID = providerID
 	return d.Read(ctx, ref)
 }
 

@@ -79,7 +79,7 @@ func (d *CacheDriver) findCacheByName(ctx context.Context, name string) (*interf
 			return nil, fmt.Errorf("cache list: %w", WrapGodoError(err))
 		}
 		for i := range dbs {
-			if dbs[i].Name == name {
+			if dbs[i].Name == name && dbs[i].EngineSlug == "redis" {
 				return cacheOutput(&dbs[i]), nil
 			}
 		}
@@ -152,7 +152,11 @@ func (d *CacheDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, c
 }
 
 func (d *CacheDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -161,17 +165,22 @@ func (d *CacheDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRe
 }
 
 func (d *CacheDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("cache scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	_, err = d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
+	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
 		SizeSlug: db.SizeSlug,
 		NumNodes: replicas,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cache scale %q: %w", ref.Name, WrapGodoError(err))
 	}
+	ref.ProviderID = providerID
 	return d.Read(ctx, ref)
 }
 

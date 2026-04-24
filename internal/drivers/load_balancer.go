@@ -158,7 +158,11 @@ func (d *LoadBalancerDriver) Diff(_ context.Context, desired interfaces.Resource
 }
 
 func (d *LoadBalancerDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	lb, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	lb, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}

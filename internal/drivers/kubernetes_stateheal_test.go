@@ -25,12 +25,18 @@ type k8sStateHealMock struct {
 
 	createCluster *godo.KubernetesCluster
 	createErr     error
+
+	// getCluster is returned by Get (used by HealthCheck and Scale after heal).
+	getCluster *godo.KubernetesCluster
 }
 
 func (m *k8sStateHealMock) Create(_ context.Context, _ *godo.KubernetesClusterCreateRequest) (*godo.KubernetesCluster, *godo.Response, error) {
 	return m.createCluster, nil, m.createErr
 }
 func (m *k8sStateHealMock) Get(_ context.Context, _ string) (*godo.KubernetesCluster, *godo.Response, error) {
+	if m.getCluster != nil {
+		return m.getCluster, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in k8sStateHealMock")
 }
 func (m *k8sStateHealMock) List(_ context.Context, _ *godo.ListOptions) ([]*godo.KubernetesCluster, *godo.Response, error) {
@@ -46,7 +52,7 @@ func (m *k8sStateHealMock) Delete(_ context.Context, clusterID string) (*godo.Re
 	return nil, m.deleteErr
 }
 func (m *k8sStateHealMock) UpdateNodePool(_ context.Context, _, _ string, _ *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error) {
-	return nil, nil, errors.New("not implemented in k8sStateHealMock")
+	return &godo.KubernetesNodePool{}, nil, nil
 }
 
 // ── Create ────────────────────────────────────────────────────────────────────
@@ -147,5 +153,51 @@ func TestKubernetesDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestKubernetesDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &k8sStateHealMock{
+		listClusters: []*godo.KubernetesCluster{{ID: uuid, Name: "my-cluster"}},
+		getCluster: &godo.KubernetesCluster{
+			ID:     uuid,
+			Name:   "my-cluster",
+			Status: &godo.KubernetesClusterStatus{State: godo.KubernetesClusterStatusRunning},
+		},
+	}
+	d := NewKubernetesDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-cluster", ProviderID: "my-cluster"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
+	}
+}
+
+// ── Scale state-heal tests ────────────────────────────────────────────────────
+
+func TestKubernetesDriver_Scale_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	pool := &godo.KubernetesNodePool{ID: "pool-1", Count: 1}
+	m := &k8sStateHealMock{
+		listClusters: []*godo.KubernetesCluster{{ID: uuid, Name: "my-cluster"}},
+		getCluster:   &godo.KubernetesCluster{ID: uuid, Name: "my-cluster", NodePools: []*godo.KubernetesNodePool{pool}},
+	}
+	d := NewKubernetesDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-cluster", ProviderID: "my-cluster"} // stale name
+	_, err := d.Scale(context.Background(), ref, 3)
+	if err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
 	}
 }

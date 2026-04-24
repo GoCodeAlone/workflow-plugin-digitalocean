@@ -426,7 +426,7 @@ func TestAppPlatformDriver_HealthCheck_Unhealthy(t *testing.T) {
 // ── HealthCheck deployment-phase tests ───────────────────────────────────────
 
 func appWithPhases(active, inProgress, pending *godo.DeploymentPhase) *godo.App {
-	app := &godo.App{ID: "app-999", Spec: &godo.AppSpec{Name: "phased-app"}}
+	app := &godo.App{ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5", Spec: &godo.AppSpec{Name: "phased-app"}}
 	if active != nil {
 		app.ActiveDeployment = &godo.Deployment{Phase: *active}
 	}
@@ -445,7 +445,7 @@ func TestAppPlatformDriver_HealthCheck_Active(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(phasePtr(godo.DeploymentPhase_Active), nil, nil),
 	}, "nyc3")
-	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestAppPlatformDriver_HealthCheck_InProgress_Building(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Building), nil),
 	}, "nyc3")
-	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestAppPlatformDriver_HealthCheck_InProgress_Deploying(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Deploying), nil),
 	}, "nyc3")
-	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if result.Healthy {
 		t.Error("expected Healthy=false while DEPLOYING")
 	}
@@ -487,7 +487,7 @@ func TestAppPlatformDriver_HealthCheck_InProgress_Failed(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Error), nil),
 	}, "nyc3")
-	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if result.Healthy {
 		t.Error("expected Healthy=false for ERROR phase")
 	}
@@ -500,7 +500,7 @@ func TestAppPlatformDriver_HealthCheck_PendingDeployment(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, nil, phasePtr(godo.DeploymentPhase_PendingBuild)),
 	}, "nyc3")
-	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if result.Healthy {
 		t.Error("expected Healthy=false with only a pending deployment")
 	}
@@ -513,7 +513,7 @@ func TestAppPlatformDriver_HealthCheck_NoDeployment(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, nil, nil),
 	}, "nyc3")
-	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if result.Healthy {
 		t.Error("expected Healthy=false with no deployments")
 	}
@@ -526,7 +526,7 @@ func TestAppPlatformDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
 	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
 		app: appWithPhases(nil, phasePtr(godo.DeploymentPhase_Unknown), nil),
 	}, "nyc3")
-	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "app-999"})
+	result, _ := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
 	if result.Healthy {
 		t.Error("expected Healthy=false for unknown phase")
 	}

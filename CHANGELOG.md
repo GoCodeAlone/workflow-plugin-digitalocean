@@ -57,7 +57,7 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Changed
 
-- Depends on workflow v0.18.11 (was v0.18.10.1).
+- Depends on workflow v0.18.11.
 
 ---
 

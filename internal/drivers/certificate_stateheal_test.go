@@ -22,12 +22,18 @@ type certificateStateHealMock struct {
 
 	createCert *godo.Certificate
 	createErr  error
+
+	// getCert is returned by Get (used by HealthCheck after heal).
+	getCert *godo.Certificate
 }
 
 func (m *certificateStateHealMock) Create(_ context.Context, _ *godo.CertificateRequest) (*godo.Certificate, *godo.Response, error) {
 	return m.createCert, nil, m.createErr
 }
 func (m *certificateStateHealMock) Get(_ context.Context, _ string) (*godo.Certificate, *godo.Response, error) {
+	if m.getCert != nil {
+		return m.getCert, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in certificateStateHealMock")
 }
 func (m *certificateStateHealMock) List(_ context.Context, _ *godo.ListOptions) ([]godo.Certificate, *godo.Response, error) {
@@ -136,5 +142,27 @@ func TestCertificateDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestCertificateDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &certificateStateHealMock{
+		listCerts: []godo.Certificate{{ID: uuid, Name: "my-cert"}},
+		getCert:   &godo.Certificate{ID: uuid, Name: "my-cert", State: "verified"},
+	}
+	d := NewCertificateDriverWithClient(m)
+	ref := interfaces.ResourceRef{Name: "my-cert", ProviderID: "my-cert"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
 	}
 }

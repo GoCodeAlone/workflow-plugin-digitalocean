@@ -99,7 +99,7 @@ func TestCacheDriver_Update_UsesExistingUUID(t *testing.T) {
 func TestCacheDriver_Update_HealsStaleName(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	m := &cacheStateHealMock{
-		listDBs: []godo.Database{{ID: uuid, Name: "my-cache"}},
+		listDBs: []godo.Database{{ID: uuid, Name: "my-cache", EngineSlug: "redis"}},
 		getDB:   &godo.Database{ID: uuid, Name: "my-cache", Status: "online"},
 	}
 	d := NewCacheDriverWithClient(m, "nyc3")
@@ -138,7 +138,7 @@ func TestCacheDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
 func TestCacheDriver_Delete_HealsStaleName(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	m := &cacheStateHealMock{
-		listDBs: []godo.Database{{ID: uuid, Name: "my-cache"}},
+		listDBs: []godo.Database{{ID: uuid, Name: "my-cache", EngineSlug: "redis"}},
 	}
 	d := NewCacheDriverWithClient(m, "nyc3")
 	if err := d.Delete(context.Background(),
@@ -148,5 +148,49 @@ func TestCacheDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestCacheDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &cacheStateHealMock{
+		listDBs: []godo.Database{{ID: uuid, Name: "my-cache", EngineSlug: "redis"}},
+		getDB:   &godo.Database{ID: uuid, Name: "my-cache", Status: "online"},
+	}
+	d := NewCacheDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-cache", ProviderID: "my-cache"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
+	}
+}
+
+// ── Scale state-heal tests ────────────────────────────────────────────────────
+
+func TestCacheDriver_Scale_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &cacheStateHealMock{
+		listDBs: []godo.Database{{ID: uuid, Name: "my-cache", EngineSlug: "redis"}},
+		getDB:   &godo.Database{ID: uuid, Name: "my-cache", Status: "online"},
+	}
+	d := NewCacheDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-cache", ProviderID: "my-cache"} // stale name
+	_, err := d.Scale(context.Background(), ref, 3)
+	if err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if m.resizeCalledID != uuid {
+		t.Errorf("Resize called with %q, want UUID %q", m.resizeCalledID, uuid)
 	}
 }

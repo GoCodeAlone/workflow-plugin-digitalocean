@@ -138,7 +138,11 @@ func (d *APIGatewayDriver) Diff(_ context.Context, desired interfaces.ResourceSp
 }
 
 func (d *APIGatewayDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	app, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	app, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}

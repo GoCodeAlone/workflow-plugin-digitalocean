@@ -25,12 +25,18 @@ type firewallStateHealMock struct {
 
 	createFW  *godo.Firewall
 	createErr error
+
+	// getFW is returned by Get (used by HealthCheck after heal).
+	getFW *godo.Firewall
 }
 
 func (m *firewallStateHealMock) Create(_ context.Context, _ *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
 	return m.createFW, nil, m.createErr
 }
 func (m *firewallStateHealMock) Get(_ context.Context, _ string) (*godo.Firewall, *godo.Response, error) {
+	if m.getFW != nil {
+		return m.getFW, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in firewallStateHealMock")
 }
 func (m *firewallStateHealMock) List(_ context.Context, _ *godo.ListOptions) ([]godo.Firewall, *godo.Response, error) {
@@ -144,5 +150,27 @@ func TestFirewallDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestFirewallDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &firewallStateHealMock{
+		listFWs: []godo.Firewall{{ID: uuid, Name: "my-fw"}},
+		getFW:   &godo.Firewall{ID: uuid, Name: "my-fw", Status: "succeeded"},
+	}
+	d := NewFirewallDriverWithClient(m)
+	ref := interfaces.ResourceRef{Name: "my-fw", ProviderID: "my-fw"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
 	}
 }

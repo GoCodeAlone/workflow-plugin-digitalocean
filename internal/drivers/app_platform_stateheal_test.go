@@ -20,6 +20,9 @@ type stateHealClient struct {
 	createApp *godo.App
 	createErr error
 
+	// Get returns getApp when set (used by HealthCheck and Scale after heal).
+	getApp *godo.App
+
 	// List (for findAppByName)
 	listApps  []*godo.App
 	listErr   error
@@ -43,6 +46,9 @@ func (c *stateHealClient) Create(_ context.Context, _ *godo.AppCreateRequest) (*
 	return c.createApp, &godo.Response{Response: &http.Response{StatusCode: 200}}, c.createErr
 }
 func (c *stateHealClient) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
+	if c.getApp != nil {
+		return c.getApp, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in stateHealClient")
 }
 func (c *stateHealClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
@@ -222,5 +228,66 @@ func TestDelete_HealStaleName_LookupFails(t *testing.T) {
 	ref := interfaces.ResourceRef{Name: "bmw-staging", ProviderID: "bmw-staging"}
 	if err := d.Delete(context.Background(), ref); err == nil {
 		t.Fatal("expected error when name lookup fails, got nil")
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestHealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	c := &stateHealClient{
+		listApps: []*godo.App{
+			{ID: uuid, Spec: &godo.AppSpec{Name: "bmw-staging"}},
+		},
+		getApp: &godo.App{
+			ID:   uuid,
+			Spec: &godo.AppSpec{Name: "bmw-staging"},
+			ActiveDeployment: &godo.Deployment{
+				Phase: godo.DeploymentPhase_Active,
+			},
+		},
+	}
+	d := NewAppPlatformDriverWithClient(c, "nyc3")
+	ref := interfaces.ResourceRef{Name: "bmw-staging", ProviderID: "bmw-staging"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if c.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", c.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
+	}
+}
+
+// ── Scale state-heal tests ────────────────────────────────────────────────────
+
+func TestScale_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	c := &stateHealClient{
+		listApps: []*godo.App{
+			{ID: uuid, Spec: &godo.AppSpec{Name: "bmw-staging"}},
+		},
+		getApp: &godo.App{
+			ID:   uuid,
+			Spec: &godo.AppSpec{Name: "bmw-staging", Services: []*godo.AppServiceSpec{{Name: "web", InstanceCount: 1}}},
+		},
+		updatedApp: &godo.App{
+			ID:   uuid,
+			Spec: &godo.AppSpec{Name: "bmw-staging", Services: []*godo.AppServiceSpec{{Name: "web", InstanceCount: 3}}},
+		},
+	}
+	d := NewAppPlatformDriverWithClient(c, "nyc3")
+	ref := interfaces.ResourceRef{Name: "bmw-staging", ProviderID: "bmw-staging"} // stale name
+	_, err := d.Scale(context.Background(), ref, 3)
+	if err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+	if c.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", c.listCalls)
+	}
+	if c.updateCalledID != uuid {
+		t.Errorf("Update called with %q, want UUID %q", c.updateCalledID, uuid)
 	}
 }

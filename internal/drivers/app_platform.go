@@ -175,7 +175,11 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 }
 
 func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	app, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	app, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -234,7 +238,11 @@ func appHealthResult(app *godo.App) *interfaces.HealthResult {
 }
 
 func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
-	app, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	app, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("app platform scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -242,7 +250,7 @@ func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRe
 	for _, svc := range spec.Services {
 		svc.InstanceCount = int64(replicas)
 	}
-	updated, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: spec})
+	updated, _, err := d.client.Update(ctx, providerID, &godo.AppUpdateRequest{Spec: spec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform scale update %q: %w", ref.Name, WrapGodoError(err))
 	}

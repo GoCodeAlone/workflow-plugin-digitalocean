@@ -25,12 +25,18 @@ type lbStateHealMock struct {
 
 	createLB  *godo.LoadBalancer
 	createErr error
+
+	// getLB is returned by Get (used by HealthCheck after heal).
+	getLB *godo.LoadBalancer
 }
 
 func (m *lbStateHealMock) Create(_ context.Context, _ *godo.LoadBalancerRequest) (*godo.LoadBalancer, *godo.Response, error) {
 	return m.createLB, nil, m.createErr
 }
 func (m *lbStateHealMock) Get(_ context.Context, _ string) (*godo.LoadBalancer, *godo.Response, error) {
+	if m.getLB != nil {
+		return m.getLB, nil, nil
+	}
 	return nil, nil, errors.New("not implemented in lbStateHealMock")
 }
 func (m *lbStateHealMock) List(_ context.Context, _ *godo.ListOptions) ([]godo.LoadBalancer, *godo.Response, error) {
@@ -144,5 +150,27 @@ func TestLoadBalancerDriver_Delete_HealsStaleName(t *testing.T) {
 	}
 	if m.deleteCalledID != uuid {
 		t.Errorf("Delete called with %q, want UUID %q", m.deleteCalledID, uuid)
+	}
+}
+
+// ── HealthCheck state-heal tests ─────────────────────────────────────────────
+
+func TestLoadBalancerDriver_HealthCheck_HealsStaleName(t *testing.T) {
+	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	m := &lbStateHealMock{
+		listLBs: []godo.LoadBalancer{{ID: uuid, Name: "my-lb"}},
+		getLB:   &godo.LoadBalancer{ID: uuid, Name: "my-lb", Status: "active"},
+	}
+	d := NewLoadBalancerDriverWithClient(m, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-lb", ProviderID: "my-lb"} // stale name
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if m.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if !result.Healthy {
+		t.Errorf("Healthy = false, want true after state-heal")
 	}
 }
