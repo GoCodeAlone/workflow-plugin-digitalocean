@@ -241,7 +241,7 @@ func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.Res
 	if app == nil {
 		return nil, nil
 	}
-	hist, _, _ := d.client.ListDeployments(ctx, ref.ProviderID, &godo.ListOptions{PerPage: troubleshootMaxDeployments})
+	hist, _, _ := d.client.ListDeployments(ctx, ref.ProviderID, &godo.ListOptions{Page: 1, PerPage: troubleshootMaxDeployments})
 	candidates := pickTroubleshootDeployments(app, hist)
 	if len(candidates) == 0 {
 		return nil, nil
@@ -257,8 +257,8 @@ func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.Res
 
 // pickTroubleshootDeployments returns up to 3 candidate deployments in priority
 // order: InProgress > Pending > Active, followed by unique historical entries.
-// The active-deployment slot is included only when the other two are absent,
-// since an active-and-healthy deployment seldom needs troubleshooting.
+// All three deployment slots (InProgress, Pending, Active) are collected in
+// priority order; historical deployments fill remaining capacity up to 3 total.
 func pickTroubleshootDeployments(app *godo.App, historical []*godo.Deployment) []*godo.Deployment {
 	seen := map[string]bool{}
 	var result []*godo.Deployment

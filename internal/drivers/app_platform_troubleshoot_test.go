@@ -471,3 +471,32 @@ func TestDeploymentCauseAndPhase_ActivePhase_EmptyCause(t *testing.T) {
 		t.Errorf("expected empty cause for ACTIVE phase, got %q", cause)
 	}
 }
+
+func TestDeploymentCauseAndPhase_LeafStepFallback_NoCause(t *testing.T) {
+	// dep.Cause is empty and SummarySteps has no error; cause must come from
+	// Progress.Steps leaf step Reason.Message.
+	dep := &godo.Deployment{
+		ID:    "dep-leaf",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "", // explicitly empty
+		Progress: &godo.DeploymentProgress{
+			SummarySteps: nil,
+			Steps: []*godo.DeploymentProgressStep{
+				{
+					Status: godo.DeploymentProgressStepStatus_Error,
+					Reason: &godo.DeploymentProgressStepReason{Message: "exit status 2"},
+				},
+			},
+		},
+	}
+	cause, phase := deploymentCauseAndPhase(dep)
+	if cause == "" {
+		t.Fatal("expected cause from Progress.Steps, got empty")
+	}
+	if cause != "exit status 2" {
+		t.Errorf("expected cause %q, got %q", "exit status 2", cause)
+	}
+	if phase != string(godo.DeploymentPhase_Error) {
+		t.Errorf("expected phase from dep.Phase, got %q", phase)
+	}
+}
