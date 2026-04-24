@@ -124,7 +124,7 @@ func TestVPCDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestVPCDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestVPCDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &vpcStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewVPCDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),

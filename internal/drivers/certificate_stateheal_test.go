@@ -115,7 +115,7 @@ func TestCertificateDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestCertificateDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestCertificateDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &certificateStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewCertificateDriverWithClient(m)
 	_, err := d.Update(context.Background(),

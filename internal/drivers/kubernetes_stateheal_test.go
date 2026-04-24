@@ -133,7 +133,7 @@ func TestKubernetesDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestKubernetesDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestKubernetesDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &k8sStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewKubernetesDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),

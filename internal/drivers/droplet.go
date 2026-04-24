@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -141,11 +142,12 @@ func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
 }
 
 // providerIDToInt converts a string provider ID to int for godo Droplet API
-// calls. Returns an error if the string does not parse as a positive integer,
-// preventing silent calls against droplet ID 0 when state carries a stale name.
+// calls. Uses strconv.Atoi for strict whole-string parsing — partial matches
+// like "123abc" are rejected. Returns an error for any non-positive-integer
+// value, preventing silent API calls with droplet ID 0 or a wrong ID.
 func providerIDToInt(id string) (int, error) {
-	var n int
-	if _, err := fmt.Sscanf(id, "%d", &n); err != nil || n <= 0 {
+	n, err := strconv.Atoi(id)
+	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("ProviderID %q is not a valid droplet integer ID", id)
 	}
 	return n, nil
@@ -154,6 +156,7 @@ func providerIDToInt(id string) (int, error) {
 func (d *DropletDriver) SensitiveKeys() []string { return nil }
 
 // ProviderIDFormat returns Freeform because DO Droplet IDs are integers, not
-// UUIDs. We declare Freeform and rely on godo's int-parsing to reject stale
-// name values with a 404 at the API level — no UUID-based state-heal needed.
+// UUIDs. We declare Freeform; providerIDToInt performs strict local validation
+// and rejects any non-integer ProviderID with an explicit error before any
+// API call is made — no UUID-based state-heal needed for Droplet.
 func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

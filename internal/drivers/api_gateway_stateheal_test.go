@@ -123,7 +123,7 @@ func TestAPIGatewayDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestAPIGatewayDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestAPIGatewayDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &apiGatewayStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewAPIGatewayDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),

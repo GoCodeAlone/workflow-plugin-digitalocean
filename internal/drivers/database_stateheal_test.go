@@ -124,7 +124,7 @@ func TestDatabaseDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestDatabaseDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestDatabaseDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &databaseStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewDatabaseDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),

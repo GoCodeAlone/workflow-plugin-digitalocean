@@ -123,7 +123,7 @@ func TestFirewallDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestFirewallDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestFirewallDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &firewallStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewFirewallDriverWithClient(m)
 	_, err := d.Update(context.Background(),

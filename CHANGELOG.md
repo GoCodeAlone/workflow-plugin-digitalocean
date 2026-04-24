@@ -21,8 +21,9 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   **Droplet deviation from plan table**: the v0.7.9 design doc listed Droplet
   as `IDFormatUUID`. Droplet IDs are actually integers assigned by the DO API
   (e.g. `"123456789"`), not canonical UUIDs. Corrected to `IDFormatFreeform`;
-  godo rejects stale names with a 404 at the API level — no UUID-based
-  state-heal is needed for Droplet.
+  `providerIDToInt` performs strict local validation (via `strconv.Atoi`) and
+  returns an explicit error for any non-integer ProviderID before any API call
+  is made — no UUID-based state-heal is needed for Droplet.
 
 - **State-heal replication across all UUID drivers** (Tasks 11) — the
   `resolveProviderID` → `findXxxByName` pattern introduced for `AppPlatformDriver`
@@ -48,12 +49,13 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   - `Create_PersistsUUIDInState` — ProviderID comes from API, not spec name
   - `Update_UsesExistingUUID` — no `List` call when ProviderID is valid UUID
   - `Update_HealsStaleName` — `List` fires, Update called with healed UUID
-  - `Update_HealFails_WhenResourceNotFound` — error propagated, no silent fallback
+  - `Update_HealFails_WhenListFails` — error propagated when the List API call fails, no silent fallback
   - `Delete_HealsStaleName` — Delete called with healed UUID
 
-- **`TestAllDrivers_DeclareProviderIDFormat`** — exhaustive coverage gate in
-  `providerid_format_test.go`; one entry per driver, fails if any driver returns
-  the wrong format or the method is missing.
+- **`TestAllDrivers_DeclareProviderIDFormat`** — manually maintained registry in
+  `providerid_format_test.go`; one entry per driver, fails if any listed driver
+  returns the wrong format or the method is missing. New drivers must be added
+  to this table manually.
 
 ### Changed
 

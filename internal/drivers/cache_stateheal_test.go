@@ -121,7 +121,7 @@ func TestCacheDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestCacheDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestCacheDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &cacheStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewCacheDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),

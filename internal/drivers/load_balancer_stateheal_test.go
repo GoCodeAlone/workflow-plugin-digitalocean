@@ -123,7 +123,7 @@ func TestLoadBalancerDriver_Update_HealsStaleName(t *testing.T) {
 	}
 }
 
-func TestLoadBalancerDriver_Update_HealFails_WhenResourceNotFound(t *testing.T) {
+func TestLoadBalancerDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	m := &lbStateHealMock{listErr: errors.New("api unavailable")}
 	d := NewLoadBalancerDriverWithClient(m, "nyc3")
 	_, err := d.Update(context.Background(),
