@@ -200,3 +200,5 @@ func apiGatewayOutput(app *godo.App) *interfaces.ResourceOutput {
 }
 
 func (d *APIGatewayDriver) SensitiveKeys() []string { return nil }
+
+func (d *APIGatewayDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

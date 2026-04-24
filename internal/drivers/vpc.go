@@ -185,3 +185,5 @@ func vpcOutput(vpc *godo.VPC) *interfaces.ResourceOutput {
 }
 
 func (d *VPCDriver) SensitiveKeys() []string { return nil }
+
+func (d *VPCDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

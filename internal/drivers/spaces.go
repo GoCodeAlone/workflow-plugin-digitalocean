@@ -185,3 +185,5 @@ func (c *noopSpacesClient) DeleteBucket(_ context.Context, _, _ string) error {
 }
 
 func (d *SpacesDriver) SensitiveKeys() []string { return nil }
+
+func (d *SpacesDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

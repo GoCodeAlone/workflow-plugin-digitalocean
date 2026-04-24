@@ -161,3 +161,5 @@ func certOutput(cert *godo.Certificate, name string) *interfaces.ResourceOutput 
 }
 
 func (d *CertificateDriver) SensitiveKeys() []string { return nil }
+
+func (d *CertificateDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

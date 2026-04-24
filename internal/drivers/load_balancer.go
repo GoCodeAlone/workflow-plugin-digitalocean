@@ -184,3 +184,5 @@ func lbOutput(lb *godo.LoadBalancer) *interfaces.ResourceOutput {
 }
 
 func (d *LoadBalancerDriver) SensitiveKeys() []string { return nil }
+
+func (d *LoadBalancerDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

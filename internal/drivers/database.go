@@ -279,3 +279,5 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 		Status:     db.Status,
 	}
 }
+
+func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

@@ -197,3 +197,5 @@ func k8sOutput(cluster *godo.KubernetesCluster) *interfaces.ResourceOutput {
 }
 
 func (d *KubernetesDriver) SensitiveKeys() []string { return nil }
+
+func (d *KubernetesDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

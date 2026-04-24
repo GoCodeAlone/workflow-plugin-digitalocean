@@ -139,3 +139,8 @@ func providerIDToInt(id string) int {
 }
 
 func (d *DropletDriver) SensitiveKeys() []string { return nil }
+
+// ProviderIDFormat returns Freeform because DO Droplet IDs are integers, not
+// UUIDs. We declare Freeform and rely on godo's int-parsing to reject stale
+// name values with a 404 at the API level — no UUID-based state-heal needed.
+func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

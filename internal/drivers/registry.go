@@ -105,3 +105,5 @@ func registryOutput(reg *godo.Registry, name string) *interfaces.ResourceOutput 
 }
 
 func (d *RegistryDriver) SensitiveKeys() []string { return nil }
+
+func (d *RegistryDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

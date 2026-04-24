@@ -218,3 +218,5 @@ func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 }
 
 func (d *FirewallDriver) SensitiveKeys() []string { return nil }
+
+func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

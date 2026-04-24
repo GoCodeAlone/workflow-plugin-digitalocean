@@ -557,3 +557,5 @@ func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
 }
 
 func (d *AppPlatformDriver) SensitiveKeys() []string { return nil }
+
+func (d *AppPlatformDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

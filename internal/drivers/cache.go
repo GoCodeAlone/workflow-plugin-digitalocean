@@ -197,3 +197,5 @@ func cacheOutput(db *godo.Database) *interfaces.ResourceOutput {
 }
 
 func (d *CacheDriver) SensitiveKeys() []string { return nil }
+
+func (d *CacheDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
