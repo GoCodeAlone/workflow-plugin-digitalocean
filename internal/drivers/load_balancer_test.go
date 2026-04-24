@@ -220,7 +220,7 @@ func TestLoadBalancerDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestLoadBalancerDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestLoadBalancerDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockLBClient{lb: testLB()}
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")

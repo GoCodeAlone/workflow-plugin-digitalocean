@@ -237,7 +237,7 @@ func TestCacheDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestCacheDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestCacheDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockCacheClient{db: testRedisDB()}
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")

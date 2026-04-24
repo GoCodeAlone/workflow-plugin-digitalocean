@@ -815,7 +815,7 @@ func TestAppPlatformDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestAppPlatformDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestAppPlatformDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")

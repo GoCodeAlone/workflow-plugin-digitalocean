@@ -205,7 +205,7 @@ func TestDropletDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestDropletDriver_Create_ProviderIDIsNumericID(t *testing.T) {
+func TestDropletDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned numeric ID, not the resource name.
 	mock := &mockDropletClient{droplet: testDroplet()}
 	d := drivers.NewDropletDriverWithClient(mock, "nyc3")

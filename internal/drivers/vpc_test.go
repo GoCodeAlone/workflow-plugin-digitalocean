@@ -262,7 +262,7 @@ func TestVPCDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestVPCDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestVPCDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockVPCClient{vpc: testVPC()}
 	d := drivers.NewVPCDriverWithClient(mock, "nyc3")

@@ -245,7 +245,7 @@ func TestKubernetesDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestKubernetesDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestKubernetesDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockK8sClient{cluster: testCluster()}
 	d := drivers.NewKubernetesDriverWithClient(mock, "nyc3")

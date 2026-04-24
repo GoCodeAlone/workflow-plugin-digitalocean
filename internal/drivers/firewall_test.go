@@ -302,7 +302,7 @@ func TestFirewallDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestFirewallDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestFirewallDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockFirewallClient{fw: testFirewall()}
 	d := drivers.NewFirewallDriverWithClient(mock)

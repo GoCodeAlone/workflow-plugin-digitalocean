@@ -323,7 +323,7 @@ func TestAPIGatewayDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestAPIGatewayDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestAPIGatewayDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockAPIGatewayClient{app: testGatewayApp()}
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")

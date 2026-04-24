@@ -209,7 +209,7 @@ func TestCertificateDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestCertificateDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestCertificateDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockCertClient{cert: testCertificate()}
 	d := drivers.NewCertificateDriverWithClient(mock)

@@ -405,7 +405,7 @@ func TestDatabaseDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
-func TestDatabaseDriver_Create_ProviderIDIsUUID(t *testing.T) {
+func TestDatabaseDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	// ProviderID must be the API-assigned UUID, not the resource name.
 	mock := &mockDatabaseClient{db: testDatabase()}
 	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
