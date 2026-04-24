@@ -27,13 +27,19 @@ type k8sStateHealMock struct {
 	createErr     error
 
 	// getCluster is returned by Get (used by HealthCheck and Scale after heal).
-	getCluster *godo.KubernetesCluster
+	// getCalledID records the last clusterID passed to Get.
+	getCluster  *godo.KubernetesCluster
+	getCalledID string
+
+	// updateNodePoolCalledClusterID records the clusterID passed to UpdateNodePool.
+	updateNodePoolCalledClusterID string
 }
 
 func (m *k8sStateHealMock) Create(_ context.Context, _ *godo.KubernetesClusterCreateRequest) (*godo.KubernetesCluster, *godo.Response, error) {
 	return m.createCluster, nil, m.createErr
 }
-func (m *k8sStateHealMock) Get(_ context.Context, _ string) (*godo.KubernetesCluster, *godo.Response, error) {
+func (m *k8sStateHealMock) Get(_ context.Context, clusterID string) (*godo.KubernetesCluster, *godo.Response, error) {
+	m.getCalledID = clusterID
 	if m.getCluster != nil {
 		return m.getCluster, nil, nil
 	}
@@ -51,7 +57,8 @@ func (m *k8sStateHealMock) Delete(_ context.Context, clusterID string) (*godo.Re
 	m.deleteCalledID = clusterID
 	return nil, m.deleteErr
 }
-func (m *k8sStateHealMock) UpdateNodePool(_ context.Context, _, _ string, _ *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error) {
+func (m *k8sStateHealMock) UpdateNodePool(_ context.Context, clusterID, _ string, _ *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error) {
+	m.updateNodePoolCalledClusterID = clusterID
 	return &godo.KubernetesNodePool{}, nil, nil
 }
 
@@ -177,6 +184,9 @@ func TestKubernetesDriver_HealthCheck_HealsStaleName(t *testing.T) {
 	if m.listCalls < 1 {
 		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
 	}
+	if m.getCalledID != uuid {
+		t.Errorf("Get called with %q, want healed UUID %q", m.getCalledID, uuid)
+	}
 	if !result.Healthy {
 		t.Errorf("Healthy = false, want true after state-heal")
 	}
@@ -199,5 +209,11 @@ func TestKubernetesDriver_Scale_HealsStaleName(t *testing.T) {
 	}
 	if m.listCalls < 1 {
 		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", m.listCalls)
+	}
+	if m.getCalledID != uuid {
+		t.Errorf("Get called with %q, want healed UUID %q", m.getCalledID, uuid)
+	}
+	if m.updateNodePoolCalledClusterID != uuid {
+		t.Errorf("UpdateNodePool called with clusterID %q, want healed UUID %q", m.updateNodePoolCalledClusterID, uuid)
 	}
 }

@@ -21,7 +21,9 @@ type stateHealClient struct {
 	createErr error
 
 	// Get returns getApp when set (used by HealthCheck and Scale after heal).
-	getApp *godo.App
+	// getCalledID records the last appID passed to Get for assertion in tests.
+	getApp      *godo.App
+	getCalledID string
 
 	// List (for findAppByName)
 	listApps  []*godo.App
@@ -45,7 +47,8 @@ type stateHealClient struct {
 func (c *stateHealClient) Create(_ context.Context, _ *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
 	return c.createApp, &godo.Response{Response: &http.Response{StatusCode: 200}}, c.createErr
 }
-func (c *stateHealClient) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
+func (c *stateHealClient) Get(_ context.Context, appID string) (*godo.App, *godo.Response, error) {
+	c.getCalledID = appID
 	if c.getApp != nil {
 		return c.getApp, nil, nil
 	}
@@ -256,6 +259,9 @@ func TestHealthCheck_HealsStaleName(t *testing.T) {
 	if c.listCalls < 1 {
 		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", c.listCalls)
 	}
+	if c.getCalledID != uuid {
+		t.Errorf("Get called with %q, want healed UUID %q", c.getCalledID, uuid)
+	}
 	if !result.Healthy {
 		t.Errorf("Healthy = false, want true after state-heal")
 	}
@@ -286,6 +292,9 @@ func TestScale_HealsStaleName(t *testing.T) {
 	}
 	if c.listCalls < 1 {
 		t.Errorf("listCalls = %d, want ≥ 1 (resolve must fire for stale name)", c.listCalls)
+	}
+	if c.getCalledID != uuid {
+		t.Errorf("Get called with %q, want healed UUID %q", c.getCalledID, uuid)
 	}
 	if c.updateCalledID != uuid {
 		t.Errorf("Update called with %q, want UUID %q", c.updateCalledID, uuid)

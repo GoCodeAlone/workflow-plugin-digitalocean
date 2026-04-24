@@ -74,7 +74,7 @@ func TestCertificateDriver_Update_UsesExistingUUID(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	m := &certificateStateHealMock{
 		// No list needed — ProviderID is already a valid UUID.
-		createCert: &godo.Certificate{ID: "new-cert-uuid-0000-000000000001", Name: "my-cert"},
+		createCert: &godo.Certificate{ID: "a1b2c3d4-0000-0000-0000-ef1234567891", Name: "my-cert"},
 	}
 	d := NewCertificateDriverWithClient(m)
 	_, err := d.Update(context.Background(),
@@ -96,7 +96,7 @@ func TestCertificateDriver_Update_HealsStaleName(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	m := &certificateStateHealMock{
 		listCerts: []godo.Certificate{{ID: uuid, Name: "my-cert"}},
-		createCert: &godo.Certificate{ID: "new-cert-uuid-0000-000000000001", Name: "my-cert"},
+		createCert: &godo.Certificate{ID: "a1b2c3d4-0000-0000-0000-ef1234567891", Name: "my-cert"},
 	}
 	d := NewCertificateDriverWithClient(m)
 	_, err := d.Update(context.Background(),

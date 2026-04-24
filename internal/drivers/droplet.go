@@ -54,7 +54,10 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 }
 
 func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
-	id := providerIDToInt(ref.ProviderID)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("droplet read %q: invalid ProviderID %q: %w", ref.Name, ref.ProviderID, err)
+	}
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("droplet read %q: %w", ref.Name, WrapGodoError(err))
@@ -67,8 +70,11 @@ func (d *DropletDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ in
 }
 
 func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	id := providerIDToInt(ref.ProviderID)
-	_, err := d.client.Delete(ctx, id)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return fmt.Errorf("droplet delete %q: invalid ProviderID %q: %w", ref.Name, ref.ProviderID, err)
+	}
+	_, err = d.client.Delete(ctx, id)
 	if err != nil {
 		return fmt.Errorf("droplet delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -98,7 +104,10 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 }
 
 func (d *DropletDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	id := providerIDToInt(ref.ProviderID)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: fmt.Sprintf("invalid ProviderID %q: %s", ref.ProviderID, err)}, nil
+	}
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
@@ -131,11 +140,15 @@ func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
 	}
 }
 
-// providerIDToInt converts a string provider ID to int for godo Droplet API calls.
-func providerIDToInt(id string) int {
+// providerIDToInt converts a string provider ID to int for godo Droplet API
+// calls. Returns an error if the string does not parse as a positive integer,
+// preventing silent calls against droplet ID 0 when state carries a stale name.
+func providerIDToInt(id string) (int, error) {
 	var n int
-	fmt.Sscanf(id, "%d", &n)
-	return n
+	if _, err := fmt.Sscanf(id, "%d", &n); err != nil || n <= 0 {
+		return 0, fmt.Errorf("ProviderID %q is not a valid droplet integer ID", id)
+	}
+	return n, nil
 }
 
 func (d *DropletDriver) SensitiveKeys() []string { return nil }

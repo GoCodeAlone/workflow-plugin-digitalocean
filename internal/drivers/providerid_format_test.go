@@ -1,9 +1,10 @@
 package drivers_test
 
-// TestAllDrivers_DeclareProviderIDFormat verifies that every ResourceDriver in
-// the DO plugin implements interfaces.ProviderIDValidator and returns the
-// expected format. This is the exhaustive coverage gate for Task 10 of the
-// v0.7.9 plan — any driver added in future releases must be listed here.
+// TestAllDrivers_DeclareProviderIDFormat verifies that each listed ResourceDriver
+// implements interfaces.ProviderIDValidator and returns the expected format.
+// This is a manually maintained registry — when a new driver is added to the DO
+// plugin it MUST also be added to the cases table below, otherwise this test
+// will not catch a missing or incorrect ProviderIDFormat declaration.
 
 import (
 	"testing"
