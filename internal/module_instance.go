@@ -215,10 +215,7 @@ func (m *doModuleInstance) invokeProviderResolveSizing(args map[string]any) (map
 // invokeProviderBootstrapStateBackend decodes the cfg map and calls
 // IaCProvider.BootstrapStateBackend, returning the result as a flat map.
 func (m *doModuleInstance) invokeProviderBootstrapStateBackend(args map[string]any) (map[string]any, error) {
-	var cfg map[string]any
-	if args != nil {
-		cfg, _ = args["cfg"].(map[string]any)
-	}
+	cfg := args // args IS the cfg map (wfctl sends it unwrapped, matching Initialize convention)
 	if cfg == nil {
 		cfg = map[string]any{}
 	}

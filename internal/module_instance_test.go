@@ -662,9 +662,13 @@ func TestDoModuleInstance_InvokeMethod_ResolveSizing_NoHints(t *testing.T) {
 	}
 }
 
-// ── IaCProvider.BootstrapStateBackend dispatch test ───────────────────────────
+// ── IaCProvider.BootstrapStateBackend dispatch tests ─────────────────────────
+//
+// wfctl sends cfg directly as args (same convention as IaCProvider.Initialize),
+// NOT wrapped under a "cfg" key.
 
 func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_Dispatches(t *testing.T) {
+	// Args are sent flat (unwrapped) — bucket/region/accessKey/secretKey at top level.
 	fake := &fakeIaCProvider{
 		bootstrapResult: &interfaces.BootstrapResult{
 			Bucket:   "bmw-state",
@@ -676,12 +680,10 @@ func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_Dispatches(t *testi
 	mi := &doModuleInstance{provider: fake}
 
 	result, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{
-		"cfg": map[string]any{
-			"bucket":    "bmw-state",
-			"region":    "nyc3",
-			"accessKey": "k",
-			"secretKey": "s",
-		},
+		"bucket":    "bmw-state",
+		"region":    "nyc3",
+		"accessKey": "k",
+		"secretKey": "s",
 	})
 	if err != nil {
 		t.Fatalf("BootstrapStateBackend dispatch: %v", err)
@@ -689,11 +691,15 @@ func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_Dispatches(t *testi
 	if !fake.bootstrapCalled {
 		t.Error("expected BootstrapStateBackend to be called on the provider")
 	}
+	// Verify the cfg keys were passed through to the provider.
+	if fake.bootstrapCfg["bucket"] != "bmw-state" {
+		t.Errorf("provider received bucket = %q, want %q", fake.bootstrapCfg["bucket"], "bmw-state")
+	}
 	if result["bucket"] != "bmw-state" {
-		t.Errorf("bucket = %q, want %q", result["bucket"], "bmw-state")
+		t.Errorf("result bucket = %q, want %q", result["bucket"], "bmw-state")
 	}
 	if result["region"] != "nyc3" {
-		t.Errorf("region = %q, want %q", result["region"], "nyc3")
+		t.Errorf("result region = %q, want %q", result["region"], "nyc3")
 	}
 }
 
@@ -711,20 +717,6 @@ func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilResult(t *testin
 	}
 }
 
-func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilCfgArg(t *testing.T) {
-	// Missing cfg arg should be treated as empty map, not panic.
-	fake := &fakeIaCProvider{bootstrapResult: &interfaces.BootstrapResult{Bucket: "b"}}
-	mi := &doModuleInstance{provider: fake}
-
-	_, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{})
-	if err != nil {
-		t.Fatalf("nil cfg arg should not error: %v", err)
-	}
-	if fake.bootstrapCfg == nil {
-		t.Error("expected non-nil cfg passed to provider (empty map)")
-	}
-}
-
 func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilArgs(t *testing.T) {
 	// InvokeMethod may be called with nil args — must not panic.
 	fake := &fakeIaCProvider{bootstrapResult: &interfaces.BootstrapResult{Bucket: "b"}}
@@ -739,6 +731,37 @@ func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_NilArgs(t *testing.
 	}
 	if !fake.bootstrapCalled {
 		t.Error("expected BootstrapStateBackend to be called on the provider")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_EndToEnd(t *testing.T) {
+	// End-to-end: InvokeMethod → DOProvider.bootstrapStateBackendWithFactory with
+	// a fake S3 client. Exercises the full dispatch+config-parse path without network I/O.
+	// This catches the class of bug where args schema and dispatch don't align.
+	fakeBucket := &fakeBucketClient{headErr: nil} // bucket exists — no create
+	p := NewDOProvider()
+	p.bootstrapClientFactory = func(accessKey, secretKey, region string) spacesBucketClient {
+		return fakeBucket
+	}
+	mi := &doModuleInstance{provider: p}
+
+	result, err := mi.InvokeMethod("IaCProvider.BootstrapStateBackend", map[string]any{
+		"bucket":    "bmw-state",
+		"region":    "nyc3",
+		"accessKey": "test-key",
+		"secretKey": "test-secret",
+	})
+	if err != nil {
+		t.Fatalf("end-to-end dispatch: %v", err)
+	}
+	if result["bucket"] != "bmw-state" {
+		t.Errorf("bucket = %q, want %q", result["bucket"], "bmw-state")
+	}
+	if result["region"] != "nyc3" {
+		t.Errorf("region = %q, want %q", result["region"], "nyc3")
+	}
+	if !fakeBucket.headCalled {
+		t.Error("expected HeadBucket to be called on the fake S3 client")
 	}
 }
 

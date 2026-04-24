@@ -50,7 +50,11 @@ func newSpacesS3Client(accessKey, secretKey, region string) spacesBucketClient {
 //   - Bucket, Region, Endpoint fields populated
 //   - EnvVars: WFCTL_STATE_BUCKET and SPACES_BUCKET set to the bucket name
 func (p *DOProvider) BootstrapStateBackend(ctx context.Context, cfg map[string]any) (*interfaces.BootstrapResult, error) {
-	return p.bootstrapStateBackendWithFactory(ctx, cfg, newSpacesS3Client)
+	factory := p.bootstrapClientFactory
+	if factory == nil {
+		factory = newSpacesS3Client
+	}
+	return p.bootstrapStateBackendWithFactory(ctx, cfg, factory)
 }
 
 // bootstrapStateBackendWithFactory is the testable core of BootstrapStateBackend.
