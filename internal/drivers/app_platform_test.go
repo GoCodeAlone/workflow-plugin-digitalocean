@@ -841,6 +841,9 @@ func TestAppPlatformDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 }
 
 func TestTroubleshoot_ReturnsDiagnostics(t *testing.T) {
+	// Troubleshoot calls client.Get first; historical deployments come from
+	// ListDeployments. The app has no current deployment slots, so both
+	// historical error deployments should produce diagnostics.
 	mock := &mockAppClient{
 		app: &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
 		deployments: []*godo.Deployment{
@@ -883,7 +886,8 @@ func TestTroubleshoot_NoProviderID(t *testing.T) {
 
 func TestTroubleshoot_APIError(t *testing.T) {
 	// ListDeployments errors are best-effort: Troubleshoot continues with
-	// whatever deployment slots the app has.
+	// whatever deployment slots the app has. If the app itself has no
+	// slots and Get returns a valid app, result is empty (not an error).
 	mock := &mockAppClient{
 		app:                &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
 		listDeploymentsErr: errors.New("api timeout"),

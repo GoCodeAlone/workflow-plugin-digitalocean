@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // doModuleInstance wraps an IaCProvider as an sdk.ModuleInstance + sdk.ServiceInvoker.
@@ -96,6 +99,9 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 
 	case "ResourceDriver.SensitiveKeys":
 		return m.invokeDriverSensitiveKeys(args)
+
+	case "ResourceDriver.Troubleshoot":
+		return m.invokeDriverTroubleshoot(args)
 
 	default:
 		return nil, fmt.Errorf("digitalocean plugin: unknown method %q", method)
@@ -359,6 +365,41 @@ func (m *doModuleInstance) invokeDriverSensitiveKeys(args map[string]any) (map[s
 		return nil, fmt.Errorf("ResourceDriver.SensitiveKeys: %w", err)
 	}
 	return map[string]any{"keys": driver.SensitiveKeys()}, nil
+}
+
+// invokeDriverTroubleshoot checks whether the driver implements
+// interfaces.Troubleshooter and, if so, calls Troubleshoot and serialises the
+// result. Returns codes.Unimplemented when the driver does not implement the
+// interface so wfctl's remoteResourceDriver can silently no-op.
+func (m *doModuleInstance) invokeDriverTroubleshoot(args map[string]any) (map[string]any, error) {
+	resourceType, _ := args["resource_type"].(string)
+	if resourceType == "" {
+		return nil, fmt.Errorf("ResourceDriver.Troubleshoot: missing resource_type arg")
+	}
+	driver, err := m.provider.ResourceDriver(resourceType)
+	if err != nil {
+		return nil, fmt.Errorf("ResourceDriver.Troubleshoot: %w", err)
+	}
+	ts, ok := driver.(interfaces.Troubleshooter)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "driver does not implement Troubleshooter")
+	}
+	ref := refFromArgs(args)
+	failureMsg, _ := args["failure_msg"].(string)
+	diags, err := ts.Troubleshoot(context.Background(), ref, failureMsg)
+	if err != nil {
+		return nil, err
+	}
+	diagList := make([]any, len(diags))
+	for i, d := range diags {
+		diagList[i] = map[string]any{
+			"id":    d.ID,
+			"phase": d.Phase,
+			"cause": d.Cause,
+			"at":    d.At.Format(time.RFC3339),
+		}
+	}
+	return map[string]any{"diagnostics": diagList}, nil
 }
 
 // invokeDriverHealthCheck decodes args and calls ResourceDriver.HealthCheck.
