@@ -250,7 +250,8 @@ func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRe
 }
 
 // troubleshootMaxDeployments is the maximum number of recent historical
-// deployments fetched by Troubleshoot beyond the active/in-progress slots.
+// deployments fetched by Troubleshoot (slot-based candidates are always
+// included; this cap applies separately to the historical listing pass).
 const troubleshootMaxDeployments = 5
 
 // Troubleshoot implements interfaces.Troubleshooter for AppPlatformDriver.

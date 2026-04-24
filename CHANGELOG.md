@@ -52,7 +52,7 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Changed
 
-- Depends on workflow v0.18.10 (was v0.18.9).
+- Depends on workflow v0.18.10.1 (was v0.18.6).
 - `AppPlatformDriver.Troubleshoot`: empty `ProviderID` now returns `(nil, nil)` instead
   of an error; `ListDeployments` errors are best-effort (swallowed, slot-based data used).
 - Test ProviderIDs updated from `"app-123"` to proper UUID format throughout driver tests

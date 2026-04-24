@@ -21,8 +21,9 @@ type stateHealClient struct {
 	createErr error
 
 	// List (for findAppByName)
-	listApps []*godo.App
-	listErr  error
+	listApps  []*godo.App
+	listErr   error
+	listCalls int // incremented on every List invocation
 
 	// Update captures the appID it was called with and returns updatedApp.
 	updatedApp     *godo.App
@@ -45,6 +46,7 @@ func (c *stateHealClient) Get(_ context.Context, _ string) (*godo.App, *godo.Res
 	return nil, nil, errors.New("not implemented in stateHealClient")
 }
 func (c *stateHealClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	c.listCalls++
 	resp := &godo.Response{Response: &http.Response{StatusCode: 200}, Links: &godo.Links{}}
 	return c.listApps, resp, c.listErr
 }
@@ -121,9 +123,9 @@ func TestUpdate_UsesUUIDWhenProviderIDIsValid(t *testing.T) {
 	if c.updateCalledID != uuid {
 		t.Errorf("Update called with ID %q, want UUID %q", c.updateCalledID, uuid)
 	}
-	// findAppByName should NOT have been called (List should not have been invoked).
-	if len(c.listApps) != 0 && c.updateCalledID != uuid {
-		t.Error("findAppByName should not be called when ProviderID is already a UUID")
+	// findAppByName must NOT fire when ProviderID is already a valid UUID.
+	if c.listCalls != 0 {
+		t.Errorf("listCalls = %d, want 0 (heal must not fire for valid UUID)", c.listCalls)
 	}
 }
 
@@ -149,6 +151,10 @@ func TestUpdate_HealsStaleName(t *testing.T) {
 	out, err := d.Update(context.Background(), ref, spec)
 	if err != nil {
 		t.Fatalf("Update with stale name ProviderID: %v", err)
+	}
+	// findAppByName must have fired (List called at least once).
+	if c.listCalls < 1 {
+		t.Errorf("listCalls = %d, want ≥ 1 (findAppByName must fire during heal)", c.listCalls)
 	}
 	// Update API must have been called with the UUID, not the name.
 	if c.updateCalledID != uuid {

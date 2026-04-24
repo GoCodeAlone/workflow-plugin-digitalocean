@@ -382,7 +382,7 @@ func (m *doModuleInstance) invokeDriverTroubleshoot(args map[string]any) (map[st
 	}
 	ts, ok := driver.(interfaces.Troubleshooter)
 	if !ok {
-		return nil, status.Error(codes.Unimplemented, "driver does not implement Troubleshooter")
+		return nil, status.Error(codes.Unimplemented, fmt.Sprintf("resource driver %q does not implement Troubleshooter", resourceType))
 	}
 	ref := refFromArgs(args)
 	failureMsg, _ := args["failure_msg"].(string)
