@@ -20,11 +20,21 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   `codes.Unimplemented` for drivers that don't implement `Troubleshooter` so wfctl
   silently no-ops without error.
 
+### Fixed
+
+- **State-heal for stale name-as-ProviderID** — `AppPlatformDriver.Update` and `Delete`
+  now call `resolveProviderID` before hitting the DO API. If `ref.ProviderID` is not
+  UUID-like (36 chars, hyphens at 8/13/18/23), the driver logs a WARN and performs a
+  name-based lookup via `findAppByName`, recovering the real UUID from the DO API. This
+  transparently heals state entries left by pre-v0.7.7 broken runs (e.g. BMW staging
+  `ProviderID="bmw-staging"`) without any manual teardown or state editing.
+
 ### Changed
 
 - Depends on workflow v0.18.10 (was v0.18.9) once tagged.
 - `AppPlatformDriver.Troubleshoot`: empty `ProviderID` now returns `(nil, nil)` instead
   of an error; `ListDeployments` errors are best-effort (swallowed, slot-based data used).
+- Test ProviderIDs updated from `"app-123"` to proper UUID format throughout driver tests.
 
 ## [v0.7.7] - 2026-04-24
 
