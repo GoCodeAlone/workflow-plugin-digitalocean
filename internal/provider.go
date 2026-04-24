@@ -27,6 +27,10 @@ type DOProvider struct {
 	client  *godo.Client
 	region  string
 	drivers map[string]interfaces.ResourceDriver
+
+	// bootstrapClientFactory is used by BootstrapStateBackend to build the S3
+	// client. Nil means use the default newSpacesS3Client. Tests inject a fake.
+	bootstrapClientFactory func(accessKey, secretKey, region string) spacesBucketClient
 }
 
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
