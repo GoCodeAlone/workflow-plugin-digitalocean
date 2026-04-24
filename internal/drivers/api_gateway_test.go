@@ -308,3 +308,37 @@ func TestAPIGatewayDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
 		t.Errorf("message should contain 'unknown phase', got: %q", result.Message)
 	}
 }
+
+func TestAPIGatewayDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but app has empty ID — guard must reject it.
+	mock := &mockAPIGatewayClient{app: &godo.App{Spec: &godo.AppSpec{Name: "my-gateway"}}}
+	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-gateway",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestAPIGatewayDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockAPIGatewayClient{app: testGatewayApp()}
+	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-gateway",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-gateway" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-gateway", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

@@ -56,6 +56,9 @@ func (d *KubernetesDriver) Create(ctx context.Context, spec interfaces.ResourceS
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if cluster == nil || cluster.ID == "" {
+		return nil, fmt.Errorf("kubernetes create %q: API returned cluster with empty ID", spec.Name)
+	}
 	return k8sOutput(cluster), nil
 }
 

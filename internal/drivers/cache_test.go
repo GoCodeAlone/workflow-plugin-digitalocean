@@ -222,3 +222,37 @@ func TestCacheDriver_HealthCheck_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy for migrating cache")
 	}
 }
+
+func TestCacheDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but cache cluster has empty ID — guard must reject it.
+	mock := &mockCacheClient{db: &godo.Database{Name: "my-cache"}}
+	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cache",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestCacheDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockCacheClient{db: testRedisDB()}
+	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-cache",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-cache" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-cache", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

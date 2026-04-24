@@ -205,3 +205,37 @@ func TestLoadBalancerDriver_HealthCheck_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy for lb with status 'new'")
 	}
 }
+
+func TestLoadBalancerDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but load balancer has empty ID — guard must reject it.
+	mock := &mockLBClient{lb: &godo.LoadBalancer{Name: "my-lb"}}
+	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-lb",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestLoadBalancerDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockLBClient{lb: testLB()}
+	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-lb",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-lb" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-lb", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

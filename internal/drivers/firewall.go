@@ -38,6 +38,9 @@ func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	if err != nil {
 		return nil, fmt.Errorf("firewall create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if fw == nil || fw.ID == "" {
+		return nil, fmt.Errorf("firewall create %q: API returned firewall with empty ID", spec.Name)
+	}
 	return fwOutput(fw), nil
 }
 

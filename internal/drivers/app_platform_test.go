@@ -800,3 +800,37 @@ func TestAppPlatformDriver_Create_NestedMapImageSpec(t *testing.T) {
 		t.Errorf("Tag = %q, want %q", img.Tag, "v2")
 	}
 }
+
+func TestAppPlatformDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but app has empty ID — guard must reject it.
+	mock := &mockAppClient{app: &godo.App{Spec: &godo.AppSpec{Name: "my-app"}}}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v1"},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestAppPlatformDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v1"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-app" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-app", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

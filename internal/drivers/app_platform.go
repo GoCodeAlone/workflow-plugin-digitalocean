@@ -55,6 +55,9 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 	if err != nil {
 		return nil, fmt.Errorf("app platform create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if app == nil || app.ID == "" {
+		return nil, fmt.Errorf("app platform create %q: API returned app with empty ID", spec.Name)
+	}
 	return appOutput(app), nil
 }
 

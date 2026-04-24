@@ -47,6 +47,9 @@ func (d *VPCDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 	if err != nil {
 		return nil, fmt.Errorf("vpc create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if vpc == nil || vpc.ID == "" {
+		return nil, fmt.Errorf("vpc create %q: API returned vpc with empty ID", spec.Name)
+	}
 	return vpcOutput(vpc), nil
 }
 

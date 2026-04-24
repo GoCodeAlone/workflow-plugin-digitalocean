@@ -47,6 +47,9 @@ func (d *APIGatewayDriver) Create(ctx context.Context, spec interfaces.ResourceS
 	if err != nil {
 		return nil, fmt.Errorf("api_gateway create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if app == nil || app.ID == "" {
+		return nil, fmt.Errorf("api_gateway create %q: API returned app with empty ID", spec.Name)
+	}
 	return apiGatewayOutput(app), nil
 }
 

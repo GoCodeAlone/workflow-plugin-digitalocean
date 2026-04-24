@@ -247,3 +247,37 @@ func TestVPCDriver_Read_NameBased_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrResourceNotFound, got: %v", err)
 	}
 }
+
+func TestVPCDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but VPC has empty ID — guard must reject it.
+	mock := &mockVPCClient{vpc: &godo.VPC{Name: "my-vpc"}}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-vpc",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestVPCDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-vpc",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-vpc" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-vpc", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

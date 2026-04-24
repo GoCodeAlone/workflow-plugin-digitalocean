@@ -190,3 +190,37 @@ func TestDropletDriver_HealthCheck_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy for droplet with status 'off'")
 	}
 }
+
+func TestDropletDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but droplet has zero ID — guard must reject it.
+	mock := &mockDropletClient{droplet: &godo.Droplet{Name: "my-droplet"}}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-droplet",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for zero ProviderID, got nil")
+	}
+}
+
+func TestDropletDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned numeric ID, not the resource name.
+	mock := &mockDropletClient{droplet: testDroplet()}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-droplet",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-droplet" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-droplet", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}

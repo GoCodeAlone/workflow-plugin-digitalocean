@@ -56,6 +56,9 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	if err != nil {
 		return nil, fmt.Errorf("database create %q: %w", spec.Name, WrapGodoError(err))
 	}
+	if db == nil || db.ID == "" {
+		return nil, fmt.Errorf("database create %q: API returned database with empty ID", spec.Name)
+	}
 	return dbOutput(db), nil
 }
 

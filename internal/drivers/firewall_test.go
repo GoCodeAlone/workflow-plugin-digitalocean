@@ -287,3 +287,37 @@ func TestFirewallDriver_HealthCheck_NilClientReturn(t *testing.T) {
 		t.Error("expected non-empty Message for nil firewall")
 	}
 }
+
+func TestFirewallDriver_Create_EmptyIDFromAPI(t *testing.T) {
+	// API returns success but firewall has empty ID — guard must reject it.
+	mock := &mockFirewallClient{fw: &godo.Firewall{Name: "my-fw"}}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ProviderID, got nil")
+	}
+}
+
+func TestFirewallDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
+	// ProviderID must be the API-assigned UUID, not the resource name.
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out.ProviderID == "my-fw" {
+		t.Errorf("ProviderID must not equal spec.Name %q; got %q", "my-fw", out.ProviderID)
+	}
+	if out.ProviderID == "" {
+		t.Errorf("ProviderID must not be empty")
+	}
+}
