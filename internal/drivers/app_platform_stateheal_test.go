@@ -69,32 +69,6 @@ func (c *stateHealClient) Delete(_ context.Context, appID string) (*godo.Respons
 	return &godo.Response{Response: &http.Response{StatusCode: 204}}, c.deleteErr
 }
 
-// ── isUUIDLike tests ──────────────────────────────────────────────────────────
-
-func TestIsUUIDLike_TableDriven(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5", true},
-		{"00000000-0000-0000-0000-000000000000", true},
-		{"bmw-staging", false},
-		{"", false},
-		{"f8b6200c3bba48a78bf17a3e3a885eb5", false},   // no hyphens
-		{"f8b6200c-3bba-48a7-8bf1", false},             // too short
-		{"f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5-xx", false}, // too long
-		{"f8b6200c_3bba_48a7_8bf1_7a3e3a885eb5", false}, // wrong separator
-	}
-	for _, c := range cases {
-		t.Run(c.in, func(t *testing.T) {
-			got := isUUIDLike(c.in)
-			if got != c.want {
-				t.Errorf("isUUIDLike(%q) = %v, want %v", c.in, got, c.want)
-			}
-		})
-	}
-}
-
 // ── Create preserves UUID (regression: name must not be used as ProviderID) ──
 
 func TestCreate_ProviderIDIsUUIDFromAPI(t *testing.T) {

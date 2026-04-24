@@ -160,12 +160,6 @@ func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interface
 	return out.ProviderID, nil
 }
 
-// isUUIDLike returns true when s has the canonical UUID shape:
-// 36 characters with hyphens at positions 8, 13, 18, and 23.
-func isUUIDLike(s string) bool {
-	return len(s) == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-'
-}
-
 func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
