@@ -21,6 +21,12 @@ func (m *mockLBClient) Create(_ context.Context, _ *godo.LoadBalancerRequest) (*
 func (m *mockLBClient) Get(_ context.Context, _ string) (*godo.LoadBalancer, *godo.Response, error) {
 	return m.lb, nil, m.err
 }
+func (m *mockLBClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.LoadBalancer, *godo.Response, error) {
+	if m.lb != nil {
+		return []godo.LoadBalancer{*m.lb}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockLBClient) Update(_ context.Context, _ string, _ *godo.LoadBalancerRequest) (*godo.LoadBalancer, *godo.Response, error) {
 	return m.lb, nil, m.err
 }
