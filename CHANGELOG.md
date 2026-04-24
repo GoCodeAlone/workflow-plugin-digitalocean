@@ -23,18 +23,47 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 ### Fixed
 
 - **State-heal for stale name-as-ProviderID** — `AppPlatformDriver.Update` and `Delete`
-  now call `resolveProviderID` before hitting the DO API. If `ref.ProviderID` is not
-  UUID-like (36 chars, hyphens at 8/13/18/23), the driver logs a WARN and performs a
-  name-based lookup via `findAppByName`, recovering the real UUID from the DO API. This
-  transparently heals state entries left by pre-v0.7.7 broken runs (e.g. BMW staging
-  `ProviderID="bmw-staging"`) without any manual teardown or state editing.
+  now call `resolveProviderID` before hitting the DO API. When `ref.ProviderID` is not a
+  canonical UUID (36 chars, hyphens at positions 8/13/18/23), the driver logs a WARN and
+  transparently falls back to `findAppByName` to recover the real UUID. The healed UUID is
+  returned in `ResourceOutput.ProviderID` so wfctl rewrites state on the next Apply — no
+  manual teardown or state editing required.
+
+  Root-cause: a pre-v0.7.7 code path in `DOProvider.Apply` substituted `spec.Name` as
+  `ProviderID` when the godo API returned a zero-ID response. v0.7.7 added an empty-ID
+  guard on the Create path but did not heal existing stale state. v0.7.8 heals it at
+  Update/Delete time. Triggered by BMW staging deploy `24901939350` where
+  `state.json` contained `ProviderID="bmw-staging"` instead of the app UUID.
+
+- New shared helper `isUUIDLike(s string) bool` in `internal/drivers/shared.go` — used
+  by `resolveProviderID`; 11-case table-driven unit test in `shared_test.go`.
+- A WARN log (`"state-heal"` keyword) is emitted when heal fires so operators can observe
+  state drift in CI output without the deploy failing.
+- New integration-test harness in `internal/drivers/integration_test_helpers_test.go`:
+  `fakeAppsClient` (full `AppPlatformClient` stub with per-method call tracking),
+  `inMemoryState` (minimal state round-trip store), and `applySim` (mimics wfctl's
+  Apply→persist loop). Five integration tests in `app_platform_integration_test.go`
+  exercise the full Create → state persist → Update flow including:
+  - UUID stored (not spec name) after Create
+  - No heal for valid UUID on Update
+  - Stale name healed on Update (core BMW regression test)
+  - Stale name healed on Delete
+  - Clear error when heal can't resolve the name
 
 ### Changed
 
-- Depends on workflow v0.18.10 (was v0.18.9) once tagged.
+- Depends on workflow v0.18.10 (was v0.18.9).
 - `AppPlatformDriver.Troubleshoot`: empty `ProviderID` now returns `(nil, nil)` instead
   of an error; `ListDeployments` errors are best-effort (swallowed, slot-based data used).
-- Test ProviderIDs updated from `"app-123"` to proper UUID format throughout driver tests.
+- Test ProviderIDs updated from `"app-123"` to proper UUID format throughout driver tests
+  (required because `"app-123"` is not UUID-like and would trigger the heal path).
+
+### Known follow-up (v0.7.9)
+
+- Replicate state-heal (`resolveProviderID` equivalent) across the other UUID-based
+  drivers (`vpc`, `firewall`, `database`, `cache`, `load_balancer`, `certificate`,
+  `api_gateway`, `kubernetes`, `droplet`) — the same class of stale state is theoretically
+  possible for any driver that was deployed before v0.7.7's empty-ID guard.
 
 ## [v0.7.7] - 2026-04-24
 
