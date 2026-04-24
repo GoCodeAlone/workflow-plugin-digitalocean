@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -84,9 +85,30 @@ func (d *FirewallDriver) findFirewallByName(ctx context.Context, name string) (*
 	return nil, fmt.Errorf("firewall %q: %w", name, ErrResourceNotFound)
 }
 
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *FirewallDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: firewall %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findFirewallByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("firewall state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	req := firewallRequest(spec)
-	fw, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	fw, _, err := d.client.Update(ctx, providerID, req)
 	if err != nil {
 		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -94,7 +116,11 @@ func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 }
 
 func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("firewall delete %q: %w", ref.Name, WrapGodoError(err))
 	}
