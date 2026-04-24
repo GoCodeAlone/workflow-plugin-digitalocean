@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -12,6 +13,7 @@ import (
 type KubernetesClient interface {
 	Create(ctx context.Context, req *godo.KubernetesClusterCreateRequest) (*godo.KubernetesCluster, *godo.Response, error)
 	Get(ctx context.Context, clusterID string) (*godo.KubernetesCluster, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.KubernetesCluster, *godo.Response, error)
 	Update(ctx context.Context, clusterID string, req *godo.KubernetesClusterUpdateRequest) (*godo.KubernetesCluster, *godo.Response, error)
 	Delete(ctx context.Context, clusterID string) (*godo.Response, error)
 	UpdateNodePool(ctx context.Context, clusterID, poolID string, req *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error)
@@ -70,11 +72,53 @@ func (d *KubernetesDriver) Read(ctx context.Context, ref interfaces.ResourceRef)
 	return k8sOutput(cluster), nil
 }
 
+// findClusterByName iterates the paginated cluster list and returns the first
+// entry whose Name matches. Returns ErrResourceNotFound if no match.
+func (d *KubernetesDriver) findClusterByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		clusters, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("kubernetes list: %w", WrapGodoError(err))
+		}
+		for _, c := range clusters {
+			if c.Name == name {
+				return k8sOutput(c), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("k8s_cluster %q: %w", name, ErrResourceNotFound)
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+func (d *KubernetesDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: k8s_cluster %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findClusterByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("k8s_cluster state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *KubernetesDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	req := &godo.KubernetesClusterUpdateRequest{
 		Name: spec.Name,
 	}
-	cluster, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	cluster, _, err := d.client.Update(ctx, providerID, req)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes update %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -82,7 +126,11 @@ func (d *KubernetesDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 }
 
 func (d *KubernetesDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("kubernetes delete %q: %w", ref.Name, WrapGodoError(err))
 	}

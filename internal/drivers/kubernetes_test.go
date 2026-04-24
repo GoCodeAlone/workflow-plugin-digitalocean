@@ -28,6 +28,12 @@ func (m *mockK8sClient) Update(_ context.Context, _ string, _ *godo.KubernetesCl
 func (m *mockK8sClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
 }
+func (m *mockK8sClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.KubernetesCluster, *godo.Response, error) {
+	if m.cluster != nil {
+		return []*godo.KubernetesCluster{m.cluster}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockK8sClient) UpdateNodePool(_ context.Context, _, _ string, _ *godo.KubernetesNodePoolUpdateRequest) (*godo.KubernetesNodePool, *godo.Response, error) {
 	if m.nodePool != nil {
 		return m.nodePool, nil, m.err
