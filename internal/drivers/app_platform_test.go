@@ -26,9 +26,11 @@ func makeGodoErr(statusCode int) error {
 type mockAppClient struct {
 	app                    *godo.App
 	err                    error
-	listApps               []*godo.App // returned by List
-	listErr                error       // error returned by List
-	createDeploymentErr    error       // error returned by CreateDeployment
+	listApps               []*godo.App       // returned by List
+	listErr                error             // error returned by List
+	deployments            []*godo.Deployment // returned by ListDeployments
+	listDeploymentsErr     error             // error returned by ListDeployments
+	createDeploymentErr    error             // error returned by CreateDeployment
 	createDeploymentCalled bool
 	lastCreateDeployReq    *godo.DeploymentCreateRequest
 	lastCreateReq          *godo.AppCreateRequest
@@ -55,6 +57,9 @@ func (m *mockAppClient) CreateDeployment(_ context.Context, _ string, reqs ...*g
 		m.lastCreateDeployReq = r
 	}
 	return &godo.Deployment{ID: "dep-1"}, nil, m.createDeploymentErr
+}
+func (m *mockAppClient) ListDeployments(_ context.Context, _ string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
+	return m.deployments, &godo.Response{}, m.listDeploymentsErr
 }
 func (m *mockAppClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
@@ -832,5 +837,61 @@ func TestAppPlatformDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	}
 	if out.ProviderID == "" {
 		t.Errorf("ProviderID must not be empty")
+	}
+}
+
+func TestTroubleshoot_ReturnsDiagnostics(t *testing.T) {
+	mock := &mockAppClient{
+		app: &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
+		deployments: []*godo.Deployment{
+			{ID: "dep-abc", Phase: godo.DeploymentPhase_Error, Cause: "image pull failed"},
+			{ID: "dep-xyz", Phase: godo.DeploymentPhase_Canceled, Cause: "superseded"},
+		},
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "app-123"}
+	diags, err := d.Troubleshoot(context.Background(), ref, "no deployment found")
+	if err != nil {
+		t.Fatalf("Troubleshoot: %v", err)
+	}
+	if len(diags) != 2 {
+		t.Fatalf("want 2 diagnostics, got %d", len(diags))
+	}
+	if diags[0].ID != "dep-abc" {
+		t.Errorf("diags[0].ID = %q, want %q", diags[0].ID, "dep-abc")
+	}
+	if diags[0].Cause != "image pull failed" {
+		t.Errorf("diags[0].Cause = %q, want %q", diags[0].Cause, "image pull failed")
+	}
+	if diags[0].Phase != string(godo.DeploymentPhase_Error) {
+		t.Errorf("diags[0].Phase = %q, want %q", diags[0].Phase, godo.DeploymentPhase_Error)
+	}
+}
+
+func TestTroubleshoot_NoProviderID(t *testing.T) {
+	// Empty ProviderID returns (nil, nil) — nothing to query.
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{}, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app"} // no ProviderID
+	diags, err := d.Troubleshoot(context.Background(), ref, "")
+	if err != nil {
+		t.Fatalf("expected nil error for empty ProviderID, got %v", err)
+	}
+	if diags != nil {
+		t.Fatalf("expected nil diagnostics for empty ProviderID, got %v", diags)
+	}
+}
+
+func TestTroubleshoot_APIError(t *testing.T) {
+	// ListDeployments errors are best-effort: Troubleshoot continues with
+	// whatever deployment slots the app has.
+	mock := &mockAppClient{
+		app:                &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "my-app"}},
+		listDeploymentsErr: errors.New("api timeout"),
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "app-123"}
+	_, err := d.Troubleshoot(context.Background(), ref, "")
+	if err != nil {
+		t.Fatalf("ListDeployments error should not propagate; got: %v", err)
 	}
 }

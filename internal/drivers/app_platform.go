@@ -22,6 +22,7 @@ type AppPlatformClient interface {
 	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
 	Update(ctx context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error)
 	CreateDeployment(ctx context.Context, appID string, req ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error)
+	ListDeployments(ctx context.Context, appID string, opts *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
 
@@ -218,6 +219,44 @@ func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRe
 		return nil, fmt.Errorf("app platform scale update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return appOutput(updated), nil
+}
+
+// troubleshootMaxDeployments is the maximum number of recent deployments fetched
+// by Troubleshoot to avoid overwhelming the output.
+const troubleshootMaxDeployments = 5
+
+// Troubleshoot implements interfaces.Troubleshooter for AppPlatformDriver.
+// It fetches the most recent deployments for the app and returns them as
+// Diagnostics so wfctl can print a structured failure block on health-check
+// timeout without requiring the user to visit the DO console.
+func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.ResourceRef, _ string) ([]interfaces.Diagnostic, error) {
+	if ref.ProviderID == "" {
+		return nil, fmt.Errorf("app platform troubleshoot %q: no ProviderID available", ref.Name)
+	}
+	deps, _, err := d.client.ListDeployments(ctx, ref.ProviderID, &godo.ListOptions{PerPage: troubleshootMaxDeployments})
+	if err != nil {
+		return nil, fmt.Errorf("app platform list deployments %q: %w", ref.Name, WrapGodoError(err))
+	}
+	diags := make([]interfaces.Diagnostic, 0, len(deps))
+	for _, dep := range deps {
+		cause := dep.Cause
+		// Surface the first non-empty error step message when cause is empty.
+		if cause == "" && dep.Progress != nil {
+			for _, step := range dep.Progress.Steps {
+				if step.Status == godo.DeploymentProgressStepStatus_Error && step.Reason != nil && step.Reason.Message != "" {
+					cause = step.Reason.Message
+					break
+				}
+			}
+		}
+		diags = append(diags, interfaces.Diagnostic{
+			ID:    dep.ID,
+			Phase: string(dep.Phase),
+			Cause: cause,
+			At:    dep.CreatedAt,
+		})
+	}
+	return diags, nil
 }
 
 func appOutput(app *godo.App) *interfaces.ResourceOutput {
