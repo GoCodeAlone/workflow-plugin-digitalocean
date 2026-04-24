@@ -2,6 +2,65 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## [v0.7.9] - 2026-04-24
+
+### Added
+
+- **`ProviderIDValidator` on all 14 drivers** — every driver now implements
+  `interfaces.ProviderIDValidator` (workflow v0.18.11) by returning a
+  `ProviderIDFormat` declaration. wfctl uses the declaration to validate IDs
+  at two boundaries: input (warn-only on Update/Delete) and output (hard
+  failure on Apply to prevent state corruption).
+
+  Format assignments:
+  - `IDFormatUUID` — AppPlatform, APIGateway, Cache, Certificate, Database,
+    Firewall, Kubernetes, LoadBalancer, VPC
+  - `IDFormatDomainName` — DNS
+  - `IDFormatFreeform` — Droplet, Spaces, Registry, IAMRole
+
+  **Droplet deviation from plan table**: the v0.7.9 design doc listed Droplet
+  as `IDFormatUUID`. Droplet IDs are actually integers assigned by the DO API
+  (e.g. `"123456789"`), not canonical UUIDs. Corrected to `IDFormatFreeform`;
+  godo rejects stale names with a 404 at the API level — no UUID-based
+  state-heal is needed for Droplet.
+
+- **State-heal replication across all UUID drivers** (Tasks 11) — the
+  `resolveProviderID` → `findXxxByName` pattern introduced for `AppPlatformDriver`
+  in v0.7.8 is now replicated to every remaining UUID-shaped driver:
+
+  | Driver | List expansion |
+  |--------|---------------|
+  | VPC | — (List already in interface) |
+  | Firewall | — (List already in interface) |
+  | Database | — (List already in interface) |
+  | Certificate | — (List already in interface) |
+  | Cache | `CacheClient.List` added |
+  | APIGateway | `APIGatewayAppClient.List` added |
+  | LoadBalancer | `LoadBalancerClient.List` added (value slice `[]godo.LoadBalancer`) |
+  | Kubernetes | `KubernetesClient.List` added |
+
+  Each driver gained `findXxxByName` (paginated list → name match) and
+  `resolveProviderID` (UUID check → pass-through or WARN log + heal).
+  Update/Delete on all 8 drivers now route through `resolveProviderID`.
+
+- **Per-driver state-heal tests** — 5 tests per UUID driver (40 total) in
+  `*_stateheal_test.go` files (package `drivers`):
+  - `Create_PersistsUUIDInState` — ProviderID comes from API, not spec name
+  - `Update_UsesExistingUUID` — no `List` call when ProviderID is valid UUID
+  - `Update_HealsStaleName` — `List` fires, Update called with healed UUID
+  - `Update_HealFails_WhenResourceNotFound` — error propagated, no silent fallback
+  - `Delete_HealsStaleName` — Delete called with healed UUID
+
+- **`TestAllDrivers_DeclareProviderIDFormat`** — exhaustive coverage gate in
+  `providerid_format_test.go`; one entry per driver, fails if any driver returns
+  the wrong format or the method is missing.
+
+### Changed
+
+- Depends on workflow v0.18.11 (was v0.18.10.1).
+
+---
+
 ## [v0.7.8] - 2026-04-24
 
 ### Added
