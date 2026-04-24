@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -99,10 +100,31 @@ func (d *DatabaseDriver) findDatabaseByName(ctx context.Context, name string) (*
 	return nil, fmt.Errorf("database %q: %w", name, ErrResourceNotFound)
 }
 
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *DatabaseDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: database %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findDatabaseByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("database state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
-	_, err := d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
+	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
 		SizeSlug: size,
 		NumNodes: numNodes,
 	})
@@ -112,18 +134,23 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	// Sync firewall rules when trusted_sources key is present in config.
 	// "present but empty" clears all rules; absent key leaves existing rules unchanged.
 	if rules, ok := trustedSourceFirewallRulesFromConfig(spec.Config); ok {
-		_, err = d.client.UpdateFirewallRules(ctx, ref.ProviderID, &godo.DatabaseUpdateFirewallRulesRequest{
+		_, err = d.client.UpdateFirewallRules(ctx, providerID, &godo.DatabaseUpdateFirewallRulesRequest{
 			Rules: rules,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
 		}
 	}
+	ref.ProviderID = providerID // pass healed ID to Read
 	return d.Read(ctx, ref)
 }
 
 func (d *DatabaseDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("database delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -144,7 +171,11 @@ func (d *DatabaseDriver) Diff(_ context.Context, desired interfaces.ResourceSpec
 }
 
 func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -153,17 +184,22 @@ func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.Resourc
 }
 
 func (d *DatabaseDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
-	db, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	db, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("database scale read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	_, err = d.client.Resize(ctx, ref.ProviderID, &godo.DatabaseResizeRequest{
+	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
 		SizeSlug: db.SizeSlug,
 		NumNodes: replicas,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("database scale %q: %w", ref.Name, WrapGodoError(err))
 	}
+	ref.ProviderID = providerID
 	return d.Read(ctx, ref)
 }
 
@@ -252,3 +288,5 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 		Status:     db.Status,
 	}
 }
+
+func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

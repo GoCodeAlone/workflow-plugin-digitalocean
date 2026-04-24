@@ -87,3 +87,5 @@ func iamOutput(name string, config map[string]any) *interfaces.ResourceOutput {
 }
 
 func (d *IAMRoleDriver) SensitiveKeys() []string { return nil }
+
+func (d *IAMRoleDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

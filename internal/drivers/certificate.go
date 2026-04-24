@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -65,6 +66,46 @@ func (d *CertificateDriver) Read(ctx context.Context, ref interfaces.ResourceRef
 	return certOutput(cert, ref.Name), nil
 }
 
+// findCertificateByName iterates the paginated certificate list and returns
+// the first certificate whose Name matches. Returns ErrResourceNotFound if
+// no match is found.
+func (d *CertificateDriver) findCertificateByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		certs, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("certificate list: %w", WrapGodoError(err))
+		}
+		for i := range certs {
+			if certs[i].Name == name {
+				return certOutput(&certs[i], name), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("certificate %q: %w", name, ErrResourceNotFound)
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *CertificateDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: certificate %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findCertificateByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("certificate state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *CertificateDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	// Certificates are immutable; delete and recreate.
 	if err := d.Delete(ctx, ref); err != nil {
@@ -74,7 +115,11 @@ func (d *CertificateDriver) Update(ctx context.Context, ref interfaces.ResourceR
 }
 
 func (d *CertificateDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("certificate delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -89,7 +134,11 @@ func (d *CertificateDriver) Diff(_ context.Context, desired interfaces.ResourceS
 }
 
 func (d *CertificateDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	cert, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	cert, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -116,3 +165,5 @@ func certOutput(cert *godo.Certificate, name string) *interfaces.ResourceOutput 
 }
 
 func (d *CertificateDriver) SensitiveKeys() []string { return nil }
+
+func (d *CertificateDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

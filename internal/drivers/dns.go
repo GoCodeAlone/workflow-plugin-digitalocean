@@ -166,3 +166,5 @@ func dnsOutput(dom *godo.Domain, name string) *interfaces.ResourceOutput {
 }
 
 func (d *DNSDriver) SensitiveKeys() []string { return nil }
+
+func (d *DNSDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatDomainName }

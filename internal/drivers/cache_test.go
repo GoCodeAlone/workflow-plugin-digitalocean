@@ -21,6 +21,12 @@ func (m *mockCacheClient) Create(_ context.Context, _ *godo.DatabaseCreateReques
 func (m *mockCacheClient) Get(_ context.Context, _ string) (*godo.Database, *godo.Response, error) {
 	return m.db, nil, m.err
 }
+func (m *mockCacheClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.Database, *godo.Response, error) {
+	if m.db != nil {
+		return []godo.Database{*m.db}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockCacheClient) Resize(_ context.Context, _ string, _ *godo.DatabaseResizeRequest) (*godo.Response, error) {
 	return nil, m.err
 }
@@ -30,7 +36,7 @@ func (m *mockCacheClient) Delete(_ context.Context, _ string) (*godo.Response, e
 
 func testRedisDB() *godo.Database {
 	return &godo.Database{
-		ID:          "cache-123",
+		ID:          "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name:        "my-cache",
 		EngineSlug:  "redis",
 		VersionSlug: "7",
@@ -59,8 +65,8 @@ func TestCacheDriver_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if out.ProviderID != "cache-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "cache-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 	if out.Status != "online" {
 		t.Errorf("Status = %q, want %q", out.Status, "online")
@@ -85,13 +91,13 @@ func TestCacheDriver_Read_Success(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if out.ProviderID != "cache-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "cache-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -100,7 +106,7 @@ func TestCacheDriver_Update_Success(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	out, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-cache",
 		Config: map[string]any{"size": "db-s-2vcpu-2gb", "num_nodes": 1},
@@ -108,8 +114,8 @@ func TestCacheDriver_Update_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if out.ProviderID != "cache-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "cache-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -118,7 +124,7 @@ func TestCacheDriver_Update_Error(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-cache",
 		Config: map[string]any{"size": "db-s-2vcpu-2gb"},
@@ -133,7 +139,7 @@ func TestCacheDriver_Delete_Success(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -145,7 +151,7 @@ func TestCacheDriver_Delete_Error(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -193,7 +199,7 @@ func TestCacheDriver_HealthCheck(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -205,7 +211,7 @@ func TestCacheDriver_HealthCheck(t *testing.T) {
 
 func TestCacheDriver_HealthCheck_Unhealthy(t *testing.T) {
 	db := &godo.Database{
-		ID:     "cache-123",
+		ID:     "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name:   "my-cache",
 		Status: "migrating",
 	}
@@ -213,7 +219,7 @@ func TestCacheDriver_HealthCheck_Unhealthy(t *testing.T) {
 	d := drivers.NewCacheDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-cache", ProviderID: "cache-123",
+		Name: "my-cache", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)

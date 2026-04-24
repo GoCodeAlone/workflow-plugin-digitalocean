@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -12,6 +13,7 @@ import (
 type APIGatewayAppClient interface {
 	Create(ctx context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error)
 	Get(ctx context.Context, appID string) (*godo.App, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
 	Update(ctx context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
@@ -61,11 +63,55 @@ func (d *APIGatewayDriver) Read(ctx context.Context, ref interfaces.ResourceRef)
 	return apiGatewayOutput(app), nil
 }
 
+// findAPIGatewayByName iterates the paginated App Platform list and returns
+// the first app whose Spec.Name matches. Returns ErrResourceNotFound if no
+// match is found.
+func (d *APIGatewayDriver) findAPIGatewayByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		apps, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("api_gateway list: %w", WrapGodoError(err))
+		}
+		for _, app := range apps {
+			if app.Spec != nil && app.Spec.Name == name {
+				return apiGatewayOutput(app), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("api_gateway %q: %w", name, ErrResourceNotFound)
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *APIGatewayDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: api_gateway %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findAPIGatewayByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("api_gateway state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *APIGatewayDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	region := strFromConfig(spec.Config, "region", d.region)
 	appSpec := buildAPIGatewaySpec(spec.Name, region, spec.Config)
 
-	app, _, err := d.client.Update(ctx, ref.ProviderID, &godo.AppUpdateRequest{Spec: appSpec})
+	app, _, err := d.client.Update(ctx, providerID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("api_gateway update %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -73,7 +119,11 @@ func (d *APIGatewayDriver) Update(ctx context.Context, ref interfaces.ResourceRe
 }
 
 func (d *APIGatewayDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("api_gateway delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -88,7 +138,11 @@ func (d *APIGatewayDriver) Diff(_ context.Context, desired interfaces.ResourceSp
 }
 
 func (d *APIGatewayDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	app, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	app, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -150,3 +204,5 @@ func apiGatewayOutput(app *godo.App) *interfaces.ResourceOutput {
 }
 
 func (d *APIGatewayDriver) SensitiveKeys() []string { return nil }
+
+func (d *APIGatewayDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -54,7 +55,10 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 }
 
 func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
-	id := providerIDToInt(ref.ProviderID)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("droplet read %q: invalid ProviderID %q: %w", ref.Name, ref.ProviderID, err)
+	}
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("droplet read %q: %w", ref.Name, WrapGodoError(err))
@@ -67,8 +71,11 @@ func (d *DropletDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ in
 }
 
 func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	id := providerIDToInt(ref.ProviderID)
-	_, err := d.client.Delete(ctx, id)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return fmt.Errorf("droplet delete %q: invalid ProviderID %q: %w", ref.Name, ref.ProviderID, err)
+	}
+	_, err = d.client.Delete(ctx, id)
 	if err != nil {
 		return fmt.Errorf("droplet delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -98,7 +105,10 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 }
 
 func (d *DropletDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	id := providerIDToInt(ref.ProviderID)
+	id, err := providerIDToInt(ref.ProviderID)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
 	droplet, _, err := d.client.Get(ctx, id)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
@@ -131,11 +141,22 @@ func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
 	}
 }
 
-// providerIDToInt converts a string provider ID to int for godo Droplet API calls.
-func providerIDToInt(id string) int {
-	var n int
-	fmt.Sscanf(id, "%d", &n)
-	return n
+// providerIDToInt converts a string provider ID to int for godo Droplet API
+// calls. Uses strconv.Atoi for strict whole-string parsing — partial matches
+// like "123abc" are rejected. Returns an error for any non-positive-integer
+// value, preventing silent API calls with droplet ID 0 or a wrong ID.
+func providerIDToInt(id string) (int, error) {
+	n, err := strconv.Atoi(id)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("ProviderID %q is not a valid droplet integer ID", id)
+	}
+	return n, nil
 }
 
 func (d *DropletDriver) SensitiveKeys() []string { return nil }
+
+// ProviderIDFormat returns Freeform because DO Droplet IDs are integers, not
+// UUIDs. We declare Freeform; providerIDToInt performs strict local validation
+// and rejects any non-integer ProviderID with an explicit error before any
+// API call is made — no UUID-based state-heal needed for Droplet.
+func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }

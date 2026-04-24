@@ -21,6 +21,12 @@ func (m *mockLBClient) Create(_ context.Context, _ *godo.LoadBalancerRequest) (*
 func (m *mockLBClient) Get(_ context.Context, _ string) (*godo.LoadBalancer, *godo.Response, error) {
 	return m.lb, nil, m.err
 }
+func (m *mockLBClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.LoadBalancer, *godo.Response, error) {
+	if m.lb != nil {
+		return []godo.LoadBalancer{*m.lb}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockLBClient) Update(_ context.Context, _ string, _ *godo.LoadBalancerRequest) (*godo.LoadBalancer, *godo.Response, error) {
 	return m.lb, nil, m.err
 }
@@ -30,7 +36,7 @@ func (m *mockLBClient) Delete(_ context.Context, _ string) (*godo.Response, erro
 
 func testLB() *godo.LoadBalancer {
 	return &godo.LoadBalancer{
-		ID:     "lb-123",
+		ID:     "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name:   "my-lb",
 		IP:     "1.2.3.4",
 		Status: "active",
@@ -48,8 +54,8 @@ func TestLoadBalancerDriver_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if out.ProviderID != "lb-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "lb-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 	if out.Status != "active" {
 		t.Errorf("Status = %q, want %q", out.Status, "active")
@@ -64,13 +70,13 @@ func TestLoadBalancerDriver_Read(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if out.ProviderID != "lb-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "lb-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -79,7 +85,7 @@ func TestLoadBalancerDriver_HealthCheck_Active(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -107,7 +113,7 @@ func TestLoadBalancerDriver_Update_Success(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	out, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-lb",
 		Config: map[string]any{"algorithm": "least_connections"},
@@ -115,8 +121,8 @@ func TestLoadBalancerDriver_Update_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if out.ProviderID != "lb-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "lb-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -125,7 +131,7 @@ func TestLoadBalancerDriver_Update_Error(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-lb",
 		Config: map[string]any{},
@@ -140,7 +146,7 @@ func TestLoadBalancerDriver_Delete(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -152,7 +158,7 @@ func TestLoadBalancerDriver_Delete_Error(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -176,7 +182,7 @@ func TestLoadBalancerDriver_Diff_NoChanges(t *testing.T) {
 	mock := &mockLBClient{}
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
-	current := &interfaces.ResourceOutput{ProviderID: "lb-123"}
+	current := &interfaces.ResourceOutput{ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "my-lb"}, current)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
@@ -188,7 +194,7 @@ func TestLoadBalancerDriver_Diff_NoChanges(t *testing.T) {
 
 func TestLoadBalancerDriver_HealthCheck_Unhealthy(t *testing.T) {
 	lb := &godo.LoadBalancer{
-		ID:     "lb-123",
+		ID:     "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Name:   "my-lb",
 		Status: "new",
 	}
@@ -196,7 +202,7 @@ func TestLoadBalancerDriver_HealthCheck_Unhealthy(t *testing.T) {
 	d := drivers.NewLoadBalancerDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-lb", ProviderID: "lb-123",
+		Name: "my-lb", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)

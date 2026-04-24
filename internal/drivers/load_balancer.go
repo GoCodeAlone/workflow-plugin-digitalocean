@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -12,6 +13,7 @@ import (
 type LoadBalancerClient interface {
 	Create(ctx context.Context, req *godo.LoadBalancerRequest) (*godo.LoadBalancer, *godo.Response, error)
 	Get(ctx context.Context, lbID string) (*godo.LoadBalancer, *godo.Response, error)
+	List(ctx context.Context, opts *godo.ListOptions) ([]godo.LoadBalancer, *godo.Response, error)
 	Update(ctx context.Context, lbID string, req *godo.LoadBalancerRequest) (*godo.LoadBalancer, *godo.Response, error)
 	Delete(ctx context.Context, lbID string) (*godo.Response, error)
 }
@@ -68,7 +70,50 @@ func (d *LoadBalancerDriver) Read(ctx context.Context, ref interfaces.ResourceRe
 	return lbOutput(lb), nil
 }
 
+// findLoadBalancerByName iterates the paginated load balancer list and returns
+// the first entry whose Name matches. Returns ErrResourceNotFound if no match.
+func (d *LoadBalancerDriver) findLoadBalancerByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		lbs, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("load balancer list: %w", WrapGodoError(err))
+		}
+		for i := range lbs {
+			if lbs[i].Name == name {
+				return lbOutput(&lbs[i]), nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return nil, fmt.Errorf("load_balancer %q: %w", name, ErrResourceNotFound)
+}
+
+// resolveProviderID returns a UUID-like ProviderID for the given ref. If
+// ref.ProviderID is already UUID-shaped it is returned as-is. Otherwise a
+// WARN is logged and a name-based lookup heals stale state transparently.
+// Mirrors AppPlatformDriver.resolveProviderID (v0.7.8).
+func (d *LoadBalancerDriver) resolveProviderID(ctx context.Context, ref interfaces.ResourceRef) (string, error) {
+	if isUUIDLike(ref.ProviderID) {
+		return ref.ProviderID, nil
+	}
+	log.Printf("warn: load_balancer %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
+		ref.Name, ref.ProviderID)
+	out, err := d.findLoadBalancerByName(ctx, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("load_balancer state-heal for %q: %w", ref.Name, err)
+	}
+	return out.ProviderID, nil
+}
+
 func (d *LoadBalancerDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 	region := strFromConfig(spec.Config, "region", d.region)
 	algorithm := strFromConfig(spec.Config, "algorithm", "round_robin")
 
@@ -86,7 +131,7 @@ func (d *LoadBalancerDriver) Update(ctx context.Context, ref interfaces.Resource
 		},
 	}
 
-	lb, _, err := d.client.Update(ctx, ref.ProviderID, req)
+	lb, _, err := d.client.Update(ctx, providerID, req)
 	if err != nil {
 		return nil, fmt.Errorf("load balancer update %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -94,7 +139,11 @@ func (d *LoadBalancerDriver) Update(ctx context.Context, ref interfaces.Resource
 }
 
 func (d *LoadBalancerDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
-	_, err := d.client.Delete(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.Delete(ctx, providerID)
 	if err != nil {
 		return fmt.Errorf("load balancer delete %q: %w", ref.Name, WrapGodoError(err))
 	}
@@ -109,7 +158,11 @@ func (d *LoadBalancerDriver) Diff(_ context.Context, desired interfaces.Resource
 }
 
 func (d *LoadBalancerDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	lb, _, err := d.client.Get(ctx, ref.ProviderID)
+	providerID, err := d.resolveProviderID(ctx, ref)
+	if err != nil {
+		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+	}
+	lb, _, err := d.client.Get(ctx, providerID)
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -135,3 +188,5 @@ func lbOutput(lb *godo.LoadBalancer) *interfaces.ResourceOutput {
 }
 
 func (d *LoadBalancerDriver) SensitiveKeys() []string { return nil }
+
+func (d *LoadBalancerDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }

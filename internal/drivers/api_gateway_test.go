@@ -22,6 +22,12 @@ func (m *mockAPIGatewayClient) Create(_ context.Context, _ *godo.AppCreateReques
 func (m *mockAPIGatewayClient) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
 	return m.app, nil, m.err
 }
+func (m *mockAPIGatewayClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	if m.app != nil {
+		return []*godo.App{m.app}, nil, nil
+	}
+	return nil, nil, m.err
+}
 func (m *mockAPIGatewayClient) Update(_ context.Context, _ string, _ *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	return m.app, nil, m.err
 }
@@ -31,7 +37,7 @@ func (m *mockAPIGatewayClient) Delete(_ context.Context, _ string) (*godo.Respon
 
 func testGatewayApp() *godo.App {
 	return &godo.App{
-		ID:      "app-gw-123",
+		ID:      "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		LiveURL: "https://gw.example.com",
 		Spec:    &godo.AppSpec{Name: "my-gateway"},
 		ActiveDeployment: &godo.Deployment{
@@ -55,8 +61,8 @@ func TestAPIGatewayDriver_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if out.ProviderID != "app-gw-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-gw-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 	if out.Status != "running" {
 		t.Errorf("Status = %q, want %q", out.Status, "running")
@@ -81,13 +87,13 @@ func TestAPIGatewayDriver_Read_Success(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	out, err := d.Read(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if out.ProviderID != "app-gw-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-gw-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -96,7 +102,7 @@ func TestAPIGatewayDriver_Update_Success(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	out, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-gateway",
 		Config: map[string]any{"routes": []any{map[string]any{"path": "/v2", "component": "api-svc"}}},
@@ -104,8 +110,8 @@ func TestAPIGatewayDriver_Update_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if out.ProviderID != "app-gw-123" {
-		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "app-gw-123")
+	if out.ProviderID != "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5" {
+		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5")
 	}
 }
 
@@ -114,7 +120,7 @@ func TestAPIGatewayDriver_Update_Error(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-gateway",
 		Config: map[string]any{},
@@ -129,7 +135,7 @@ func TestAPIGatewayDriver_Delete_Success(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -141,7 +147,7 @@ func TestAPIGatewayDriver_Delete_Error(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	err := d.Delete(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -165,7 +171,7 @@ func TestAPIGatewayDriver_Diff_NoChanges(t *testing.T) {
 	mock := &mockAPIGatewayClient{}
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
-	current := &interfaces.ResourceOutput{ProviderID: "app-gw-123"}
+	current := &interfaces.ResourceOutput{ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{Name: "my-gateway"}, current)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
@@ -180,7 +186,7 @@ func TestAPIGatewayDriver_HealthCheck(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
@@ -192,7 +198,7 @@ func TestAPIGatewayDriver_HealthCheck(t *testing.T) {
 
 func TestAPIGatewayDriver_HealthCheck_Unhealthy(t *testing.T) {
 	app := &godo.App{
-		ID:   "app-gw-123",
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 		Spec: &godo.AppSpec{Name: "my-gateway"},
 		// ActiveDeployment nil => pending/unhealthy
 	}
@@ -200,7 +206,7 @@ func TestAPIGatewayDriver_HealthCheck_Unhealthy(t *testing.T) {
 	d := drivers.NewAPIGatewayDriverWithClient(mock, "nyc3")
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
-		Name: "my-gateway", ProviderID: "app-gw-123",
+		Name: "my-gateway", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	})
 	if err != nil {
 		t.Fatalf("HealthCheck: %v", err)
