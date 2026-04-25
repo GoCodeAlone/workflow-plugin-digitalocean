@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
@@ -41,7 +42,8 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 		t.Skip("DO_TEST_APP_NAME not set — skipping live integration test")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	httpClient := oauth2.NewClient(ctx, ts)
