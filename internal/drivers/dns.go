@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -27,6 +28,12 @@ type DomainsClient interface {
 type DNSDriver struct {
 	client DomainsClient
 }
+
+const (
+	dnsConflictRetryAttempts  = 5
+	dnsConflictRetryBaseDelay = 25 * time.Millisecond
+	dnsConflictRetryMaxDelay  = 200 * time.Millisecond
+)
 
 // NewDNSDriver creates a DNSDriver backed by a real godo client.
 func NewDNSDriver(c *godo.Client) *DNSDriver {
@@ -60,10 +67,25 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 		if !errors.Is(wrapped, interfaces.ErrResourceNotFound) {
 			return nil, fmt.Errorf("dns get domain %q: %w", domain, wrapped)
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("dns create domain %q: %w", domain, err)
+		}
 		dom, _, err = d.client.Create(ctx, &godo.DomainCreateRequest{Name: domain})
 		if err != nil {
-			return nil, fmt.Errorf("dns create domain %q: %w", domain, WrapGodoError(err))
+			wrapped = WrapGodoError(err)
+			if !errors.Is(wrapped, interfaces.ErrResourceAlreadyExists) {
+				return nil, fmt.Errorf("dns create domain %q: %w", domain, wrapped)
+			}
+			dom, err = d.getDomainAfterCreateConflict(ctx, domain, wrapped)
+			if err != nil {
+				return nil, err
+			}
 		}
+	} else if err := validateDNSDomainResponse(domain, "get domain", dom); err != nil {
+		return nil, err
+	}
+	if err := validateDNSDomainResponse(domain, "create domain", dom); err != nil {
+		return nil, err
 	}
 
 	if err := d.upsertRecords(ctx, domain, declaredRecords); err != nil {
@@ -77,17 +99,62 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 	return dnsOutput(dom, spec.Name, records), nil
 }
 
+func (d *DNSDriver) getDomainAfterCreateConflict(ctx context.Context, domain string, conflictErr error) (*godo.Domain, error) {
+	var lastRetryable error
+	for attempt := 0; attempt < dnsConflictRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("dns get domain %q after create conflict: %w", domain, err)
+		}
+		dom, _, err := d.client.Get(ctx, domain)
+		if err == nil {
+			if err := validateDNSDomainResponse(domain, "get domain after create conflict", dom); err != nil {
+				return nil, err
+			}
+			return dom, nil
+		}
+		wrapped := WrapGodoError(err)
+		if !errors.Is(wrapped, interfaces.ErrResourceNotFound) && !isRetryableDNSConflictError(wrapped) {
+			return nil, fmt.Errorf("dns get domain %q after create conflict: %w", domain, wrapped)
+		}
+		if isRetryableDNSConflictError(wrapped) {
+			lastRetryable = wrapped
+		} else {
+			lastRetryable = nil
+		}
+		if attempt == dnsConflictRetryAttempts-1 {
+			break
+		}
+		if err := waitDNSConflictRetry(ctx, domain, "domain", domain, attempt); err != nil {
+			return nil, err
+		}
+	}
+	if lastRetryable != nil {
+		return nil, fmt.Errorf("dns get domain %q after create conflict: %w", domain, lastRetryable)
+	}
+	return nil, fmt.Errorf("dns create domain %q: %w", domain, conflictErr)
+}
+
 func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	domain := ref.ProviderID
 	dom, _, err := d.client.Get(ctx, domain)
 	if err != nil {
 		return nil, fmt.Errorf("dns read %q: %w", ref.Name, WrapGodoError(err))
 	}
+	if err := validateDNSDomainResponse(domain, "read domain", dom); err != nil {
+		return nil, err
+	}
 	records, err := d.listRecords(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
 	return dnsOutput(dom, ref.Name, records), nil
+}
+
+func validateDNSDomainResponse(domain, op string, dom *godo.Domain) error {
+	if dom == nil || dom.Name == "" {
+		return fmt.Errorf("dns %s %q: API returned empty domain", op, domain)
+	}
+	return nil
 }
 
 func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -109,6 +176,9 @@ func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 }
 
 func (d *DNSDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("dns delete %q: %w", ref.Name, err)
+	}
 	_, err := d.client.Delete(ctx, ref.ProviderID)
 	if err != nil {
 		return fmt.Errorf("dns delete %q: %w", ref.Name, WrapGodoError(err))
@@ -129,7 +199,13 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
 	if hasDesiredDomain && !strings.EqualFold(desiredDomain, current.ProviderID) {
-		return &interfaces.DiffResult{NeedsUpdate: true}, nil
+		return &interfaces.DiffResult{
+			NeedsUpdate:  true,
+			NeedsReplace: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "domain", Old: current.ProviderID, New: desiredDomain, ForceNew: true},
+			},
+		}, nil
 	}
 	if len(desiredRecords) == 0 {
 		return &interfaces.DiffResult{NeedsUpdate: false}, nil
@@ -184,11 +260,7 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, records []
 		return err
 	}
 
-	existingByKey := make(map[string][]godo.DomainRecord)
-	for _, r := range existing {
-		key := dnsDomainRecordUpsertKey(r)
-		existingByKey[key] = append(existingByKey[key], r)
-	}
+	existingByKey := dnsRecordsByUpsertKey(existing)
 
 	seenDeclared := make(map[string]struct{})
 	for _, editReq := range records {
@@ -205,16 +277,117 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, records []
 			if dnsRecordMatchesRequest(existing, editReq) {
 				continue
 			}
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("dns update record %q %s/%s: %w", domain, editReq.Type, editReq.Name, err)
+			}
 			if _, _, err := d.client.EditRecord(ctx, domain, existing.ID, &editReq); err != nil {
 				return fmt.Errorf("dns update record %q %s/%s: %w", domain, editReq.Type, editReq.Name, WrapGodoError(err))
 			}
 		} else {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("dns create record %q %s/%s: %w", domain, editReq.Type, editReq.Name, err)
+			}
 			if _, _, err := d.client.CreateRecord(ctx, domain, &editReq); err != nil {
-				return fmt.Errorf("dns create record %q %s/%s: %w", domain, editReq.Type, editReq.Name, WrapGodoError(err))
+				latest, err := d.handleCreateRecordConflict(ctx, domain, editReq, err)
+				if err != nil {
+					return err
+				}
+				existingByKey = dnsRecordsByUpsertKey(latest)
 			}
 		}
 	}
 	return nil
+}
+
+func (d *DNSDriver) handleCreateRecordConflict(ctx context.Context, domain string, editReq godo.DomainRecordEditRequest, createErr error) ([]godo.DomainRecord, error) {
+	wrapped := WrapGodoError(createErr)
+	if !errors.Is(wrapped, interfaces.ErrResourceAlreadyExists) {
+		return nil, fmt.Errorf("dns create record %q %s/%s: %w", domain, editReq.Type, editReq.Name, wrapped)
+	}
+	key := dnsRecordRequestUpsertKey(editReq)
+	for attempt := 0; attempt < dnsConflictRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("dns create record %q %s/%s after create conflict: %w", domain, editReq.Type, editReq.Name, err)
+		}
+		existing, err := d.listRecords(ctx, domain)
+		if err != nil {
+			if isRetryableDNSConflictError(err) && attempt < dnsConflictRetryAttempts-1 {
+				if waitErr := waitDNSConflictRetry(ctx, domain, editReq.Type, editReq.Name, attempt); waitErr != nil {
+					return nil, waitErr
+				}
+				continue
+			}
+			return nil, fmt.Errorf("dns list records %q after create conflict %s/%s: %w", domain, editReq.Type, editReq.Name, err)
+		}
+		if err := validateDNSRecordLiveConflicts([]godo.DomainRecordEditRequest{editReq}, existing); err != nil {
+			return nil, err
+		}
+		for i, record := range existing {
+			if dnsDomainRecordUpsertKey(record) != key {
+				continue
+			}
+			if dnsRecordMatchesRequest(record, editReq) {
+				return existing, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("dns update record %q %s/%s after create conflict: %w", domain, editReq.Type, editReq.Name, err)
+			}
+			updated, _, err := d.client.EditRecord(ctx, domain, record.ID, &editReq)
+			if err != nil {
+				return nil, fmt.Errorf("dns update record %q %s/%s after create conflict: %w", domain, editReq.Type, editReq.Name, WrapGodoError(err))
+			}
+			if updated != nil {
+				existing[i] = *updated
+			} else {
+				replacement := dnsDomainRecordFromRequest(editReq)
+				replacement.ID = record.ID
+				existing[i] = replacement
+			}
+			return existing, nil
+		}
+		if attempt == dnsConflictRetryAttempts-1 {
+			break
+		}
+		if err := waitDNSConflictRetry(ctx, domain, editReq.Type, editReq.Name, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("dns create record %q %s/%s: %w", domain, editReq.Type, editReq.Name, wrapped)
+}
+
+func dnsRecordsByUpsertKey(records []godo.DomainRecord) map[string][]godo.DomainRecord {
+	out := make(map[string][]godo.DomainRecord)
+	for _, r := range records {
+		key := dnsDomainRecordUpsertKey(r)
+		out[key] = append(out[key], r)
+	}
+	return out
+}
+
+func isRetryableDNSConflictError(err error) bool {
+	return errors.Is(err, interfaces.ErrTransient) || errors.Is(err, interfaces.ErrRateLimited)
+}
+
+func waitDNSConflictRetry(ctx context.Context, domain, recordType, name string, attempt int) error {
+	timer := time.NewTimer(dnsConflictBackoffDelay(attempt))
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return fmt.Errorf("dns retry %q %s/%s after create conflict: %w", domain, recordType, name, ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+func dnsConflictBackoffDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := dnsConflictRetryBaseDelay << attempt
+	if delay > dnsConflictRetryMaxDelay {
+		return dnsConflictRetryMaxDelay
+	}
+	return delay
 }
 
 func (d *DNSDriver) listRecords(ctx context.Context, domain string) ([]godo.DomainRecord, error) {
@@ -410,6 +583,7 @@ func dnsRecordEditRequestFromConfig(index int, m map[string]any) (godo.DomainRec
 		Flags:    flags,
 		Tag:      tag,
 	}
+	req.Tag = dnsCanonicalRecordTag(req.Type, req.Tag)
 	if err := validateDNSRecordRequest(index, req, hasPriority, hasPort, hasWeight, hasFlags, hasTag); err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
@@ -672,7 +846,7 @@ func dnsRecordRequestsEqual(a, b godo.DomainRecordEditRequest) bool {
 		a.Port == b.Port &&
 		a.Weight == b.Weight &&
 		a.Flags == b.Flags &&
-		a.Tag == b.Tag
+		dnsCanonicalRecordTag(a.Type, a.Tag) == dnsCanonicalRecordTag(b.Type, b.Tag)
 }
 
 func dnsRecordsFromOutput(current *interfaces.ResourceOutput) ([]godo.DomainRecord, error) {
@@ -763,7 +937,7 @@ func dnsDomainRecordFromOutputMap(index int, m map[string]any) (godo.DomainRecor
 		Port:     port,
 		Weight:   weight,
 		Flags:    flags,
-		Tag:      tag,
+		Tag:      dnsCanonicalRecordTag(recordType, tag),
 	}, true, nil
 }
 
@@ -811,7 +985,7 @@ func dnsRecordIdentity(recordType, name, data string, priority, port, weight, fl
 	parts := []string{strings.ToUpper(recordType), dnsCanonicalRecordName(name), dnsCanonicalRecordData(recordType, data)}
 	switch strings.ToUpper(recordType) {
 	case "CAA":
-		parts = append(parts, fmt.Sprint(flags), strings.ToLower(tag))
+		parts = append(parts, fmt.Sprint(flags), dnsCanonicalRecordTag(recordType, tag))
 	case "MX":
 		parts = append(parts, fmt.Sprint(priority))
 	case "SRV":
@@ -829,7 +1003,7 @@ func dnsRecordMatchesRequest(record godo.DomainRecord, req godo.DomainRecordEdit
 		record.Port == req.Port &&
 		record.Weight == req.Weight &&
 		record.Flags == req.Flags &&
-		record.Tag == req.Tag
+		dnsCanonicalRecordTag(record.Type, record.Tag) == dnsCanonicalRecordTag(req.Type, req.Tag)
 }
 
 func dnsCanonicalRecordName(name string) string {
@@ -838,6 +1012,13 @@ func dnsCanonicalRecordName(name string) string {
 
 func dnsRecordDataMatches(recordType, a, b string) bool {
 	return dnsCanonicalRecordData(recordType, a) == dnsCanonicalRecordData(recordType, b)
+}
+
+func dnsCanonicalRecordTag(recordType, tag string) string {
+	if strings.EqualFold(recordType, "CAA") {
+		return strings.ToLower(tag)
+	}
+	return tag
 }
 
 func dnsCanonicalRecordData(recordType, data string) string {
@@ -878,7 +1059,7 @@ func dnsRecordOutputs(records []godo.DomainRecord) []map[string]any {
 			"port":     record.Port,
 			"weight":   record.Weight,
 			"flags":    record.Flags,
-			"tag":      record.Tag,
+			"tag":      dnsCanonicalRecordTag(record.Type, record.Tag),
 		})
 	}
 	return out

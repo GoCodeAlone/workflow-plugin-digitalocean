@@ -3,14 +3,21 @@ package internal
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/digitalocean/godo"
 )
 
 // compile-time interface check
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
+
+func providerGodoStatusErr(code int) error {
+	return &godo.ErrorResponse{Response: &http.Response{StatusCode: code, Status: http.StatusText(code)}}
+}
 
 func TestDOProvider_Name(t *testing.T) {
 	p := NewDOProvider()
@@ -235,6 +242,221 @@ func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
 	}
 	if len(action.Changes) != 1 || action.Changes[0].Path != "records[TXT/@/expected]" {
 		t.Fatalf("plan action changes = %+v, want driver changes", action.Changes)
+	}
+}
+
+type providerDNSMock struct {
+	domain         *godo.Domain
+	getErrs        []error
+	createErr      error
+	records        []godo.DomainRecord
+	createCalls    int
+	createRecordNs []godo.DomainRecordEditRequest
+}
+
+func (m *providerDNSMock) Create(_ context.Context, req *godo.DomainCreateRequest) (*godo.Domain, *godo.Response, error) {
+	m.createCalls++
+	if m.createErr != nil {
+		return nil, nil, m.createErr
+	}
+	return &godo.Domain{Name: req.Name}, nil, nil
+}
+
+func (m *providerDNSMock) Get(_ context.Context, name string) (*godo.Domain, *godo.Response, error) {
+	if len(m.getErrs) > 0 {
+		err := m.getErrs[0]
+		m.getErrs = m.getErrs[1:]
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if m.domain != nil {
+		return m.domain, nil, nil
+	}
+	return &godo.Domain{Name: name}, nil, nil
+}
+
+func (m *providerDNSMock) Delete(_ context.Context, _ string) (*godo.Response, error) {
+	return nil, nil
+}
+
+func (m *providerDNSMock) CreateRecord(_ context.Context, _ string, req *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error) {
+	m.createRecordNs = append(m.createRecordNs, *req)
+	record := godo.DomainRecord{ID: len(m.records) + 1, Type: req.Type, Name: req.Name, Data: req.Data, TTL: req.TTL, Priority: req.Priority, Port: req.Port, Weight: req.Weight, Flags: req.Flags, Tag: req.Tag}
+	m.records = append(m.records, record)
+	return &record, nil, nil
+}
+
+func (m *providerDNSMock) EditRecord(_ context.Context, _ string, id int, req *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error) {
+	record := godo.DomainRecord{ID: id, Type: req.Type, Name: req.Name, Data: req.Data, TTL: req.TTL, Priority: req.Priority, Port: req.Port, Weight: req.Weight, Flags: req.Flags, Tag: req.Tag}
+	for i := range m.records {
+		if m.records[i].ID == id {
+			m.records[i] = record
+			return &record, nil, nil
+		}
+	}
+	m.records = append(m.records, record)
+	return &record, nil, nil
+}
+
+func (m *providerDNSMock) DeleteRecord(_ context.Context, _ string, _ int) (*godo.Response, error) {
+	return nil, nil
+}
+
+func (m *providerDNSMock) Records(_ context.Context, _ string, _ *godo.ListOptions) ([]godo.DomainRecord, *godo.Response, error) {
+	return append([]godo.DomainRecord(nil), m.records...), &godo.Response{Links: &godo.Links{Pages: &godo.Pages{}}}, nil
+}
+
+func TestDOProvider_Plan_DNSDriverDiffUsesImportedRecordState(t *testing.T) {
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(&providerDNSMock{}),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{{
+		Name:          "site-dns",
+		Type:          "infra.dns",
+		ProviderID:    "example.com",
+		AppliedConfig: spec.Config,
+		Outputs: map[string]any{
+			"records": []map[string]any{{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Action != "update" {
+		t.Fatalf("plan actions = %#v, want one DNS update", plan.Actions)
+	}
+}
+
+func TestDOProvider_Plan_DNSDriverDiffNoopsWhenImportedRecordStateMatches(t *testing.T) {
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(&providerDNSMock{}),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{{
+		Name:          "site-dns",
+		Type:          "infra.dns",
+		ProviderID:    "example.com",
+		AppliedConfig: map[string]any{"domain": "something-stale"},
+		Outputs: map[string]any{
+			"records": []map[string]any{{"type": "TXT", "name": "@", "data": "expected", "ttl": 300}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("plan actions = %#v, want none from matching imported DNS records", plan.Actions)
+	}
+}
+
+func TestDOProvider_Apply_DNSCreateIsIdempotentForExistingDomain(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:  &godo.Domain{Name: "example.com"},
+		records: []godo.DomainRecord{{ID: 10, Type: "A", Name: "@", Data: "1.2.3.4", TTL: 300}},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300},
+			},
+		},
+	}
+
+	result, err := p.Apply(t.Context(), &interfaces.IaCPlan{ID: "plan-dns", Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("Apply errors = %#v", result.Errors)
+	}
+	if mock.createCalls != 0 {
+		t.Fatalf("domain create calls = %d, want 0 for existing domain", mock.createCalls)
+	}
+	if len(mock.createRecordNs) != 0 {
+		t.Fatalf("record create calls = %d, want 0 for matching existing record", len(mock.createRecordNs))
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "example.com" {
+		t.Fatalf("resources = %#v, want adopted DNS output", result.Resources)
+	}
+}
+
+func TestDOProvider_Apply_DNSCreateAdoptsDomainAfterCreateConflict(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:    &godo.Domain{Name: "example.com"},
+		getErrs:   []error{providerGodoStatusErr(http.StatusNotFound), nil},
+		createErr: providerGodoStatusErr(http.StatusConflict),
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name:   "site-dns",
+		Type:   "infra.dns",
+		Config: map[string]any{"domain": "example.com"},
+	}
+
+	result, err := p.Apply(t.Context(), &interfaces.IaCPlan{ID: "plan-dns", Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("Apply errors = %#v", result.Errors)
+	}
+	if mock.createCalls != 1 {
+		t.Fatalf("domain create calls = %d, want one conflicted create attempt", mock.createCalls)
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "example.com" {
+		t.Fatalf("resources = %#v, want adopted DNS output", result.Resources)
+	}
+}
+
+func TestDOProvider_Import_DNSIncludesExistingRecords(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:  &godo.Domain{Name: "example.com"},
+		records: []godo.DomainRecord{{ID: 10, Type: "TXT", Name: "@", Data: "imported", TTL: 300}},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+
+	state, err := p.Import(t.Context(), "example.com", "infra.dns")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	records, ok := state.Outputs["records"].([]map[string]any)
+	if !ok {
+		t.Fatalf("records output = %T, want []map[string]any", state.Outputs["records"])
+	}
+	if len(records) != 1 || records[0]["data"] != "imported" {
+		t.Fatalf("records = %#v, want imported TXT record", records)
 	}
 }
 
