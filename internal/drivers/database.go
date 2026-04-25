@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -19,21 +21,40 @@ type DatabaseClient interface {
 	UpdateFirewallRules(ctx context.Context, databaseID string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error)
 }
 
+// appNameLister is a minimal interface for looking up App Platform app names.
+// DatabaseDriver only needs List; using the full AppPlatformClient here would
+// unnecessarily couple the database driver to app lifecycle operations.
+type appNameLister interface {
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
+}
+
 // DatabaseDriver manages DigitalOcean Managed Databases (infra.database).
 // Supports pg, mysql, redis, mongodb, kafka.
 type DatabaseDriver struct {
-	client DatabaseClient
-	region string
+	client     DatabaseClient
+	appsClient appNameLister // optional; used to resolve type=app trusted_source names to UUIDs
+	region     string
 }
 
 // NewDatabaseDriver creates a DatabaseDriver backed by a real godo client.
+// The godo Apps client is wired automatically to support type=app trusted_source
+// name → UUID resolution at apply time.
 func NewDatabaseDriver(c *godo.Client, region string) *DatabaseDriver {
-	return &DatabaseDriver{client: c.Databases, region: region}
+	return &DatabaseDriver{client: c.Databases, appsClient: c.Apps, region: region}
 }
 
-// NewDatabaseDriverWithClient creates a driver with an injected client (for tests).
+// NewDatabaseDriverWithClient creates a driver with an injected database client (for tests).
+// appsClient may be nil when tests do not exercise type=app trusted_source rules.
 func NewDatabaseDriverWithClient(c DatabaseClient, region string) *DatabaseDriver {
 	return &DatabaseDriver{client: c, region: region}
+}
+
+// NewDatabaseDriverWithClients creates a driver with injected database and apps
+// clients (for tests that exercise type=app trusted_source name → UUID resolution).
+// apps must implement appNameLister (i.e. have a List method); any *fakeAppsClient
+// or real godo.AppsService satisfies this.
+func NewDatabaseDriverWithClients(c DatabaseClient, apps appNameLister, region string) *DatabaseDriver {
+	return &DatabaseDriver{client: c, appsClient: apps, region: region}
 }
 
 func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -43,6 +64,11 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	region := strFromConfig(spec.Config, "region", d.region)
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
 
+	createRules, err := d.buildCreateFirewallRules(ctx, spec.Config)
+	if err != nil {
+		return nil, fmt.Errorf("database create %q: %w", spec.Name, err)
+	}
+
 	req := &godo.DatabaseCreateRequest{
 		Name:       spec.Name,
 		EngineSlug: engine,
@@ -50,7 +76,7 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 		SizeSlug:   size,
 		Region:     region,
 		NumNodes:   numNodes,
-		Rules:      trustedSourceCreateRulesFromConfig(spec.Config),
+		Rules:      createRules,
 	}
 
 	db, _, err := d.client.Create(ctx, req)
@@ -122,6 +148,15 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	if err != nil {
 		return nil, err
 	}
+	// Resolve firewall rules BEFORE mutating the database. buildUpdateFirewallRules
+	// can fail for config errors (wrong type) or app name→UUID resolution failures,
+	// so validating upfront avoids partial applies caused by those preflight issues.
+	// A later UpdateFirewallRules call can still fail after Resize due to API/service
+	// errors, so this reduces—but does not eliminate—the chance of partial applies.
+	fwRules, fwPresent, fwErr := d.buildUpdateFirewallRules(ctx, spec.Config)
+	if fwErr != nil {
+		return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
+	}
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
 	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
@@ -133,9 +168,9 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	}
 	// Sync firewall rules when trusted_sources key is present in config.
 	// "present but empty" clears all rules; absent key leaves existing rules unchanged.
-	if rules, ok := trustedSourceFirewallRulesFromConfig(spec.Config); ok {
+	if fwPresent {
 		_, err = d.client.UpdateFirewallRules(ctx, providerID, &godo.DatabaseUpdateFirewallRulesRequest{
-			Rules: rules,
+			Rules: fwRules,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
@@ -207,9 +242,192 @@ func (d *DatabaseDriver) SensitiveKeys() []string {
 	return []string{"uri", "password", "user"}
 }
 
+// resolveAppNamesMap builds a name→UUID map for all non-UUID app names found
+// in the raw trusted_sources list. A single paginated listing pass is made
+// (potentially multiple page requests) regardless of how many type=app rules
+// exist, avoiding repeated full scans. Pagination stops early once all
+// requested names have been resolved. Returns an error if:
+//   - the Apps client is nil and a non-UUID name requires resolution,
+//   - the DO Apps.List API call fails, or
+//   - a requested app name is not found (wraps ErrResourceNotFound).
+func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map[string]string, error) {
+	// Collect the distinct non-UUID app names that need resolution.
+	needed := map[string]struct{}{}
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strFromConfig(m, "type", "") != "app" {
+			continue
+		}
+		val := strFromConfig(m, "value", "")
+		if val == "" || isUUIDLike(val) {
+			continue
+		}
+		needed[val] = struct{}{}
+	}
+	if len(needed) == 0 {
+		return nil, nil // nothing to look up
+	}
+	if d.appsClient == nil {
+		// Sort names so the error message is deterministic regardless of map
+		// iteration order (important when multiple type=app rules are present).
+		names := make([]string, 0, len(needed))
+		for n := range needed {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		quoted := make([]string, len(names))
+		for i, n := range names {
+			quoted[i] = fmt.Sprintf("%q", n)
+		}
+		return nil, fmt.Errorf(
+			"trusted_sources: type=app value(s) %s are not UUIDs and no Apps client is configured for name lookup; pass app UUIDs directly",
+			strings.Join(quoted, ", "),
+		)
+	}
+	resolved := make(map[string]string, len(needed))
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		apps, resp, err := d.appsClient.List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("app list for trusted_source resolution: %w", WrapGodoError(err))
+		}
+		for _, app := range apps {
+			if app.Spec == nil {
+				continue
+			}
+			if _, want := needed[app.Spec.Name]; want {
+				resolved[app.Spec.Name] = app.ID
+				if len(resolved) == len(needed) {
+					return resolved, nil // all names resolved — no more pages needed
+				}
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	// Collect every name that was not found and report them all at once.
+	// Sort for deterministic output regardless of map iteration order.
+	missing := make([]string, 0, len(needed))
+	for name := range needed {
+		if _, ok := resolved[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return resolved, nil
+	}
+	sort.Strings(missing)
+	quotedMissing := make([]string, len(missing))
+	for i, name := range missing {
+		quotedMissing[i] = fmt.Sprintf("%q", name)
+	}
+	return nil, fmt.Errorf("trusted_sources app(s) %s: %w",
+		strings.Join(quotedMissing, ", "), ErrResourceNotFound)
+}
+
+// buildCreateFirewallRules converts "trusted_sources" config to
+// []*godo.DatabaseCreateFirewallRule, resolving type=app values to UUIDs via
+// a single Apps.List pass (see resolveAppNamesMap).
+func (d *DatabaseDriver) buildCreateFirewallRules(ctx context.Context, cfg map[string]any) ([]*godo.DatabaseCreateFirewallRule, error) {
+	rawVal, exists := cfg["trusted_sources"]
+	if !exists {
+		return nil, nil
+	}
+	raw, ok := rawVal.([]any)
+	if !ok {
+		return nil, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", rawVal)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	appUUIDs, err := d.resolveAppNamesMap(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]*godo.DatabaseCreateFirewallRule, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" {
+			continue
+		}
+		if ruleType == "app" {
+			if uuid, found := appUUIDs[ruleValue]; found {
+				ruleValue = uuid
+			}
+			// UUID-shaped values are used as-is (not in the appUUIDs map).
+		}
+		rules = append(rules, &godo.DatabaseCreateFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules, nil
+}
+
+// buildUpdateFirewallRules converts "trusted_sources" config to
+// ([]*godo.DatabaseFirewallRule, bool, error). The bool reflects whether the
+// "trusted_sources" key was present in the config:
+//   - false: key absent — caller should leave existing firewall rules unchanged.
+//   - true:  key present — caller should apply the returned rules (or surface the error).
+//
+// Returning true on error paths lets callers distinguish "key absent" from
+// "key present but invalid/unresolvable" without inspecting the error type.
+// type=app values are resolved to UUIDs via a single Apps.List pass (see resolveAppNamesMap).
+func (d *DatabaseDriver) buildUpdateFirewallRules(ctx context.Context, cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool, error) {
+	raw, ok := cfg["trusted_sources"]
+	if !ok {
+		return nil, false, nil // key absent: leave existing rules unchanged
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		// Key is present but wrong type — return true so callers don't treat this as "absent".
+		return nil, true, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", raw)
+	}
+	appUUIDs, err := d.resolveAppNamesMap(ctx, list)
+	if err != nil {
+		// Key is present but resolution failed — return true (key present) + error.
+		return nil, true, err
+	}
+	rules := make([]*godo.DatabaseFirewallRule, 0, len(list))
+	for _, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" {
+			continue
+		}
+		if ruleType == "app" {
+			if uuid, found := appUUIDs[ruleValue]; found {
+				ruleValue = uuid
+			}
+			// UUID-shaped values are used as-is (not in the appUUIDs map).
+		}
+		rules = append(rules, &godo.DatabaseFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules, true, nil
+}
+
 // trustedSourceCreateRulesFromConfig converts canonical "trusted_sources" to
 // []*godo.DatabaseCreateFirewallRule for use in a DatabaseCreateRequest.
 // Each entry must have "type" (ip_addr|k8s|app|droplet|tag) and "value".
+// NOTE: this function does NOT resolve type=app names to UUIDs. Use
+// buildCreateFirewallRules (a DatabaseDriver method) when a context is available.
 func trustedSourceCreateRulesFromConfig(cfg map[string]any) []*godo.DatabaseCreateFirewallRule {
 	raw, ok := cfg["trusted_sources"].([]any)
 	if !ok || len(raw) == 0 {
@@ -240,6 +458,9 @@ func trustedSourceCreateRulesFromConfig(cfg map[string]any) []*godo.DatabaseCrea
 //   - false → key absent → caller should leave existing firewall rules unchanged.
 //   - true, empty slice → key present but empty → caller should clear all rules.
 //   - true, non-empty slice → key present with rules → caller should apply the rules.
+//
+// NOTE: this function does NOT resolve type=app names to UUIDs. Use
+// buildUpdateFirewallRules (a DatabaseDriver method) when a context is available.
 func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool) {
 	raw, ok := cfg["trusted_sources"]
 	if !ok {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -422,5 +423,221 @@ func TestDatabaseDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	}
 	if out.ProviderID == "" {
 		t.Errorf("ProviderID must not be empty")
+	}
+}
+
+// --- type=app trusted_source name→UUID resolution ---
+
+func makeAppForTrustedSource(name, id string) *godo.App {
+	return &godo.App{
+		ID:   id,
+		Spec: &godo.AppSpec{Name: name},
+		ActiveDeployment: &godo.Deployment{
+			Phase: godo.DeploymentPhase_Active,
+		},
+	}
+}
+
+func TestDatabaseDriver_Create_WithTrustedSources_AppNameResolved(t *testing.T) {
+	// type=app rule whose value is an app name (not UUID) should be resolved
+	// to the app's UUID before sending to the DO API.
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	appMock := &mockAppClient{
+		listApps: []*godo.App{makeAppForTrustedSource("bmw-staging", appUUID)},
+	}
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": "bmw-staging"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if dbMock.lastCreateReq == nil {
+		t.Fatal("no create request captured")
+	}
+	if len(dbMock.lastCreateReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(dbMock.lastCreateReq.Rules))
+	}
+	rule := dbMock.lastCreateReq.Rules[0]
+	if rule.Type != "app" {
+		t.Errorf("rule.Type = %q, want %q", rule.Type, "app")
+	}
+	if rule.Value != appUUID {
+		t.Errorf("rule.Value = %q, want UUID %q (app name should have been resolved)", rule.Value, appUUID)
+	}
+}
+
+func TestDatabaseDriver_Create_WithTrustedSources_AppUUIDPassThrough(t *testing.T) {
+	// type=app rule whose value is already UUID-shaped must NOT trigger a name lookup.
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	appMock := &mockAppClient{listErr: fmt.Errorf("should not be called")}
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": appUUID},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v (apps List must not be called for UUID-shaped values)", err)
+	}
+	if dbMock.lastCreateReq == nil || len(dbMock.lastCreateReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule")
+	}
+	if dbMock.lastCreateReq.Rules[0].Value != appUUID {
+		t.Errorf("rule.Value = %q, want %q", dbMock.lastCreateReq.Rules[0].Value, appUUID)
+	}
+}
+
+func TestDatabaseDriver_Update_WithTrustedSources_AppNameResolved(t *testing.T) {
+	// type=app rule in an Update firewall call should also resolve name→UUID.
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	appMock := &mockAppClient{
+		listApps: []*godo.App{makeAppForTrustedSource("bmw-staging", appUUID)},
+	}
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size": "db-s-2vcpu-4gb",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": "bmw-staging"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if dbMock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules was not called")
+	}
+	if len(dbMock.lastFirewallReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(dbMock.lastFirewallReq.Rules))
+	}
+	rule := dbMock.lastFirewallReq.Rules[0]
+	if rule.Type != "app" {
+		t.Errorf("rule.Type = %q, want %q", rule.Type, "app")
+	}
+	if rule.Value != appUUID {
+		t.Errorf("rule.Value = %q, want UUID %q (app name should have been resolved)", rule.Value, appUUID)
+	}
+}
+
+func TestDatabaseDriver_Create_AppNameNotFound_ReturnsError(t *testing.T) {
+	// When the app name cannot be found in the Apps list, Create must return an
+	// error that wraps ErrResourceNotFound and names the missing app.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	appMock := &mockAppClient{listApps: []*godo.App{}} // empty list — name not found
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": "nonexistent-app"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when app name not found, got nil")
+	}
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Errorf("expected error to wrap drivers.ErrResourceNotFound; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nonexistent-app") {
+		t.Errorf("expected error to mention missing app name %q; got: %v", "nonexistent-app", err)
+	}
+}
+
+func TestDatabaseDriver_Create_AppType_NoAppsClient_ReturnsError(t *testing.T) {
+	// When no Apps client is configured and the rule value is not UUID-shaped,
+	// Create must return an actionable error (not a generic one) that tells the
+	// caller the value is not a UUID and no client is available for lookup.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	// NewDatabaseDriverWithClient does NOT wire an apps client.
+	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": "bmw-staging"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when apps client is nil and value is not UUID, got nil")
+	}
+	if !strings.Contains(err.Error(), "not UUIDs") {
+		t.Errorf("expected error to mention 'not UUIDs'; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "bmw-staging") {
+		t.Errorf("expected error to mention the offending value %q; got: %v", "bmw-staging", err)
+	}
+}
+
+func TestDatabaseDriver_Create_TrustedSources_WrongType_ReturnsError(t *testing.T) {
+	// trusted_sources present but not a list (e.g. user wrote a scalar in YAML)
+	// must return an error rather than silently dropping the rule.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine":          "pg",
+			"trusted_sources": "bmw-staging", // scalar, not a list
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when trusted_sources is not a list, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_sources") {
+		t.Errorf("expected error to mention 'trusted_sources'; got: %v", err)
+	}
+}
+
+func TestDatabaseDriver_Update_TrustedSources_WrongType_ReturnsError(t *testing.T) {
+	// trusted_sources present but not a list on Update path must also error,
+	// not silently clear all firewall rules.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size":            "db-s-2vcpu-4gb",
+			"trusted_sources": "bmw-staging", // scalar, not a list
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when trusted_sources is not a list, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_sources") {
+		t.Errorf("expected error to mention 'trusted_sources'; got: %v", err)
+	}
+	if dbMock.lastFirewallReq != nil {
+		t.Error("UpdateFirewallRules must NOT be called when trusted_sources has wrong type")
 	}
 }
