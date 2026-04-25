@@ -1,0 +1,45 @@
+name: Integration Tests
+
+# Manual-only: triggers paid DO API calls. Never runs on every PR.
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Name of a pre-existing App Platform app to use for trusted_sources resolution test'
+        required: true
+        type: string
+
+# Restrict GITHUB_TOKEN to the minimum permissions needed.
+# This workflow only checks out code and runs tests — it never writes back
+# to the repository or publishes packages.
+permissions:
+  contents: read
+
+env:
+  GOPRIVATE: github.com/GoCodeAlone/*
+
+jobs:
+  trusted-sources-app-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Verify DIGITALOCEAN_TOKEN is configured
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        run: |
+          if [ -z "$DIGITALOCEAN_TOKEN" ]; then
+            echo "::error::DIGITALOCEAN_TOKEN secret is not set — configure it in repository Settings → Secrets before running this workflow"
+            exit 1
+          fi
+      - name: Configure Git for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Run trusted_sources live integration test
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          DO_TEST_APP_NAME: ${{ inputs.app_name }}
+        run: |
+          GOWORK=off go test -v -tags integration ./internal/drivers/... \
+            -run TestDatabaseDriver_TrustedSources_AppNameResolution_Live
