@@ -38,8 +38,9 @@ func NewDNSDriverWithClient(c DomainsClient) *DNSDriver {
 
 // Create creates a domain and any declared DNS records idempotently.
 // Config keys:
-//   domain   string            — the zone name (e.g. "example.com")
-//   records  []map[string]any  — each: {type, name, data, ttl}
+//
+//	domain   string            — the zone name (e.g. "example.com")
+//	records  []map[string]any  — each: {type, name, data, ttl}
 func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	domain := strFromConfig(spec.Config, "domain", spec.Name)
 
@@ -56,7 +57,7 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 		return nil, err
 	}
 
-	return dnsOutput(dom, spec.Name), nil
+	return dnsOutput(dom, spec.Name, nil), nil
 }
 
 func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
@@ -65,7 +66,11 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 	if err != nil {
 		return nil, fmt.Errorf("dns read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	return dnsOutput(dom, ref.Name), nil
+	records, _, err := d.client.Records(ctx, domain, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
+	}
+	return dnsOutput(dom, ref.Name, records), nil
 }
 
 func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -105,8 +110,8 @@ func (d *DNSDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*
 
 // upsertRecords creates or updates DNS records for a domain.
 func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map[string]any) error {
-	records, ok := config["records"].([]any)
-	if !ok {
+	records := declaredDNSRecords(config)
+	if len(records) == 0 {
 		return nil
 	}
 
@@ -115,56 +120,127 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map
 		return fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
 	}
 
-	existingByName := make(map[string]godo.DomainRecord)
+	existingByKey := make(map[string][]godo.DomainRecord)
 	for _, r := range existing {
-		key := strings.ToLower(r.Type) + ":" + r.Name
-		existingByName[key] = r
+		key := dnsRecordIdentity(r.Type, r.Name, r.Data)
+		existingByKey[key] = append(existingByKey[key], r)
 	}
 
-	for _, rec := range records {
-		m, _ := rec.(map[string]any)
-		if m == nil {
+	seenDeclared := make(map[string]struct{})
+	for _, editReq := range records {
+		key := dnsRecordIdentity(editReq.Type, editReq.Name, editReq.Data)
+		if _, seen := seenDeclared[key]; seen {
 			continue
 		}
-		rType := strings.ToUpper(strFromConfig(m, "type", "A"))
-		rName := strFromConfig(m, "name", "@")
-		rData := strFromConfig(m, "data", "")
-		rTTL, _ := intFromConfig(m, "ttl", 300)
+		seenDeclared[key] = struct{}{}
 
-		editReq := &godo.DomainRecordEditRequest{
-			Type: rType,
-			Name: rName,
-			Data: rData,
-			TTL:  rTTL,
-		}
-
-		key := strings.ToLower(rType) + ":" + rName
-		if existing, found := existingByName[key]; found {
-			if _, _, err := d.client.EditRecord(ctx, domain, existing.ID, editReq); err != nil {
-				return fmt.Errorf("dns update record %q %s/%s: %w", domain, rType, rName, WrapGodoError(err))
+		candidates := existingByKey[key]
+		if len(candidates) > 0 {
+			existing := candidates[0]
+			existingByKey[key] = candidates[1:]
+			if dnsRecordMatchesRequest(existing, editReq) {
+				continue
+			}
+			if _, _, err := d.client.EditRecord(ctx, domain, existing.ID, &editReq); err != nil {
+				return fmt.Errorf("dns update record %q %s/%s: %w", domain, editReq.Type, editReq.Name, WrapGodoError(err))
 			}
 		} else {
-			if _, _, err := d.client.CreateRecord(ctx, domain, editReq); err != nil {
-				return fmt.Errorf("dns create record %q %s/%s: %w", domain, rType, rName, WrapGodoError(err))
+			if _, _, err := d.client.CreateRecord(ctx, domain, &editReq); err != nil {
+				return fmt.Errorf("dns create record %q %s/%s: %w", domain, editReq.Type, editReq.Name, WrapGodoError(err))
 			}
 		}
 	}
 	return nil
 }
 
-func dnsOutput(dom *godo.Domain, name string) *interfaces.ResourceOutput {
+func declaredDNSRecords(config map[string]any) []godo.DomainRecordEditRequest {
+	raw, ok := config["records"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]godo.DomainRecordEditRequest, 0, len(raw))
+	for _, rec := range raw {
+		m, _ := rec.(map[string]any)
+		if m == nil {
+			continue
+		}
+		out = append(out, dnsRecordEditRequestFromConfig(m))
+	}
+	return out
+}
+
+func dnsRecordEditRequestFromConfig(m map[string]any) godo.DomainRecordEditRequest {
+	ttl, _ := intFromConfig(m, "ttl", 300)
+	priority, _ := intFromConfig(m, "priority", 0)
+	port, _ := intFromConfig(m, "port", 0)
+	weight, _ := intFromConfig(m, "weight", 0)
+	flags, _ := intFromConfig(m, "flags", 0)
+	return godo.DomainRecordEditRequest{
+		Type:     strings.ToUpper(strFromConfig(m, "type", "A")),
+		Name:     strFromConfig(m, "name", "@"),
+		Data:     strFromConfig(m, "data", ""),
+		TTL:      ttl,
+		Priority: priority,
+		Port:     port,
+		Weight:   weight,
+		Flags:    flags,
+		Tag:      strFromConfig(m, "tag", ""),
+	}
+}
+
+func dnsRecordIdentity(recordType, name, data string) string {
+	return strings.ToUpper(recordType) + "\x00" + strings.ToLower(name) + "\x00" + data
+}
+
+func dnsRecordMatchesRequest(record godo.DomainRecord, req godo.DomainRecordEditRequest) bool {
+	return strings.EqualFold(record.Type, req.Type) &&
+		strings.EqualFold(record.Name, req.Name) &&
+		record.Data == req.Data &&
+		record.TTL == req.TTL &&
+		record.Priority == req.Priority &&
+		record.Port == req.Port &&
+		record.Weight == req.Weight &&
+		record.Flags == req.Flags &&
+		record.Tag == req.Tag
+}
+
+func dnsOutput(dom *godo.Domain, name string, records []godo.DomainRecord) *interfaces.ResourceOutput {
+	outputs := map[string]any{
+		"domain": dom.Name,
+		"ttl":    dom.TTL,
+	}
+	if records != nil {
+		outputs["records"] = dnsRecordOutputs(records)
+	}
 	return &interfaces.ResourceOutput{
 		Name:       name,
 		Type:       "infra.dns",
 		ProviderID: dom.Name,
-		Outputs: map[string]any{
-			"domain": dom.Name,
-			"ttl":    dom.TTL,
-		},
-		Status: "active",
+		Outputs:    outputs,
+		Status:     "active",
 	}
+}
+
+func dnsRecordOutputs(records []godo.DomainRecord) []map[string]any {
+	out := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		out = append(out, map[string]any{
+			"type":     record.Type,
+			"name":     record.Name,
+			"data":     record.Data,
+			"ttl":      record.TTL,
+			"priority": record.Priority,
+			"port":     record.Port,
+			"weight":   record.Weight,
+			"flags":    record.Flags,
+			"tag":      record.Tag,
+		})
+	}
+	return out
 }
 
 func (d *DNSDriver) SensitiveKeys() []string { return nil }
 
-func (d *DNSDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatDomainName }
+func (d *DNSDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatDomainName
+}
