@@ -21,11 +21,18 @@ type DatabaseClient interface {
 	UpdateFirewallRules(ctx context.Context, databaseID string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error)
 }
 
+// appNameLister is a minimal interface for looking up App Platform app names.
+// DatabaseDriver only needs List; using the full AppPlatformClient here would
+// unnecessarily couple the database driver to app lifecycle operations.
+type appNameLister interface {
+	List(ctx context.Context, opts *godo.ListOptions) ([]*godo.App, *godo.Response, error)
+}
+
 // DatabaseDriver manages DigitalOcean Managed Databases (infra.database).
 // Supports pg, mysql, redis, mongodb, kafka.
 type DatabaseDriver struct {
 	client     DatabaseClient
-	appsClient AppPlatformClient // optional; used to resolve type=app trusted_source names to UUIDs
+	appsClient appNameLister // optional; used to resolve type=app trusted_source names to UUIDs
 	region     string
 }
 
@@ -44,7 +51,9 @@ func NewDatabaseDriverWithClient(c DatabaseClient, region string) *DatabaseDrive
 
 // NewDatabaseDriverWithClients creates a driver with injected database and apps
 // clients (for tests that exercise type=app trusted_source name → UUID resolution).
-func NewDatabaseDriverWithClients(c DatabaseClient, apps AppPlatformClient, region string) *DatabaseDriver {
+// apps must implement appNameLister (i.e. have a List method); any *fakeAppsClient
+// or real godo.AppsService satisfies this.
+func NewDatabaseDriverWithClients(c DatabaseClient, apps appNameLister, region string) *DatabaseDriver {
 	return &DatabaseDriver{client: c, appsClient: apps, region: region}
 }
 
@@ -301,13 +310,24 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 		}
 		opts.Page++
 	}
-	// Verify every requested name was found.
+	// Collect every name that was not found and report them all at once.
+	// Sort for deterministic output regardless of map iteration order.
+	missing := make([]string, 0, len(needed))
 	for name := range needed {
 		if _, ok := resolved[name]; !ok {
-			return nil, fmt.Errorf("trusted_source app %q: %w", name, ErrResourceNotFound)
+			missing = append(missing, name)
 		}
 	}
-	return resolved, nil
+	if len(missing) == 0 {
+		return resolved, nil
+	}
+	sort.Strings(missing)
+	quotedMissing := make([]string, len(missing))
+	for i, name := range missing {
+		quotedMissing[i] = fmt.Sprintf("%q", name)
+	}
+	return nil, fmt.Errorf("trusted_sources app(s) %s: %w",
+		strings.Join(quotedMissing, ", "), ErrResourceNotFound)
 }
 
 // buildCreateFirewallRules converts "trusted_sources" config to
