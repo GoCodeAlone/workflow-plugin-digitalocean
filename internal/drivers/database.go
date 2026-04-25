@@ -375,10 +375,14 @@ func (d *DatabaseDriver) buildCreateFirewallRules(ctx context.Context, cfg map[s
 }
 
 // buildUpdateFirewallRules converts "trusted_sources" config to
-// ([]*godo.DatabaseFirewallRule, bool, error). The bool mirrors
-// trustedSourceFirewallRulesFromConfig: false means key absent (leave unchanged);
-// true means key present (apply the returned slice, even if empty). type=app
-// values are resolved to UUIDs via a single Apps.List pass (see resolveAppNamesMap).
+// ([]*godo.DatabaseFirewallRule, bool, error). The bool reflects whether the
+// "trusted_sources" key was present in the config:
+//   - false: key absent — caller should leave existing firewall rules unchanged.
+//   - true:  key present — caller should apply the returned rules (or surface the error).
+//
+// Returning true on error paths lets callers distinguish "key absent" from
+// "key present but invalid/unresolvable" without inspecting the error type.
+// type=app values are resolved to UUIDs via a single Apps.List pass (see resolveAppNamesMap).
 func (d *DatabaseDriver) buildUpdateFirewallRules(ctx context.Context, cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool, error) {
 	raw, ok := cfg["trusted_sources"]
 	if !ok {
@@ -386,11 +390,13 @@ func (d *DatabaseDriver) buildUpdateFirewallRules(ctx context.Context, cfg map[s
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return nil, false, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", raw)
+		// Key is present but wrong type — return true so callers don't treat this as "absent".
+		return nil, true, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", raw)
 	}
 	appUUIDs, err := d.resolveAppNamesMap(ctx, list)
 	if err != nil {
-		return nil, false, err
+		// Key is present but resolution failed — return true (key present) + error.
+		return nil, true, err
 	}
 	rules := make([]*godo.DatabaseFirewallRule, 0, len(list))
 	for _, v := range list {
