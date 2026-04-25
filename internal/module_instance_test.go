@@ -841,6 +841,7 @@ func (s *stubResourceDriver) SensitiveKeys() []string {
 
 type fakeIaCProvider struct {
 	// call tracking
+	initializeCalled    bool
 	planCalled          bool
 	applyCalled         bool
 	destroyCalled       bool
@@ -851,6 +852,11 @@ type fakeIaCProvider struct {
 	resolveSizingHints  *interfaces.ResourceHints
 	bootstrapCalled     bool
 	bootstrapCfg        map[string]any
+
+	// args captured on last call (for round-trip fidelity assertions)
+	lastDesired []interfaces.ResourceSpec
+	lastCurrent []interfaces.ResourceState
+	lastRefs    []interfaces.ResourceRef
 
 	// return values
 	planResult      *interfaces.IaCPlan
@@ -863,25 +869,31 @@ type fakeIaCProvider struct {
 	bootstrapResult *interfaces.BootstrapResult
 }
 
-func (f *fakeIaCProvider) Name() string                                         { return "fake" }
-func (f *fakeIaCProvider) Version() string                                      { return "0.0.0" }
-func (f *fakeIaCProvider) Initialize(_ context.Context, _ map[string]any) error { return nil }
-func (f *fakeIaCProvider) Capabilities() []interfaces.IaCCapabilityDeclaration  { return nil }
+func (f *fakeIaCProvider) Name() string    { return "fake" }
+func (f *fakeIaCProvider) Version() string { return "0.0.0" }
+func (f *fakeIaCProvider) Initialize(_ context.Context, _ map[string]any) error {
+	f.initializeCalled = true
+	return nil
+}
+func (f *fakeIaCProvider) Capabilities() []interfaces.IaCCapabilityDeclaration { return nil }
 func (f *fakeIaCProvider) ResourceDriver(_ string) (interfaces.ResourceDriver, error) {
 	return &stubResourceDriver{}, nil
 }
 func (f *fakeIaCProvider) Close() error { return nil }
 
-func (f *fakeIaCProvider) Plan(_ context.Context, _ []interfaces.ResourceSpec, _ []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+func (f *fakeIaCProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	f.planCalled = true
+	f.lastDesired = desired
+	f.lastCurrent = current
 	return f.planResult, nil
 }
 func (f *fakeIaCProvider) Apply(_ context.Context, _ *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
 	f.applyCalled = true
 	return f.applyResult, nil
 }
-func (f *fakeIaCProvider) Destroy(_ context.Context, _ []interfaces.ResourceRef) (*interfaces.DestroyResult, error) {
+func (f *fakeIaCProvider) Destroy(_ context.Context, refs []interfaces.ResourceRef) (*interfaces.DestroyResult, error) {
 	f.destroyCalled = true
+	f.lastRefs = refs
 	return f.destroyResult, nil
 }
 func (f *fakeIaCProvider) Status(_ context.Context, _ []interfaces.ResourceRef) ([]interfaces.ResourceStatus, error) {
