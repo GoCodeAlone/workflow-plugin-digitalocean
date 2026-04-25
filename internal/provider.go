@@ -172,6 +172,9 @@ func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec
 				})
 				continue
 			}
+			if diff != nil {
+				continue
+			}
 		}
 		if configHash(cur.AppliedConfig) != configHash(spec.Config) {
 			plan.Actions = append(plan.Actions, interfaces.PlanAction{

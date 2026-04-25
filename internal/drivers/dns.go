@@ -299,11 +299,12 @@ func declaredDNSRecords(config map[string]any) ([]godo.DomainRecordEditRequest, 
 			}
 			continue
 		}
-		if err := validateDNSRecordNameConflict(req, recordsByName[strings.ToLower(req.Name)]); err != nil {
+		nameKey := dnsCanonicalRecordName(req.Name)
+		if err := validateDNSRecordNameConflict(req, recordsByName[nameKey]); err != nil {
 			return nil, err
 		}
 		seen[key] = req
-		recordsByName[strings.ToLower(req.Name)] = append(recordsByName[strings.ToLower(req.Name)], req)
+		recordsByName[nameKey] = append(recordsByName[nameKey], req)
 		out = append(out, req)
 	}
 	return out, nil
@@ -340,14 +341,14 @@ func validateDNSRecordNameConflict(req godo.DomainRecordEditRequest, existing []
 func validateDNSRecordLiveConflicts(records []godo.DomainRecordEditRequest, existing []godo.DomainRecord) error {
 	existingByName := make(map[string][]godo.DomainRecord)
 	for _, record := range existing {
-		existingByName[strings.ToLower(record.Name)] = append(existingByName[strings.ToLower(record.Name)], record)
+		existingByName[dnsCanonicalRecordName(record.Name)] = append(existingByName[dnsCanonicalRecordName(record.Name)], record)
 	}
 	for _, req := range records {
-		for _, other := range existingByName[strings.ToLower(req.Name)] {
+		for _, other := range existingByName[dnsCanonicalRecordName(req.Name)] {
 			if req.Type != "CNAME" && !strings.EqualFold(other.Type, "CNAME") {
 				continue
 			}
-			if req.Type == "CNAME" && strings.EqualFold(other.Type, "CNAME") && other.Data == req.Data {
+			if req.Type == "CNAME" && strings.EqualFold(other.Type, "CNAME") && dnsRecordDataMatches(other.Type, other.Data, req.Data) {
 				continue
 			}
 			return fmt.Errorf("dns conflicting DNS record %s/%s conflicts with %s/%s", req.Type, req.Name, other.Type, other.Name)
@@ -473,6 +474,12 @@ func dnsOptionalIntField(index int, m map[string]any, key string, defaultValue i
 }
 
 func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPriority, hasPort, hasWeight bool) error {
+	if !isValidDNSRecordName(req.Name) {
+		return fmt.Errorf("dns records[%d].name must be a valid DNS record name", index)
+	}
+	if req.Type == "CNAME" && req.Name == "@" {
+		return fmt.Errorf("dns records[%d].name CNAME records cannot be declared at the zone apex", index)
+	}
 	switch req.Type {
 	case "A":
 		addr, err := netip.ParseAddr(req.Data)
@@ -485,7 +492,7 @@ func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPr
 			return fmt.Errorf("dns records[%d].data must be an IPv6 address", index)
 		}
 	case "CNAME":
-		if _, err := netip.ParseAddr(req.Data); err == nil {
+		if !isValidDNSHostnameValue(req.Data) {
 			return fmt.Errorf("dns records[%d].data must be a hostname for CNAME records", index)
 		}
 	case "MX":
@@ -494,6 +501,13 @@ func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPr
 		}
 		if err := validateDNSUint16(index, "priority", req.Priority); err != nil {
 			return err
+		}
+		if !isValidDNSHostnameValue(req.Data) {
+			return fmt.Errorf("dns records[%d].data must be a hostname for MX records", index)
+		}
+	case "NS":
+		if !isValidDNSHostnameValue(req.Data) {
+			return fmt.Errorf("dns records[%d].data must be a hostname for NS records", index)
 		}
 	case "SRV":
 		if !hasPriority {
@@ -514,6 +528,9 @@ func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPr
 		if err := validateDNSUint16(index, "weight", req.Weight); err != nil {
 			return err
 		}
+		if !isValidDNSHostnameValue(req.Data) {
+			return fmt.Errorf("dns records[%d].data must be a hostname for SRV records", index)
+		}
 	case "CAA":
 		if req.Tag == "" {
 			return fmt.Errorf("dns records[%d].tag is required for CAA records", index)
@@ -526,6 +543,58 @@ func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPr
 		}
 	}
 	return nil
+}
+
+func isValidDNSRecordName(name string) bool {
+	if name == "@" {
+		return true
+	}
+	return isValidDNSName(name, true, true)
+}
+
+func isValidDNSHostnameValue(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	return isValidDNSName(host, false, false)
+}
+
+func isValidDNSName(name string, allowWildcard, allowUnderscore bool) bool {
+	if name == "" || strings.ContainsAny(name, " \t\r\n") {
+		return false
+	}
+	if len(name) > 253 {
+		return false
+	}
+	trimmed := strings.TrimSuffix(name, ".")
+	if trimmed == "" || strings.Contains(trimmed, "..") {
+		return false
+	}
+	labels := strings.Split(trimmed, ".")
+	for i, label := range labels {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if label == "*" {
+			if !allowWildcard || i != 0 {
+				return false
+			}
+			continue
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for j, r := range label {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
+				continue
+			}
+			if allowUnderscore && r == '_' && j == 0 && len(label) > 1 {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func validateDNSUint16(index int, field string, value int) error {
@@ -547,7 +616,7 @@ func isSupportedDNSRecordType(recordType string) bool {
 func dnsRecordRequestsEqual(a, b godo.DomainRecordEditRequest) bool {
 	return strings.EqualFold(a.Type, b.Type) &&
 		strings.EqualFold(a.Name, b.Name) &&
-		a.Data == b.Data &&
+		dnsRecordDataMatches(a.Type, a.Data, b.Data) &&
 		a.TTL == b.TTL &&
 		a.Priority == b.Priority &&
 		a.Port == b.Port &&
@@ -614,7 +683,7 @@ func dnsDomainRecordIdentity(record godo.DomainRecord) string {
 }
 
 func dnsRecordIdentity(recordType, name, data string, priority, port, weight, flags int, tag string) string {
-	parts := []string{strings.ToUpper(recordType), strings.ToLower(name), data}
+	parts := []string{strings.ToUpper(recordType), dnsCanonicalRecordName(name), dnsCanonicalRecordData(recordType, data)}
 	switch strings.ToUpper(recordType) {
 	case "CAA":
 		parts = append(parts, fmt.Sprint(flags), strings.ToLower(tag))
@@ -628,14 +697,31 @@ func dnsRecordIdentity(recordType, name, data string, priority, port, weight, fl
 
 func dnsRecordMatchesRequest(record godo.DomainRecord, req godo.DomainRecordEditRequest) bool {
 	return strings.EqualFold(record.Type, req.Type) &&
-		strings.EqualFold(record.Name, req.Name) &&
-		record.Data == req.Data &&
+		dnsCanonicalRecordName(record.Name) == dnsCanonicalRecordName(req.Name) &&
+		dnsRecordDataMatches(record.Type, record.Data, req.Data) &&
 		record.TTL == req.TTL &&
 		record.Priority == req.Priority &&
 		record.Port == req.Port &&
 		record.Weight == req.Weight &&
 		record.Flags == req.Flags &&
 		record.Tag == req.Tag
+}
+
+func dnsCanonicalRecordName(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
+
+func dnsRecordDataMatches(recordType, a, b string) bool {
+	return dnsCanonicalRecordData(recordType, a) == dnsCanonicalRecordData(recordType, b)
+}
+
+func dnsCanonicalRecordData(recordType, data string) string {
+	switch strings.ToUpper(recordType) {
+	case "CNAME", "MX", "NS", "SRV":
+		return strings.ToLower(strings.TrimSuffix(data, "."))
+	default:
+		return data
+	}
 }
 
 func dnsOutput(dom *godo.Domain, name string, records []godo.DomainRecord) *interfaces.ResourceOutput {

@@ -301,6 +301,36 @@ func TestDNSDriver_Create_ValidatesRecordsBeforeCreatingDomain(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_Create_RejectsApexCNAMEBeforeCreatingDomain(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain: testDomain(),
+		getErr: godoStatusErr(http.StatusNotFound),
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "@", "data": "target.example.com"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected apex CNAME validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "CNAME records cannot be declared at the zone apex") {
+		t.Fatalf("error = %q, want apex CNAME validation error", err)
+	}
+	if len(mock.createdDomains) != 0 {
+		t.Fatalf("created domains = %v, want none", mock.createdDomains)
+	}
+	if len(mock.createdRecords) != 0 {
+		t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
+	}
+}
+
 func TestDNSDriver_Create_RejectsMalformedDomainBeforeAPICalls(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -967,6 +997,16 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			wantErr: `records[0].name must be a string`,
 		},
 		{
+			name:    "name with whitespace",
+			record:  map[string]any{"type": "A", "name": "bad label", "data": "1.2.3.4"},
+			wantErr: `records[0].name must be a valid DNS record name`,
+		},
+		{
+			name:    "name with bad label",
+			record:  map[string]any{"type": "A", "name": "-bad", "data": "1.2.3.4"},
+			wantErr: `records[0].name must be a valid DNS record name`,
+		},
+		{
 			name:    "missing data",
 			record:  map[string]any{"type": "A", "name": "@"},
 			wantErr: `records[0].data is required`,
@@ -997,9 +1037,24 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			wantErr: `records[0].priority is required for MX records`,
 		},
 		{
+			name:    "MX data must be hostname",
+			record:  map[string]any{"type": "MX", "name": "@", "data": "mail label.example.com", "priority": 10},
+			wantErr: `records[0].data must be a hostname for MX records`,
+		},
+		{
+			name:    "NS data must be hostname",
+			record:  map[string]any{"type": "NS", "name": "@", "data": "ns_1.example.com"},
+			wantErr: `records[0].data must be a hostname for NS records`,
+		},
+		{
 			name:    "SRV port required",
 			record:  map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "priority": 10, "weight": 5},
 			wantErr: `records[0].port is required for SRV records`,
+		},
+		{
+			name:    "SRV data must be hostname",
+			record:  map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip_example.com", "priority": 10, "port": 5060, "weight": 5},
+			wantErr: `records[0].data must be a hostname for SRV records`,
 		},
 		{
 			name:    "CAA tag required",
@@ -1043,6 +1098,56 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_Update_AllowsValidRecordNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		record map[string]any
+	}{
+		{
+			name:   "apex",
+			record: map[string]any{"type": "A", "name": "@", "data": "1.2.3.4"},
+		},
+		{
+			name:   "wildcard",
+			record: map[string]any{"type": "A", "name": "*.preview", "data": "1.2.3.4"},
+		},
+		{
+			name:   "underscore service labels",
+			record: map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "priority": 10, "port": 5060, "weight": 5},
+		},
+		{
+			name:   "fqdn",
+			record: map[string]any{"type": "CNAME", "name": "WWW.Example.com.", "data": "Target.Example.com."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockDomainsClient{
+				domain:         testDomain(),
+				expectedDomain: "example.com",
+			}
+			d := drivers.NewDNSDriverWithClient(mock)
+
+			_, err := d.Update(context.Background(), interfaces.ResourceRef{
+				Name: "example-dns", ProviderID: "example.com",
+			}, interfaces.ResourceSpec{
+				Name: "example-dns",
+				Config: map[string]any{
+					"domain":  "example.com",
+					"records": []any{tt.record},
+				},
+			})
+			if err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			if len(mock.createdRecords) != 1 {
+				t.Fatalf("created records = %d, want 1", len(mock.createdRecords))
+			}
+		})
+	}
+}
+
 func TestDNSDriver_Update_CreatesDistinctCAAWhenIdentityFieldsDiffer(t *testing.T) {
 	mock := &mockDomainsClient{
 		domain:         testDomain(),
@@ -1075,6 +1180,95 @@ func TestDNSDriver_Update_CreatesDistinctCAAWhenIdentityFieldsDiffer(t *testing.
 	}
 	if got := mock.createdRecords[0].req.Tag; got != "issuewild" {
 		t.Errorf("created CAA tag = %q, want issuewild", got)
+	}
+}
+
+func TestDNSDriver_Update_MatchesHostnameValuedRecordsCanonically(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing godo.DomainRecord
+		desired  map[string]any
+	}{
+		{
+			name:     "CNAME",
+			existing: godo.DomainRecord{ID: 10, Type: "CNAME", Name: "www", Data: "Target.Example.com.", TTL: 300},
+			desired:  map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com", "ttl": 300},
+		},
+		{
+			name:     "MX",
+			existing: godo.DomainRecord{ID: 10, Type: "MX", Name: "@", Data: "Mail.Example.com.", TTL: 300, Priority: 10},
+			desired:  map[string]any{"type": "MX", "name": "@", "data": "mail.example.com", "ttl": 300, "priority": 10},
+		},
+		{
+			name:     "NS",
+			existing: godo.DomainRecord{ID: 10, Type: "NS", Name: "@", Data: "NS1.Example.com.", TTL: 300},
+			desired:  map[string]any{"type": "NS", "name": "@", "data": "ns1.example.com", "ttl": 300},
+		},
+		{
+			name:     "SRV",
+			existing: godo.DomainRecord{ID: 10, Type: "SRV", Name: "_sip._tcp", Data: "SIP.Example.com.", TTL: 300, Priority: 10, Port: 5060, Weight: 5},
+			desired:  map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 300, "priority": 10, "port": 5060, "weight": 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockDomainsClient{
+				domain:  testDomain(),
+				records: []godo.DomainRecord{tt.existing},
+			}
+			d := drivers.NewDNSDriverWithClient(mock)
+
+			_, err := d.Update(context.Background(), interfaces.ResourceRef{
+				Name: "example-dns", ProviderID: "example.com",
+			}, interfaces.ResourceSpec{
+				Name: "example-dns",
+				Config: map[string]any{
+					"domain":  "example.com",
+					"records": []any{tt.desired},
+				},
+			})
+			if err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			if len(mock.createdRecords) != 0 {
+				t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
+			}
+			if len(mock.editedRecords) != 0 {
+				t.Fatalf("edited records = %d, want 0", len(mock.editedRecords))
+			}
+		})
+	}
+}
+
+func TestDNSDriver_Update_PreservesTXTCaseSensitiveIdentity(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain: testDomain(),
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "TXT", Name: "@", Data: "Token=ABC", TTL: 300},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "token=abc", "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(mock.editedRecords) != 0 {
+		t.Fatalf("edited records = %d, want 0", len(mock.editedRecords))
+	}
+	if len(mock.createdRecords) != 1 {
+		t.Fatalf("created records = %d, want 1", len(mock.createdRecords))
 	}
 }
 

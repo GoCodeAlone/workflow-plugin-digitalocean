@@ -238,6 +238,51 @@ func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
 	}
 }
 
+func TestDOProvider_Plan_TreatsNoopDriverDiffAsAuthoritative(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name: "example-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{NeedsUpdate: false, NeedsReplace: false},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:       "example-dns",
+			Type:       "infra.dns",
+			ProviderID: "example.com",
+			AppliedConfig: map[string]any{
+				"domain": "example.com",
+				"records": []any{
+					map[string]any{"type": "TXT", "name": "@", "data": "stale", "ttl": 300},
+				},
+			},
+			Outputs: map[string]any{
+				"records": []map[string]any{
+					{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if fake.diffCalls != 1 {
+		t.Fatalf("Diff calls = %d, want 1", fake.diffCalls)
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("plan actions = %+v, want none from authoritative driver diff", plan.Actions)
+	}
+}
+
 // ── fake driver for Apply upsert test ─────────────────────────────────────────
 
 // upsertFakeDriver is a minimal ResourceDriver that:
