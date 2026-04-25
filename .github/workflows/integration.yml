@@ -9,6 +9,12 @@ on:
         required: true
         type: string
 
+# Restrict GITHUB_TOKEN to the minimum permissions needed.
+# This workflow only checks out code and runs tests — it never writes back
+# to the repository or publishes packages.
+permissions:
+  contents: read
+
 env:
   GOPRIVATE: github.com/GoCodeAlone/*
 
