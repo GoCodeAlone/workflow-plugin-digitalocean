@@ -139,9 +139,10 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 		return nil, err
 	}
 	// Resolve firewall rules BEFORE mutating the database. buildUpdateFirewallRules
-	// can fail for config errors (wrong type) or app name→UUID resolution failures;
-	// validating upfront prevents a partial-apply where Resize succeeds but the
-	// subsequent firewall update fails, leaving the DB resized with stale rules.
+	// can fail for config errors (wrong type) or app name→UUID resolution failures,
+	// so validating upfront avoids partial applies caused by those preflight issues.
+	// A later UpdateFirewallRules call can still fail after Resize due to API/service
+	// errors, so this reduces—but does not eliminate—the chance of partial applies.
 	fwRules, fwPresent, fwErr := d.buildUpdateFirewallRules(ctx, spec.Config)
 	if fwErr != nil {
 		return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
