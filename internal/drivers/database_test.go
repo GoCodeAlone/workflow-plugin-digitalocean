@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -540,7 +541,8 @@ func TestDatabaseDriver_Update_WithTrustedSources_AppNameResolved(t *testing.T) 
 }
 
 func TestDatabaseDriver_Create_AppNameNotFound_ReturnsError(t *testing.T) {
-	// When the app name cannot be found in the Apps list, Create must return an error.
+	// When the app name cannot be found in the Apps list, Create must return an
+	// error that wraps ErrResourceNotFound and names the missing app.
 	dbMock := &mockDatabaseClient{db: testDatabase()}
 	appMock := &mockAppClient{listApps: []*godo.App{}} // empty list — name not found
 	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
@@ -557,11 +559,18 @@ func TestDatabaseDriver_Create_AppNameNotFound_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when app name not found, got nil")
 	}
+	if !errors.Is(err, drivers.ErrResourceNotFound) {
+		t.Errorf("expected error to wrap drivers.ErrResourceNotFound; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nonexistent-app") {
+		t.Errorf("expected error to mention missing app name %q; got: %v", "nonexistent-app", err)
+	}
 }
 
 func TestDatabaseDriver_Create_AppType_NoAppsClient_ReturnsError(t *testing.T) {
 	// When no Apps client is configured and the rule value is not UUID-shaped,
-	// Create must return an actionable error rather than sending a bad value to DO.
+	// Create must return an actionable error (not a generic one) that tells the
+	// caller the value is not a UUID and no client is available for lookup.
 	dbMock := &mockDatabaseClient{db: testDatabase()}
 	// NewDatabaseDriverWithClient does NOT wire an apps client.
 	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
@@ -577,5 +586,11 @@ func TestDatabaseDriver_Create_AppType_NoAppsClient_ReturnsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when apps client is nil and value is not UUID, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a UUID") {
+		t.Errorf("expected error to mention 'not a UUID'; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "bmw-staging") {
+		t.Errorf("expected error to mention the offending value %q; got: %v", "bmw-staging", err)
 	}
 }
