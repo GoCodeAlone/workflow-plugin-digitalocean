@@ -66,9 +66,9 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 	if err != nil {
 		return nil, fmt.Errorf("dns read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	records, _, err := d.client.Records(ctx, domain, nil)
+	records, err := d.listRecords(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
+		return nil, err
 	}
 	return dnsOutput(dom, ref.Name, records), nil
 }
@@ -110,14 +110,17 @@ func (d *DNSDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*
 
 // upsertRecords creates or updates DNS records for a domain.
 func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map[string]any) error {
-	records := declaredDNSRecords(config)
+	records, err := declaredDNSRecords(config)
+	if err != nil {
+		return err
+	}
 	if len(records) == 0 {
 		return nil
 	}
 
-	existing, _, err := d.client.Records(ctx, domain, nil)
+	existing, err := d.listRecords(ctx, domain)
 	if err != nil {
-		return fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
+		return err
 	}
 
 	existingByKey := make(map[string][]godo.DomainRecord)
@@ -153,39 +156,187 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, config map
 	return nil
 }
 
-func declaredDNSRecords(config map[string]any) []godo.DomainRecordEditRequest {
-	raw, ok := config["records"].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]godo.DomainRecordEditRequest, 0, len(raw))
-	for _, rec := range raw {
-		m, _ := rec.(map[string]any)
-		if m == nil {
-			continue
+func (d *DNSDriver) listRecords(ctx context.Context, domain string) ([]godo.DomainRecord, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	var out []godo.DomainRecord
+	for {
+		records, resp, err := d.client.Records(ctx, domain, opts)
+		if err != nil {
+			return nil, fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
 		}
-		out = append(out, dnsRecordEditRequestFromConfig(m))
+		out = append(out, records...)
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
 	}
-	return out
+	return out, nil
 }
 
-func dnsRecordEditRequestFromConfig(m map[string]any) godo.DomainRecordEditRequest {
-	ttl, _ := intFromConfig(m, "ttl", 300)
-	priority, _ := intFromConfig(m, "priority", 0)
-	port, _ := intFromConfig(m, "port", 0)
-	weight, _ := intFromConfig(m, "weight", 0)
-	flags, _ := intFromConfig(m, "flags", 0)
+func declaredDNSRecords(config map[string]any) ([]godo.DomainRecordEditRequest, error) {
+	rawValue, ok := config["records"]
+	if !ok {
+		return nil, nil
+	}
+	raw, ok := rawValue.([]any)
+	if !ok {
+		return nil, fmt.Errorf("dns records must be a list")
+	}
+	out := make([]godo.DomainRecordEditRequest, 0, len(raw))
+	seen := make(map[string]godo.DomainRecordEditRequest)
+	for i, rec := range raw {
+		m, ok := rec.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("dns records[%d] must be an object", i)
+		}
+		req, err := dnsRecordEditRequestFromConfig(i, m)
+		if err != nil {
+			return nil, err
+		}
+		key := dnsRecordIdentity(req.Type, req.Name, req.Data)
+		if existing, exists := seen[key]; exists {
+			if !dnsRecordRequestsEqual(existing, req) {
+				return nil, fmt.Errorf("dns conflicting duplicate DNS record %s/%s data %q", req.Type, req.Name, req.Data)
+			}
+			continue
+		}
+		seen[key] = req
+		out = append(out, req)
+	}
+	return out, nil
+}
+
+func dnsRecordEditRequestFromConfig(index int, m map[string]any) (godo.DomainRecordEditRequest, error) {
+	recordType, err := dnsOptionalStringField(index, m, "type", "A")
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	recordType = strings.ToUpper(recordType)
+	if !isSupportedDNSRecordType(recordType) {
+		return godo.DomainRecordEditRequest{}, fmt.Errorf("dns records[%d].type %q is not supported", index, recordType)
+	}
+	name, err := dnsOptionalStringField(index, m, "name", "@")
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	data, err := dnsRequiredStringField(index, m, "data")
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	tag, err := dnsOptionalStringField(index, m, "tag", "")
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	ttl, err := dnsOptionalIntField(index, m, "ttl", 300, true)
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	priority, err := dnsOptionalIntField(index, m, "priority", 0, false)
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	port, err := dnsOptionalIntField(index, m, "port", 0, false)
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	weight, err := dnsOptionalIntField(index, m, "weight", 0, false)
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	flags, err := dnsOptionalIntField(index, m, "flags", 0, false)
+	if err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
 	return godo.DomainRecordEditRequest{
-		Type:     strings.ToUpper(strFromConfig(m, "type", "A")),
-		Name:     strFromConfig(m, "name", "@"),
-		Data:     strFromConfig(m, "data", ""),
+		Type:     recordType,
+		Name:     name,
+		Data:     data,
 		TTL:      ttl,
 		Priority: priority,
 		Port:     port,
 		Weight:   weight,
 		Flags:    flags,
-		Tag:      strFromConfig(m, "tag", ""),
+		Tag:      tag,
+	}, nil
+}
+
+func dnsOptionalStringField(index int, m map[string]any, key, defaultValue string) (string, error) {
+	value, ok := m[key]
+	if !ok {
+		return defaultValue, nil
 	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("dns records[%d].%s must be a string", index, key)
+	}
+	if text == "" && defaultValue != "" {
+		return "", fmt.Errorf("dns records[%d].%s must not be empty", index, key)
+	}
+	return text, nil
+}
+
+func dnsRequiredStringField(index int, m map[string]any, key string) (string, error) {
+	value, ok := m[key]
+	if !ok {
+		return "", fmt.Errorf("dns records[%d].%s is required", index, key)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("dns records[%d].%s must be a string", index, key)
+	}
+	if text == "" {
+		return "", fmt.Errorf("dns records[%d].%s is required", index, key)
+	}
+	return text, nil
+}
+
+func dnsOptionalIntField(index int, m map[string]any, key string, defaultValue int, positive bool) (int, error) {
+	value, ok := m[key]
+	if !ok {
+		return defaultValue, nil
+	}
+	var out int
+	switch typed := value.(type) {
+	case int:
+		out = typed
+	case int64:
+		out = int(typed)
+	case float64:
+		out = int(typed)
+		if typed != float64(out) {
+			return 0, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
+		}
+	default:
+		return 0, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
+	}
+	if positive && out <= 0 {
+		return 0, fmt.Errorf("dns records[%d].%s must be positive", index, key)
+	}
+	if !positive && out < 0 {
+		return 0, fmt.Errorf("dns records[%d].%s must be non-negative", index, key)
+	}
+	return out, nil
+}
+
+func isSupportedDNSRecordType(recordType string) bool {
+	switch recordType {
+	case "A", "AAAA", "CAA", "CNAME", "MX", "NS", "SRV", "TXT":
+		return true
+	default:
+		return false
+	}
+}
+
+func dnsRecordRequestsEqual(a, b godo.DomainRecordEditRequest) bool {
+	return strings.EqualFold(a.Type, b.Type) &&
+		strings.EqualFold(a.Name, b.Name) &&
+		a.Data == b.Data &&
+		a.TTL == b.TTL &&
+		a.Priority == b.Priority &&
+		a.Port == b.Port &&
+		a.Weight == b.Weight &&
+		a.Flags == b.Flags &&
+		a.Tag == b.Tag
 }
 
 func dnsRecordIdentity(recordType, name, data string) string {
