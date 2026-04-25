@@ -587,8 +587,8 @@ func TestDatabaseDriver_Create_AppType_NoAppsClient_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when apps client is nil and value is not UUID, got nil")
 	}
-	if !strings.Contains(err.Error(), "not a UUID") {
-		t.Errorf("expected error to mention 'not a UUID'; got: %v", err)
+	if !strings.Contains(err.Error(), "not UUIDs") {
+		t.Errorf("expected error to mention 'not UUIDs'; got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "bmw-staging") {
 		t.Errorf("expected error to mention the offending value %q; got: %v", "bmw-staging", err)

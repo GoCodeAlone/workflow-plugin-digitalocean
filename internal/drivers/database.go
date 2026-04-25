@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -268,9 +269,13 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 			names = append(names, n)
 		}
 		sort.Strings(names)
+		quoted := make([]string, len(names))
+		for i, n := range names {
+			quoted[i] = fmt.Sprintf("%q", n)
+		}
 		return nil, fmt.Errorf(
-			"trusted_source type=app value %q is not a UUID and no Apps client is configured for name lookup; pass the app UUID directly",
-			names[0],
+			"trusted_sources: type=app value(s) %s are not UUIDs and no Apps client is configured for name lookup; pass app UUIDs directly",
+			strings.Join(quoted, ", "),
 		)
 	}
 	resolved := make(map[string]string, len(needed))
