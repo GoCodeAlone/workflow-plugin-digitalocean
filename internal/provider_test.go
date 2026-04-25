@@ -149,6 +149,95 @@ func TestConfigHash_Empty(t *testing.T) {
 	}
 }
 
+type planDiffFakeDriver struct {
+	diffResult      *interfaces.DiffResult
+	diffCalls       int
+	receivedSpec    interfaces.ResourceSpec
+	receivedCurrent *interfaces.ResourceOutput
+}
+
+func (f *planDiffFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
+func (f *planDiffFakeDriver) Diff(_ context.Context, spec interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	f.diffCalls++
+	f.receivedSpec = spec
+	f.receivedCurrent = current
+	return f.diffResult, nil
+}
+func (f *planDiffFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) SensitiveKeys() []string { return nil }
+
+func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name: "example-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "records[TXT/@/expected]", Old: nil, New: "expected"},
+			},
+		},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:          "example-dns",
+			Type:          "infra.dns",
+			ProviderID:    "example.com",
+			AppliedConfig: spec.Config,
+			Outputs: map[string]any{
+				"records": []map[string]any{
+					{"type": "TXT", "name": "@", "data": "other", "ttl": 300},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if fake.diffCalls != 1 {
+		t.Fatalf("Diff calls = %d, want 1", fake.diffCalls)
+	}
+	if fake.receivedCurrent == nil {
+		t.Fatal("Diff current = nil, want reconstructed ResourceOutput")
+	}
+	if fake.receivedCurrent.ProviderID != "example.com" {
+		t.Errorf("Diff current ProviderID = %q, want example.com", fake.receivedCurrent.ProviderID)
+	}
+	if len(plan.Actions) != 1 {
+		t.Fatalf("plan actions = %d, want 1", len(plan.Actions))
+	}
+	action := plan.Actions[0]
+	if action.Action != "update" {
+		t.Fatalf("plan action = %q, want update", action.Action)
+	}
+	if len(action.Changes) != 1 || action.Changes[0].Path != "records[TXT/@/expected]" {
+		t.Fatalf("plan action changes = %+v, want driver changes", action.Changes)
+	}
+}
+
 // ── fake driver for Apply upsert test ─────────────────────────────────────────
 
 // upsertFakeDriver is a minimal ResourceDriver that:

@@ -138,7 +138,7 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 }
 
 // Plan computes the set of actions needed to reach the desired state.
-func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	currentByName := make(map[string]interfaces.ResourceState, len(current))
 	for _, r := range current {
 		currentByName[r.Name] = r
@@ -158,6 +158,21 @@ func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, 
 			})
 			continue
 		}
+		if driver, err := p.ResourceDriver(spec.Type); err == nil {
+			diff, err := driver.Diff(ctx, spec, resourceOutputFromState(cur))
+			if err != nil {
+				return nil, fmt.Errorf("plan diff %s/%s: %w", spec.Type, spec.Name, err)
+			}
+			if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
+				plan.Actions = append(plan.Actions, interfaces.PlanAction{
+					Action:   "update",
+					Resource: spec,
+					Current:  &cur,
+					Changes:  diff.Changes,
+				})
+				continue
+			}
+		}
 		if configHash(cur.AppliedConfig) != configHash(spec.Config) {
 			plan.Actions = append(plan.Actions, interfaces.PlanAction{
 				Action:   "update",
@@ -167,6 +182,15 @@ func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, 
 		}
 	}
 	return plan, nil
+}
+
+func resourceOutputFromState(state interfaces.ResourceState) *interfaces.ResourceOutput {
+	return &interfaces.ResourceOutput{
+		Name:       state.Name,
+		Type:       state.Type,
+		ProviderID: state.ProviderID,
+		Outputs:    state.Outputs,
+	}
 }
 
 // upsertSupporter is an optional interface for ResourceDrivers that support

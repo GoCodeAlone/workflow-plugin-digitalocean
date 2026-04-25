@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -139,11 +140,11 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 	}
 	currentByKey := make(map[string][]godo.DomainRecord)
 	for _, record := range currentRecords {
-		key := dnsRecordIdentity(record.Type, record.Name, record.Data)
+		key := dnsDomainRecordIdentity(record)
 		currentByKey[key] = append(currentByKey[key], record)
 	}
 	for _, desiredRecord := range desiredRecords {
-		key := dnsRecordIdentity(desiredRecord.Type, desiredRecord.Name, desiredRecord.Data)
+		key := dnsRecordRequestIdentity(desiredRecord)
 		candidates := currentByKey[key]
 		if len(candidates) == 0 {
 			return &interfaces.DiffResult{NeedsUpdate: true}, nil
@@ -185,13 +186,13 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, records []
 
 	existingByKey := make(map[string][]godo.DomainRecord)
 	for _, r := range existing {
-		key := dnsRecordIdentity(r.Type, r.Name, r.Data)
+		key := dnsDomainRecordIdentity(r)
 		existingByKey[key] = append(existingByKey[key], r)
 	}
 
 	seenDeclared := make(map[string]struct{})
 	for _, editReq := range records {
-		key := dnsRecordIdentity(editReq.Type, editReq.Name, editReq.Data)
+		key := dnsRecordRequestIdentity(editReq)
 		if _, seen := seenDeclared[key]; seen {
 			continue
 		}
@@ -244,7 +245,7 @@ func dnsDomainFromConfig(config map[string]any, fallback string) (string, error)
 	if domain == "" {
 		return "", fmt.Errorf("dns domain is required")
 	}
-	if !interfaces.ValidateProviderID(domain, interfaces.IDFormatDomainName) {
+	if !isDigitalOceanManagedDomainName(domain) {
 		return "", fmt.Errorf("dns domain %q is not a valid domain name", domain)
 	}
 	return domain, nil
@@ -262,10 +263,16 @@ func dnsDomainFromConfigIfPresent(config map[string]any) (string, bool, error) {
 	if domain == "" {
 		return "", true, fmt.Errorf("dns domain must not be empty")
 	}
-	if !interfaces.ValidateProviderID(domain, interfaces.IDFormatDomainName) {
+	if !isDigitalOceanManagedDomainName(domain) {
 		return "", true, fmt.Errorf("dns domain %q is not a valid domain name", domain)
 	}
 	return domain, true, nil
+}
+
+func isDigitalOceanManagedDomainName(domain string) bool {
+	return !strings.HasSuffix(domain, ".") &&
+		strings.Contains(domain, ".") &&
+		interfaces.ValidateProviderID(domain, interfaces.IDFormatDomainName)
 }
 
 func declaredDNSRecords(config map[string]any) ([]godo.DomainRecordEditRequest, error) {
@@ -285,7 +292,7 @@ func declaredDNSRecords(config map[string]any) ([]godo.DomainRecordEditRequest, 
 		if err != nil {
 			return nil, err
 		}
-		key := dnsRecordIdentity(req.Type, req.Name, req.Data)
+		key := dnsRecordRequestIdentity(req)
 		if existing, exists := seen[key]; exists {
 			if !dnsRecordRequestsEqual(existing, req) {
 				return nil, fmt.Errorf("dns conflicting duplicate DNS record %s/%s data %q", req.Type, req.Name, req.Data)
@@ -370,27 +377,27 @@ func dnsRecordEditRequestFromConfig(index int, m map[string]any) (godo.DomainRec
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	ttl, err := dnsOptionalIntField(index, m, "ttl", 300, true)
+	ttl, _, err := dnsOptionalIntField(index, m, "ttl", 300, true)
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	priority, err := dnsOptionalIntField(index, m, "priority", 0, false)
+	priority, hasPriority, err := dnsOptionalIntField(index, m, "priority", 0, false)
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	port, err := dnsOptionalIntField(index, m, "port", 0, false)
+	port, hasPort, err := dnsOptionalIntField(index, m, "port", 0, false)
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	weight, err := dnsOptionalIntField(index, m, "weight", 0, false)
+	weight, hasWeight, err := dnsOptionalIntField(index, m, "weight", 0, false)
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	flags, err := dnsOptionalIntField(index, m, "flags", 0, false)
+	flags, _, err := dnsOptionalIntField(index, m, "flags", 0, false)
 	if err != nil {
 		return godo.DomainRecordEditRequest{}, err
 	}
-	return godo.DomainRecordEditRequest{
+	req := godo.DomainRecordEditRequest{
 		Type:     recordType,
 		Name:     name,
 		Data:     data,
@@ -400,7 +407,11 @@ func dnsRecordEditRequestFromConfig(index int, m map[string]any) (godo.DomainRec
 		Weight:   weight,
 		Flags:    flags,
 		Tag:      tag,
-	}, nil
+	}
+	if err := validateDNSRecordRequest(index, req, hasPriority, hasPort, hasWeight); err != nil {
+		return godo.DomainRecordEditRequest{}, err
+	}
+	return req, nil
 }
 
 func dnsOptionalStringField(index int, m map[string]any, key, defaultValue string) (string, error) {
@@ -433,10 +444,10 @@ func dnsRequiredStringField(index int, m map[string]any, key string) (string, er
 	return text, nil
 }
 
-func dnsOptionalIntField(index int, m map[string]any, key string, defaultValue int, positive bool) (int, error) {
+func dnsOptionalIntField(index int, m map[string]any, key string, defaultValue int, positive bool) (int, bool, error) {
 	value, ok := m[key]
 	if !ok {
-		return defaultValue, nil
+		return defaultValue, false, nil
 	}
 	var out int
 	switch typed := value.(type) {
@@ -447,18 +458,81 @@ func dnsOptionalIntField(index int, m map[string]any, key string, defaultValue i
 	case float64:
 		out = int(typed)
 		if typed != float64(out) {
-			return 0, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
+			return 0, true, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
 		}
 	default:
-		return 0, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
+		return 0, true, fmt.Errorf("dns records[%d].%s must be an integer", index, key)
 	}
 	if positive && out <= 0 {
-		return 0, fmt.Errorf("dns records[%d].%s must be positive", index, key)
+		return 0, true, fmt.Errorf("dns records[%d].%s must be positive", index, key)
 	}
 	if !positive && out < 0 {
-		return 0, fmt.Errorf("dns records[%d].%s must be non-negative", index, key)
+		return 0, true, fmt.Errorf("dns records[%d].%s must be non-negative", index, key)
 	}
-	return out, nil
+	return out, true, nil
+}
+
+func validateDNSRecordRequest(index int, req godo.DomainRecordEditRequest, hasPriority, hasPort, hasWeight bool) error {
+	switch req.Type {
+	case "A":
+		addr, err := netip.ParseAddr(req.Data)
+		if err != nil || !addr.Is4() {
+			return fmt.Errorf("dns records[%d].data must be an IPv4 address", index)
+		}
+	case "AAAA":
+		addr, err := netip.ParseAddr(req.Data)
+		if err != nil || !addr.Is6() {
+			return fmt.Errorf("dns records[%d].data must be an IPv6 address", index)
+		}
+	case "CNAME":
+		if _, err := netip.ParseAddr(req.Data); err == nil {
+			return fmt.Errorf("dns records[%d].data must be a hostname for CNAME records", index)
+		}
+	case "MX":
+		if !hasPriority {
+			return fmt.Errorf("dns records[%d].priority is required for MX records", index)
+		}
+		if err := validateDNSUint16(index, "priority", req.Priority); err != nil {
+			return err
+		}
+	case "SRV":
+		if !hasPriority {
+			return fmt.Errorf("dns records[%d].priority is required for SRV records", index)
+		}
+		if !hasPort {
+			return fmt.Errorf("dns records[%d].port is required for SRV records", index)
+		}
+		if !hasWeight {
+			return fmt.Errorf("dns records[%d].weight is required for SRV records", index)
+		}
+		if err := validateDNSUint16(index, "priority", req.Priority); err != nil {
+			return err
+		}
+		if req.Port <= 0 || req.Port > 65535 {
+			return fmt.Errorf("dns records[%d].port must be between 1 and 65535", index)
+		}
+		if err := validateDNSUint16(index, "weight", req.Weight); err != nil {
+			return err
+		}
+	case "CAA":
+		if req.Tag == "" {
+			return fmt.Errorf("dns records[%d].tag is required for CAA records", index)
+		}
+		if strings.ContainsAny(req.Tag, " \t\r\n") {
+			return fmt.Errorf("dns records[%d].tag must not contain whitespace", index)
+		}
+		if req.Flags < 0 || req.Flags > 255 {
+			return fmt.Errorf("dns records[%d].flags must be between 0 and 255", index)
+		}
+	}
+	return nil
+}
+
+func validateDNSUint16(index int, field string, value int) error {
+	if value < 0 || value > 65535 {
+		return fmt.Errorf("dns records[%d].%s must be between 0 and 65535", index, field)
+	}
+	return nil
 }
 
 func isSupportedDNSRecordType(recordType string) bool {
@@ -531,8 +605,25 @@ func dnsDomainRecordFromRequest(req godo.DomainRecordEditRequest) godo.DomainRec
 	}
 }
 
-func dnsRecordIdentity(recordType, name, data string) string {
-	return strings.ToUpper(recordType) + "\x00" + strings.ToLower(name) + "\x00" + data
+func dnsRecordRequestIdentity(req godo.DomainRecordEditRequest) string {
+	return dnsRecordIdentity(req.Type, req.Name, req.Data, req.Priority, req.Port, req.Weight, req.Flags, req.Tag)
+}
+
+func dnsDomainRecordIdentity(record godo.DomainRecord) string {
+	return dnsRecordIdentity(record.Type, record.Name, record.Data, record.Priority, record.Port, record.Weight, record.Flags, record.Tag)
+}
+
+func dnsRecordIdentity(recordType, name, data string, priority, port, weight, flags int, tag string) string {
+	parts := []string{strings.ToUpper(recordType), strings.ToLower(name), data}
+	switch strings.ToUpper(recordType) {
+	case "CAA":
+		parts = append(parts, fmt.Sprint(flags), strings.ToLower(tag))
+	case "MX":
+		parts = append(parts, fmt.Sprint(priority))
+	case "SRV":
+		parts = append(parts, fmt.Sprint(priority), fmt.Sprint(port), fmt.Sprint(weight))
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func dnsRecordMatchesRequest(record godo.DomainRecord, req godo.DomainRecordEditRequest) bool {

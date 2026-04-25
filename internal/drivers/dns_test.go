@@ -309,6 +309,8 @@ func TestDNSDriver_Create_RejectsMalformedDomainBeforeAPICalls(t *testing.T) {
 		{name: "non string", domain: 42},
 		{name: "empty string", domain: ""},
 		{name: "invalid domain name", domain: "not a domain"},
+		{name: "single label", domain: "example"},
+		{name: "trailing dot fqdn", domain: "example.com."},
 	}
 
 	for _, tt := range tests {
@@ -377,6 +379,31 @@ func TestDNSDriver_Create_AcceptsRecordMapSliceConfig(t *testing.T) {
 	}
 	if got := mock.createdRecords[0].req.Data; got != "1.2.3.4" {
 		t.Errorf("created record data = %q, want 1.2.3.4", got)
+	}
+}
+
+func TestDNSDriver_Create_AcceptsDistinctCAARecordsWithSameData(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "issue", "flags": 0},
+				map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "issuewild", "flags": 0},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(mock.createdRecords) != 2 {
+		t.Fatalf("created records = %d, want 2", len(mock.createdRecords))
 	}
 }
 
@@ -954,6 +981,36 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			record:  map[string]any{"type": "MX", "name": "@", "data": "mail.example.com", "priority": -1},
 			wantErr: `records[0].priority must be non-negative`,
 		},
+		{
+			name:    "A data must be IPv4",
+			record:  map[string]any{"type": "A", "name": "@", "data": "2001:db8::1"},
+			wantErr: `records[0].data must be an IPv4 address`,
+		},
+		{
+			name:    "AAAA data must be IPv6",
+			record:  map[string]any{"type": "AAAA", "name": "@", "data": "192.0.2.10"},
+			wantErr: `records[0].data must be an IPv6 address`,
+		},
+		{
+			name:    "MX priority required",
+			record:  map[string]any{"type": "MX", "name": "@", "data": "mail.example.com"},
+			wantErr: `records[0].priority is required for MX records`,
+		},
+		{
+			name:    "SRV port required",
+			record:  map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "priority": 10, "weight": 5},
+			wantErr: `records[0].port is required for SRV records`,
+		},
+		{
+			name:    "CAA tag required",
+			record:  map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "flags": 0},
+			wantErr: `records[0].tag is required for CAA records`,
+		},
+		{
+			name:    "CAA flags range",
+			record:  map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "issue", "flags": 256},
+			wantErr: `records[0].flags must be between 0 and 255`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -983,6 +1040,41 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 				t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
 			}
 		})
+	}
+}
+
+func TestDNSDriver_Update_CreatesDistinctCAAWhenIdentityFieldsDiffer(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CAA", Name: "@", Data: "letsencrypt.org", TTL: 300, Tag: "issue", Flags: 0},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "ttl": 300, "tag": "issuewild", "flags": 0},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(mock.editedRecords) != 0 {
+		t.Fatalf("edited records = %d, want 0", len(mock.editedRecords))
+	}
+	if len(mock.createdRecords) != 1 {
+		t.Fatalf("created records = %d, want 1", len(mock.createdRecords))
+	}
+	if got := mock.createdRecords[0].req.Tag; got != "issuewild" {
+		t.Errorf("created CAA tag = %q, want issuewild", got)
 	}
 }
 
@@ -1020,7 +1112,7 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 					"ttl":      600,
 					"priority": 20,
 					"port":     5060,
-					"weight":   30,
+					"weight":   10,
 					"flags":    1,
 					"tag":      "issue",
 				},
@@ -1040,11 +1132,62 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 		t.Errorf("edited ID = %d, want 10", got)
 	}
 	req := mock.editedRecords[0].req
-	if req.TTL != 600 || req.Weight != 30 {
-		t.Errorf("edited request TTL/Weight = %d/%d, want 600/30", req.TTL, req.Weight)
+	if req.TTL != 600 || req.Weight != 10 {
+		t.Errorf("edited request TTL/Weight = %d/%d, want 600/10", req.TTL, req.Weight)
 	}
 	if req.Priority != 20 || req.Port != 5060 || req.Flags != 1 || req.Tag != "issue" {
 		t.Errorf("edited request = %+v, want supported fields preserved", req)
+	}
+}
+
+func TestDNSDriver_Update_CreatesDistinctSRVWhenIdentityFieldsDiffer(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain: testDomain(),
+		records: []godo.DomainRecord{
+			{
+				ID:       10,
+				Type:     "SRV",
+				Name:     "_sip._tcp",
+				Data:     "sip.example.com",
+				TTL:      300,
+				Priority: 20,
+				Port:     5060,
+				Weight:   10,
+			},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{
+					"type":     "SRV",
+					"name":     "_sip._tcp",
+					"data":     "sip.example.com",
+					"ttl":      300,
+					"priority": 20,
+					"port":     5060,
+					"weight":   30,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(mock.editedRecords) != 0 {
+		t.Fatalf("edited records = %d, want 0", len(mock.editedRecords))
+	}
+	if len(mock.createdRecords) != 1 {
+		t.Fatalf("created records = %d, want 1", len(mock.createdRecords))
+	}
+	if got := mock.createdRecords[0].req.Weight; got != 30 {
+		t.Errorf("created SRV weight = %d, want 30", got)
 	}
 }
 
