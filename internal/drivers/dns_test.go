@@ -2,7 +2,9 @@ package drivers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -14,11 +16,16 @@ import (
 type mockDomainsClient struct {
 	domain          *godo.Domain
 	expectedDomain  string
+	getErr          error
+	createErr       error
+	createdDomains  []string
 	records         []godo.DomainRecord
 	recordPages     [][]godo.DomainRecord
 	recordListCalls []recordListCall
 	createdRecords  []createdRecord
 	editedRecords   []editedRecord
+	createRecordErr error
+	editRecordErr   error
 	err             error
 }
 
@@ -43,11 +50,18 @@ func (m *mockDomainsClient) Create(_ context.Context, req *godo.DomainCreateRequ
 	if err := m.checkDomain(req.Name); err != nil {
 		return nil, nil, err
 	}
+	m.createdDomains = append(m.createdDomains, req.Name)
+	if m.createErr != nil {
+		return nil, nil, m.createErr
+	}
 	return m.domain, nil, m.err
 }
 func (m *mockDomainsClient) Get(_ context.Context, domain string) (*godo.Domain, *godo.Response, error) {
 	if err := m.checkDomain(domain); err != nil {
 		return nil, nil, err
+	}
+	if m.getErr != nil {
+		return nil, nil, m.getErr
 	}
 	return m.domain, nil, m.err
 }
@@ -61,6 +75,12 @@ func (m *mockDomainsClient) CreateRecord(_ context.Context, domain string, req *
 	if err := m.checkDomain(domain); err != nil {
 		return nil, nil, err
 	}
+	if m.createRecordErr != nil {
+		return nil, nil, m.createRecordErr
+	}
+	if m.err != nil {
+		return nil, nil, m.err
+	}
 	id := len(m.allRecords()) + 1
 	record := domainRecordFromEditRequest(id, req)
 	m.createdRecords = append(m.createdRecords, createdRecord{domain: domain, req: *req})
@@ -70,6 +90,12 @@ func (m *mockDomainsClient) CreateRecord(_ context.Context, domain string, req *
 func (m *mockDomainsClient) EditRecord(_ context.Context, domain string, id int, req *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error) {
 	if err := m.checkDomain(domain); err != nil {
 		return nil, nil, err
+	}
+	if m.editRecordErr != nil {
+		return nil, nil, m.editRecordErr
+	}
+	if m.err != nil {
+		return nil, nil, m.err
 	}
 	record := domainRecordFromEditRequest(id, req)
 	m.editedRecords = append(m.editedRecords, editedRecord{domain: domain, id: id, req: *req})
@@ -174,6 +200,13 @@ func testDomain() *godo.Domain {
 	}
 }
 
+func godoStatusErr(code int) error {
+	return &godo.ErrorResponse{
+		Response: &http.Response{StatusCode: code},
+		Message:  http.StatusText(code),
+	}
+}
+
 func TestDNSDriver_Create(t *testing.T) {
 	mock := &mockDomainsClient{domain: testDomain()}
 	d := drivers.NewDNSDriverWithClient(mock)
@@ -193,6 +226,16 @@ func TestDNSDriver_Create(t *testing.T) {
 	if out.ProviderID != "example.com" {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "example.com")
 	}
+	records, ok := out.Outputs["records"].([]map[string]any)
+	if !ok {
+		t.Fatalf("Outputs[records] = %T, want []map[string]any", out.Outputs["records"])
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if got := records[0]["data"]; got != "1.2.3.4" {
+		t.Errorf("created output record data = %v, want 1.2.3.4", got)
+	}
 }
 
 func TestDNSDriver_Create_Error(t *testing.T) {
@@ -206,6 +249,28 @@ func TestDNSDriver_Create_Error(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestDNSDriver_Create_DoesNotCreateOnTransientGetError(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain: testDomain(),
+		getErr: godoStatusErr(http.StatusInternalServerError),
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "example-dns",
+		Config: map[string]any{"domain": "example.com"},
+	})
+	if err == nil {
+		t.Fatal("expected transient get error, got nil")
+	}
+	if !errors.Is(err, interfaces.ErrTransient) {
+		t.Fatalf("error = %v, want ErrTransient", err)
+	}
+	if len(mock.createdDomains) != 0 {
+		t.Fatalf("created domains = %v, want none", mock.createdDomains)
 	}
 }
 
@@ -348,6 +413,32 @@ func TestDNSDriver_Update_Success(t *testing.T) {
 	}
 	if out.ProviderID != "example.com" {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "example.com")
+	}
+}
+
+func TestDNSDriver_Update_RejectsDomainReplacement(t *testing.T) {
+	mock := &mockDomainsClient{domain: testDomain()}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "old.example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "new.example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected domain replacement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot change domain") {
+		t.Fatalf("error = %q, want cannot change domain", err)
+	}
+	if len(mock.createdRecords) != 0 {
+		t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
 	}
 }
 
@@ -546,6 +637,91 @@ func TestDNSDriver_Update_RejectsConflictingDuplicateDeclarations(t *testing.T) 
 	}
 }
 
+func TestDNSDriver_Update_RejectsKnownDNSConflicts(t *testing.T) {
+	tests := []struct {
+		name    string
+		records []any
+	}{
+		{
+			name: "two CNAMEs at same name",
+			records: []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "one.example.com"},
+				map[string]any{"type": "CNAME", "name": "www", "data": "two.example.com"},
+			},
+		},
+		{
+			name: "CNAME conflicts with A",
+			records: []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com"},
+				map[string]any{"type": "A", "name": "www", "data": "1.2.3.4"},
+			},
+		},
+		{
+			name: "CNAME conflicts with AAAA",
+			records: []any{
+				map[string]any{"type": "AAAA", "name": "www", "data": "2001:db8::1"},
+				map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockDomainsClient{
+				domain:         testDomain(),
+				expectedDomain: "example.com",
+			}
+			d := drivers.NewDNSDriverWithClient(mock)
+
+			_, err := d.Update(context.Background(), interfaces.ResourceRef{
+				Name: "example-dns", ProviderID: "example.com",
+			}, interfaces.ResourceSpec{
+				Name: "example-dns",
+				Config: map[string]any{
+					"domain":  "example.com",
+					"records": tt.records,
+				},
+			})
+			if err == nil {
+				t.Fatal("expected DNS conflict error, got nil")
+			}
+			if !strings.Contains(err.Error(), "conflicting DNS record") {
+				t.Fatalf("error = %q, want conflicting DNS record", err)
+			}
+			if len(mock.createdRecords) != 0 {
+				t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
+			}
+		})
+	}
+}
+
+func TestDNSDriver_Update_AllowsMultiValueTXTRecords(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "one"},
+				map[string]any{"type": "TXT", "name": "@", "data": "two"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(mock.createdRecords) != 2 {
+		t.Fatalf("created records = %d, want 2", len(mock.createdRecords))
+	}
+}
+
 func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -681,6 +857,63 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 	}
 }
 
+func TestDNSDriver_Update_CreateRecordErrorDoesNotPersistRecord(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:          testDomain(),
+		expectedDomain:  "example.com",
+		createRecordErr: fmt.Errorf("create record failed"),
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected create record error, got nil")
+	}
+	if len(mock.records) != 0 {
+		t.Fatalf("persisted records = %+v, want none", mock.records)
+	}
+}
+
+func TestDNSDriver_Update_EditRecordErrorDoesNotPersistRecord(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "A", Name: "@", Data: "1.2.3.4", TTL: 300},
+		},
+		editRecordErr: fmt.Errorf("edit record failed"),
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 600},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected edit record error, got nil")
+	}
+	if got := mock.records[0].TTL; got != 300 {
+		t.Fatalf("persisted TTL = %d, want original 300", got)
+	}
+}
+
 func TestDNSDriver_Delete_Success(t *testing.T) {
 	mock := &mockDomainsClient{domain: testDomain()}
 	d := drivers.NewDNSDriverWithClient(mock)
@@ -729,6 +962,112 @@ func TestDNSDriver_Diff_NoChanges(t *testing.T) {
 	}
 	if result.NeedsUpdate {
 		t.Errorf("expected NeedsUpdate=false when current exists")
+	}
+}
+
+func TestDNSDriver_Diff_DetectsMissingDeclaredRecord(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "missing", "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true for missing declared record")
+	}
+}
+
+func TestDNSDriver_Diff_DetectsChangedDeclaredRecordFields(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 300, "priority": 20, "port": 5060, "weight": 10, "flags": 1, "tag": "issue"},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"records": []any{
+				map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 600, "priority": 20, "port": 5060, "weight": 10, "flags": 1, "tag": "issue"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true for changed record fields")
+	}
+}
+
+func TestDNSDriver_Diff_NoChangesForMatchingDeclaredRecords(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"type": "TXT", "name": "@", "data": "one", "ttl": 300},
+				{"type": "TXT", "name": "@", "data": "undeclared", "ttl": 300},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "one", "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=false when declared record exists and matches")
+	}
+}
+
+func TestDNSDriver_Diff_ValidatesDesiredRecords(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "one.example.com"},
+				map[string]any{"type": "A", "name": "www", "data": "1.2.3.4"},
+			},
+		},
+	}, &interfaces.ResourceOutput{ProviderID: "example.com"})
+	if err == nil {
+		t.Fatal("expected desired record validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "conflicting DNS record") {
+		t.Fatalf("error = %q, want conflicting DNS record", err)
 	}
 }
 
