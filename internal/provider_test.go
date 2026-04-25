@@ -245,6 +245,97 @@ func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
 	}
 }
 
+func TestDOProvider_Plan_KeepsDistinctCurrentStatePerAction(t *testing.T) {
+	desired := []interfaces.ResourceSpec{
+		{
+			Name:   "one-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "one.example.com"},
+		},
+		{
+			Name:   "two-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "two.example.com"},
+		},
+	}
+	current := []interfaces.ResourceState{
+		{
+			Name:          "one-dns",
+			Type:          "infra.dns",
+			ProviderID:    "one.example.com",
+			AppliedConfig: map[string]any{"domain": "old-one.example.com"},
+		},
+		{
+			Name:          "two-dns",
+			Type:          "infra.dns",
+			ProviderID:    "two.example.com",
+			AppliedConfig: map[string]any{"domain": "old-two.example.com"},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{NeedsUpdate: true},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), desired, current)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("plan actions = %d, want 2", len(plan.Actions))
+	}
+	if plan.Actions[0].Current == nil || plan.Actions[0].Current.ProviderID != "one.example.com" {
+		t.Fatalf("first action current = %+v, want one.example.com", plan.Actions[0].Current)
+	}
+	if plan.Actions[1].Current == nil || plan.Actions[1].Current.ProviderID != "two.example.com" {
+		t.Fatalf("second action current = %+v, want two.example.com", plan.Actions[1].Current)
+	}
+}
+
+func TestDOProvider_Plan_KeepsDistinctCurrentStatePerConfigHashAction(t *testing.T) {
+	desired := []interfaces.ResourceSpec{
+		{
+			Name:   "one-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "one.example.com"},
+		},
+		{
+			Name:   "two-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "two.example.com"},
+		},
+	}
+	current := []interfaces.ResourceState{
+		{
+			Name:          "one-dns",
+			Type:          "infra.dns",
+			ProviderID:    "one.example.com",
+			AppliedConfig: map[string]any{"domain": "old-one.example.com"},
+		},
+		{
+			Name:          "two-dns",
+			Type:          "infra.dns",
+			ProviderID:    "two.example.com",
+			AppliedConfig: map[string]any{"domain": "old-two.example.com"},
+		},
+	}
+	p := &DOProvider{}
+
+	plan, err := p.Plan(t.Context(), desired, current)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("plan actions = %d, want 2", len(plan.Actions))
+	}
+	if plan.Actions[0].Current == nil || plan.Actions[0].Current.ProviderID != "one.example.com" {
+		t.Fatalf("first action current = %+v, want one.example.com", plan.Actions[0].Current)
+	}
+	if plan.Actions[1].Current == nil || plan.Actions[1].Current.ProviderID != "two.example.com" {
+		t.Fatalf("second action current = %+v, want two.example.com", plan.Actions[1].Current)
+	}
+}
+
 type providerDNSMock struct {
 	domain         *godo.Domain
 	getErrs        []error
