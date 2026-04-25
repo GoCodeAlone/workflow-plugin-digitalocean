@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -137,6 +138,14 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	if err != nil {
 		return nil, err
 	}
+	// Resolve firewall rules BEFORE mutating the database. buildUpdateFirewallRules
+	// can fail for config errors (wrong type) or app name→UUID resolution failures;
+	// validating upfront prevents a partial-apply where Resize succeeds but the
+	// subsequent firewall update fails, leaving the DB resized with stale rules.
+	fwRules, fwPresent, fwErr := d.buildUpdateFirewallRules(ctx, spec.Config)
+	if fwErr != nil {
+		return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
+	}
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
 	_, err = d.client.Resize(ctx, providerID, &godo.DatabaseResizeRequest{
@@ -148,11 +157,9 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	}
 	// Sync firewall rules when trusted_sources key is present in config.
 	// "present but empty" clears all rules; absent key leaves existing rules unchanged.
-	if rules, ok, fwErr := d.buildUpdateFirewallRules(ctx, spec.Config); fwErr != nil {
-		return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
-	} else if ok {
+	if fwPresent {
 		_, err = d.client.UpdateFirewallRules(ctx, providerID, &godo.DatabaseUpdateFirewallRulesRequest{
-			Rules: rules,
+			Rules: fwRules,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
@@ -228,8 +235,10 @@ func (d *DatabaseDriver) SensitiveKeys() []string {
 // in the raw trusted_sources list. A single paginated listing pass is made
 // (potentially multiple page requests) regardless of how many type=app rules
 // exist, avoiding repeated full scans. Pagination stops early once all
-// requested names have been resolved. Returns an error only if the Apps client
-// is unavailable for a non-UUID name, or if the DO API call fails.
+// requested names have been resolved. Returns an error if:
+//   - the Apps client is nil and a non-UUID name requires resolution,
+//   - the DO Apps.List API call fails, or
+//   - a requested app name is not found (wraps ErrResourceNotFound).
 func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map[string]string, error) {
 	// Collect the distinct non-UUID app names that need resolution.
 	needed := map[string]struct{}{}
@@ -251,13 +260,17 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 		return nil, nil // nothing to look up
 	}
 	if d.appsClient == nil {
-		// Surface the first offending name for a clear error message.
-		for name := range needed {
-			return nil, fmt.Errorf(
-				"trusted_source type=app value %q is not a UUID and no Apps client is configured for name lookup; pass the app UUID directly",
-				name,
-			)
+		// Sort names so the error message is deterministic regardless of map
+		// iteration order (important when multiple type=app rules are present).
+		names := make([]string, 0, len(needed))
+		for n := range needed {
+			names = append(names, n)
 		}
+		sort.Strings(names)
+		return nil, fmt.Errorf(
+			"trusted_source type=app value %q is not a UUID and no Apps client is configured for name lookup; pass the app UUID directly",
+			names[0],
+		)
 	}
 	resolved := make(map[string]string, len(needed))
 	opts := &godo.ListOptions{Page: 1, PerPage: 200}
