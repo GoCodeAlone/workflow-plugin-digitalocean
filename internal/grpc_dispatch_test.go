@@ -27,7 +27,9 @@ import (
 // .AsMap(), reproducing the exact type coercions at the gRPC InvokeService
 // boundary:
 //   - All integer types (int, int32, int64, …) → float64 after round-trip
-//   - []string / []int → []any
+//   - Slices must be []any; native typed slices ([]string, []int, etc.) are
+//     rejected by structpb.NewStruct with "proto: invalid type". Convert them
+//     to []any before calling this helper.
 //   - Nested map[string]any is preserved as map[string]any
 //   - nil → nil  (nil *structpb.Struct → structToMap(nil) → nil)
 func grpcRoundTrip(t *testing.T, args map[string]any) map[string]any {
@@ -257,7 +259,9 @@ func TestGRPCDispatch_NilArgs_NoPanic(t *testing.T) {
 		inst   *doModuleInstance
 		method string
 	}{
-		{miProvider, "IaCProvider.Initialize"},
+		// IaCProvider.Initialize is intentionally absent here — it is a no-op by
+		// design (see TestGRPCDispatch_Initialize_IsNoOp_ByDesign) and would always
+		// pass regardless of args, making it vacuous coverage.
 		{miProvider, "IaCProvider.Name"},
 		{miProvider, "IaCProvider.Version"},
 		{miProvider, "IaCProvider.Capabilities"},
@@ -317,7 +321,7 @@ func TestGRPCDispatch_EmptyArgs_NoPanic(t *testing.T) {
 		inst   *doModuleInstance
 		method string
 	}{
-		{miProvider, "IaCProvider.Initialize"},
+		// IaCProvider.Initialize is intentionally absent — see nil-args matrix comment.
 		{miProvider, "IaCProvider.Name"},
 		{miProvider, "IaCProvider.Version"},
 		{miProvider, "IaCProvider.Capabilities"},
@@ -528,5 +532,225 @@ func TestGRPCDispatch_ResourceDriver_HealthCheck_PopulatedArgs(t *testing.T) {
 	}
 	if result["message"] != "active" {
 		t.Errorf("message = %q, want %q", result["message"], "active")
+	}
+}
+
+// ── Fix 1: Initialize no-op contract ─────────────────────────────────────────
+
+// TestGRPCDispatch_Initialize_IsNoOp_ByDesign documents that the dispatch
+// handler for IaCProvider.Initialize is a hardcoded no-op (module_instance.go).
+// The provider's own Initialize method is intentionally never called via this
+// path — the plugin is already initialized during CreateModule. Any args are
+// accepted and silently ignored.
+//
+// This test is deliberately absent from the nil/empty-args matrices because
+// those tests exist to catch dispatch-layer panics; an always-passing case adds
+// no signal. This standalone test makes the no-op contract explicit so future
+// authors understand why Initialize is excluded from the matrices.
+func TestGRPCDispatch_Initialize_IsNoOp_ByDesign(t *testing.T) {
+	fake := &fakeIaCProvider{}
+	mi := &doModuleInstance{provider: fake}
+
+	// Any args — including fully-populated ones — must be accepted without error.
+	result, err := mi.InvokeMethod("IaCProvider.Initialize", grpcRoundTrip(t, map[string]any{
+		"token":  "secret",
+		"region": "nyc3",
+	}))
+	if err != nil {
+		t.Fatalf("Initialize: unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Initialize: expected non-nil result map")
+	}
+	// The provider's Initialize must NOT be called — the dispatch is a no-op.
+	if fake.initializeCalled {
+		t.Error("provider.Initialize was called; dispatch must be a no-op (plugin initialised in CreateModule)")
+	}
+}
+
+// ── Fix 2: grpcRoundTrip contract — []string rejection ───────────────────────
+
+// TestGRPCDispatch_TypedSliceRejectedByStructpb documents the documented
+// constraint in grpcRoundTrip: native typed slices ([]string, []int, etc.) are
+// rejected by structpb.NewStruct. Callers must convert to []any first.
+// This test exists so the contract is machine-verified, not just commented.
+func TestGRPCDispatch_TypedSliceRejectedByStructpb(t *testing.T) {
+	_, err := structpb.NewStruct(map[string]any{
+		"strs": []string{"a", "b"},
+	})
+	if err == nil {
+		t.Fatal("structpb.NewStruct accepted []string — contract violated; update grpcRoundTrip docstring")
+	}
+	// Valid: []any wrapping the same strings passes.
+	_, err = structpb.NewStruct(map[string]any{
+		"strs": []any{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct rejected []any{string}: %v", err)
+	}
+}
+
+// ── Fix 3: currentFromArgs map[string]bool branch + malformed-sensitive ──────
+
+// TestGRPCDispatch_Diff_CurrentSensitive_NativeMapBool documents that the
+// map[string]bool branch in currentFromArgs is dead across the gRPC boundary
+// (structpb.AsMap() only produces map[string]any), but is reachable for
+// in-process callers who pass a native Go ResourceOutput. This test exercises
+// that in-process path directly, without a structpb round-trip.
+func TestGRPCDispatch_Diff_CurrentSensitive_NativeMapBool(t *testing.T) {
+	stub := &stubResourceDriver{diffOutput: &interfaces.DiffResult{NeedsUpdate: false}}
+	provider := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{"infra.database": stub},
+	}
+	mi := &doModuleInstance{provider: provider}
+
+	// Bypass grpcRoundTrip — pass native map[string]bool directly to exercise
+	// the in-process branch (NOT reachable via gRPC; structpb always yields map[string]any).
+	args := map[string]any{
+		"resource_type":       "infra.database",
+		"spec_name":           "my-db",
+		"spec_type":           "infra.database",
+		"spec_config":         map[string]any{},
+		"current_provider_id": "do-db-uuid",
+		"current_name":        "my-db",
+		"current_type":        "infra.database",
+		"current_status":      "running",
+		// Native map[string]bool — only reachable in-process, not via gRPC.
+		"current_sensitive": map[string]bool{"password": true, "api_key": false},
+	}
+
+	_, err := mi.InvokeMethod("ResourceDriver.Diff", args)
+	if err != nil {
+		t.Fatalf("Diff with native map[string]bool: %v", err)
+	}
+	if stub.lastDiffCurrent == nil {
+		t.Fatal("expected non-nil current in Diff call")
+	}
+	if !stub.lastDiffCurrent.Sensitive["password"] {
+		t.Errorf("Sensitive[password] = false, want true (native map[string]bool branch)")
+	}
+}
+
+// TestGRPCDispatch_Diff_CurrentSensitive_MalformedValues verifies that when
+// current_sensitive arrives with non-bool values (e.g. string "true") after the
+// gRPC boundary, the map[string]any decode arm silently drops those entries
+// (only bool values are accepted). This documents the known silent-drop behaviour
+// so callers are aware it is intentional rather than a latent bug.
+func TestGRPCDispatch_Diff_CurrentSensitive_MalformedValues(t *testing.T) {
+	stub := &stubResourceDriver{diffOutput: &interfaces.DiffResult{}}
+	provider := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{"infra.database": stub},
+	}
+	mi := &doModuleInstance{provider: provider}
+
+	// Non-bool value under current_sensitive (e.g. a string "true") arrives from
+	// a misbehaving client. After the decode loop, that key is silently dropped.
+	args := map[string]any{
+		"resource_type":       "infra.database",
+		"spec_name":           "my-db",
+		"spec_type":           "infra.database",
+		"spec_config":         map[string]any{},
+		"current_provider_id": "do-db-uuid",
+		"current_name":        "my-db",
+		"current_type":        "infra.database",
+		"current_status":      "running",
+		"current_sensitive":   map[string]any{"password": "true"}, // string, not bool
+	}
+
+	_, err := mi.InvokeMethod("ResourceDriver.Diff", args)
+	if err != nil {
+		t.Fatalf("Diff with malformed sensitive: %v", err)
+	}
+	if stub.lastDiffCurrent == nil {
+		t.Fatal("expected non-nil current")
+	}
+	// Malformed entry silently dropped — Sensitive map is nil (len == 0 guard).
+	if len(stub.lastDiffCurrent.Sensitive) != 0 {
+		t.Errorf("Sensitive = %v, want empty (malformed non-bool value must be dropped silently)",
+			stub.lastDiffCurrent.Sensitive)
+	}
+}
+
+// ── Fix 4: Plan + Destroy round-trip fidelity ─────────────────────────────────
+
+// TestGRPCDispatch_IaCProvider_Plan_RoundTripFidelity verifies that desired and
+// current slices survive structpb encoding and are correctly decoded before being
+// forwarded to the provider. The fake captures lastDesired/lastCurrent so we can
+// assert post-decode shape, not just that the hardcoded return value came back.
+func TestGRPCDispatch_IaCProvider_Plan_RoundTripFidelity(t *testing.T) {
+	fake := &fakeIaCProvider{planResult: &interfaces.IaCPlan{ID: "plan-rt"}}
+	mi := &doModuleInstance{provider: fake}
+
+	args := grpcRoundTrip(t, map[string]any{
+		"desired": []any{
+			map[string]any{
+				"name":   "my-app",
+				"type":   "infra.container_service",
+				"config": map[string]any{"image": "myapp:v1"},
+			},
+		},
+		"current": []any{
+			map[string]any{
+				"name":        "old-app",
+				"type":        "infra.container_service",
+				"provider_id": "do-old-123",
+				"status":      "running",
+			},
+		},
+	})
+
+	_, err := mi.InvokeMethod("IaCProvider.Plan", args)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(fake.lastDesired) != 1 {
+		t.Fatalf("lastDesired len = %d, want 1", len(fake.lastDesired))
+	}
+	if fake.lastDesired[0].Name != "my-app" {
+		t.Errorf("lastDesired[0].Name = %q, want %q", fake.lastDesired[0].Name, "my-app")
+	}
+	if fake.lastDesired[0].Type != "infra.container_service" {
+		t.Errorf("lastDesired[0].Type = %q, want %q", fake.lastDesired[0].Type, "infra.container_service")
+	}
+	if len(fake.lastCurrent) != 1 {
+		t.Fatalf("lastCurrent len = %d, want 1", len(fake.lastCurrent))
+	}
+	if fake.lastCurrent[0].Name != "old-app" {
+		t.Errorf("lastCurrent[0].Name = %q, want %q", fake.lastCurrent[0].Name, "old-app")
+	}
+}
+
+// TestGRPCDispatch_IaCProvider_Destroy_RoundTripFidelity verifies that refs
+// survive the structpb round-trip and are correctly decoded before being
+// forwarded to the provider. The fake captures lastRefs for post-decode shape
+// assertions.
+func TestGRPCDispatch_IaCProvider_Destroy_RoundTripFidelity(t *testing.T) {
+	fake := &fakeIaCProvider{destroyResult: &interfaces.DestroyResult{
+		Destroyed: []string{"my-db", "my-cache"},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	args := grpcRoundTrip(t, map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-db", "type": "infra.database", "provider_id": "do-db-1"},
+			map[string]any{"name": "my-cache", "type": "infra.cache", "provider_id": "do-cache-1"},
+		},
+	})
+
+	_, err := mi.InvokeMethod("IaCProvider.Destroy", args)
+	if err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if len(fake.lastRefs) != 2 {
+		t.Fatalf("lastRefs len = %d, want 2", len(fake.lastRefs))
+	}
+	if fake.lastRefs[0].Name != "my-db" {
+		t.Errorf("lastRefs[0].Name = %q, want %q", fake.lastRefs[0].Name, "my-db")
+	}
+	if fake.lastRefs[0].ProviderID != "do-db-1" {
+		t.Errorf("lastRefs[0].ProviderID = %q, want %q", fake.lastRefs[0].ProviderID, "do-db-1")
+	}
+	if fake.lastRefs[1].Name != "my-cache" {
+		t.Errorf("lastRefs[1].Name = %q, want %q", fake.lastRefs[1].Name, "my-cache")
 	}
 }
