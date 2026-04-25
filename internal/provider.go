@@ -164,8 +164,12 @@ func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec
 				return nil, fmt.Errorf("plan diff %s/%s: %w", spec.Type, spec.Name, err)
 			}
 			if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
+				action := "update"
+				if diff.NeedsReplace {
+					action = "replace"
+				}
 				plan.Actions = append(plan.Actions, interfaces.PlanAction{
-					Action:   "update",
+					Action:   action,
 					Resource: spec,
 					Current:  &cur,
 					Changes:  diff.Changes,
@@ -257,6 +261,20 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 				ProviderID: action.Current.ProviderID,
 			}
 			out, err = d.Update(ctx, ref, action.Resource)
+		case "replace":
+			if action.Current == nil {
+				err = fmt.Errorf("replace action missing current resource state")
+				break
+			}
+			ref := interfaces.ResourceRef{
+				Name:       action.Resource.Name,
+				Type:       action.Resource.Type,
+				ProviderID: action.Current.ProviderID,
+			}
+			if err = d.Delete(ctx, ref); err != nil {
+				break
+			}
+			out, err = d.Create(ctx, action.Resource)
 		default:
 			err = fmt.Errorf("unknown action %q", action.Action)
 		}

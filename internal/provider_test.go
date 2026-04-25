@@ -238,6 +238,48 @@ func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
 	}
 }
 
+func TestDOProvider_Plan_UsesReplaceForDriverNeedsReplace(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name:   "example-vpc",
+		Type:   "infra.vpc",
+		Config: map[string]any{"ip_range": "10.20.0.0/16"},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{
+			NeedsReplace: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "ip_range", Old: "10.10.0.0/16", New: "10.20.0.0/16", ForceNew: true},
+			},
+		},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.vpc": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:          "example-vpc",
+			Type:          "infra.vpc",
+			ProviderID:    "vpc-123",
+			AppliedConfig: map[string]any{"ip_range": "10.10.0.0/16"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 1 {
+		t.Fatalf("plan actions = %d, want 1", len(plan.Actions))
+	}
+	action := plan.Actions[0]
+	if action.Action != "replace" {
+		t.Fatalf("plan action = %q, want replace", action.Action)
+	}
+	if action.Current == nil || action.Current.ProviderID != "vpc-123" {
+		t.Fatalf("plan current = %+v, want provider ID vpc-123", action.Current)
+	}
+	if len(action.Changes) != 1 || !action.Changes[0].ForceNew {
+		t.Fatalf("plan action changes = %+v, want ForceNew change", action.Changes)
+	}
+}
+
 func TestDOProvider_Plan_TreatsNoopDriverDiffAsAuthoritative(t *testing.T) {
 	spec := interfaces.ResourceSpec{
 		Name: "example-dns",
@@ -280,6 +322,70 @@ func TestDOProvider_Plan_TreatsNoopDriverDiffAsAuthoritative(t *testing.T) {
 	}
 	if len(plan.Actions) != 0 {
 		t.Fatalf("plan actions = %+v, want none from authoritative driver diff", plan.Actions)
+	}
+}
+
+type replaceFakeDriver struct {
+	calls     []string
+	deleteRef interfaces.ResourceRef
+}
+
+func (f *replaceFakeDriver) Create(_ context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.calls = append(f.calls, "create")
+	return &interfaces.ResourceOutput{Name: spec.Name, Type: spec.Type, ProviderID: "new-provider-id"}, nil
+}
+func (f *replaceFakeDriver) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.calls = append(f.calls, "update")
+	return nil, nil
+}
+func (f *replaceFakeDriver) Delete(_ context.Context, ref interfaces.ResourceRef) error {
+	f.calls = append(f.calls, "delete")
+	f.deleteRef = ref
+	return nil
+}
+func (f *replaceFakeDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) SensitiveKeys() []string { return nil }
+
+func TestDOProvider_Apply_ReplaceDeletesThenCreates(t *testing.T) {
+	fake := &replaceFakeDriver{}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.vpc": fake}}
+
+	spec := interfaces.ResourceSpec{Name: "example-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.20.0.0/16"}}
+	plan := &interfaces.IaCPlan{
+		ID: "plan-replace",
+		Actions: []interfaces.PlanAction{{
+			Action:   "replace",
+			Resource: spec,
+			Current:  &interfaces.ResourceState{Name: "example-vpc", Type: "infra.vpc", ProviderID: "old-provider-id"},
+		}},
+	}
+
+	result, err := p.Apply(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply returned errors: %v", result.Errors)
+	}
+	if got, want := strings.Join(fake.calls, ","), "delete,create"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
+	}
+	if fake.deleteRef.ProviderID != "old-provider-id" {
+		t.Fatalf("delete ProviderID = %q, want old-provider-id", fake.deleteRef.ProviderID)
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "new-provider-id" {
+		t.Fatalf("result resources = %+v, want new provider ID", result.Resources)
 	}
 }
 

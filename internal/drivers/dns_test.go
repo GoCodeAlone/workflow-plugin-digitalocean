@@ -466,8 +466,6 @@ func TestDNSDriver_Read_IncludesExistingDomainRecords(t *testing.T) {
 				Priority: 20,
 				Port:     5060,
 				Weight:   30,
-				Flags:    1,
-				Tag:      "issue",
 			},
 		},
 	}
@@ -495,8 +493,8 @@ func TestDNSDriver_Read_IncludesExistingDomainRecords(t *testing.T) {
 		"priority": 20,
 		"port":     5060,
 		"weight":   30,
-		"flags":    1,
-		"tag":      "issue",
+		"flags":    0,
+		"tag":      "",
 	}
 	for key, wantValue := range want {
 		if got := records[0][key]; got != wantValue {
@@ -641,8 +639,6 @@ func TestDNSDriver_Update_SkipsIdenticalRecord(t *testing.T) {
 				Priority: 20,
 				Port:     5060,
 				Weight:   30,
-				Flags:    1,
-				Tag:      "issue",
 			},
 		},
 	}
@@ -663,8 +659,6 @@ func TestDNSDriver_Update_SkipsIdenticalRecord(t *testing.T) {
 					"priority": 20,
 					"port":     5060,
 					"weight":   30,
-					"flags":    1,
-					"tag":      "issue",
 				},
 			},
 		},
@@ -992,6 +986,11 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			wantErr: `records[0].type "BOGUS" is not supported`,
 		},
 		{
+			name:    "SOA desired record unsupported",
+			record:  map[string]any{"type": "SOA", "name": "@", "data": "ns1.digitalocean.com hostmaster.example.com 1 10800 3600 604800 1800"},
+			wantErr: `records[0].type "SOA" is not supported`,
+		},
+		{
 			name:    "invalid name field type",
 			record:  map[string]any{"type": "A", "name": 42, "data": "1.2.3.4"},
 			wantErr: `records[0].name must be a string`,
@@ -1027,14 +1026,34 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			wantErr: `records[0].data must be an IPv4 address`,
 		},
 		{
+			name:    "A rejects priority",
+			record:  map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "priority": 10},
+			wantErr: `records[0].priority is not valid for A records`,
+		},
+		{
+			name:    "A rejects CAA tag",
+			record:  map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "tag": "issue"},
+			wantErr: `records[0].tag is not valid for A records`,
+		},
+		{
 			name:    "AAAA data must be IPv6",
 			record:  map[string]any{"type": "AAAA", "name": "@", "data": "192.0.2.10"},
 			wantErr: `records[0].data must be an IPv6 address`,
 		},
 		{
+			name:    "CNAME rejects SRV port",
+			record:  map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com", "port": 443},
+			wantErr: `records[0].port is not valid for CNAME records`,
+		},
+		{
 			name:    "MX priority required",
 			record:  map[string]any{"type": "MX", "name": "@", "data": "mail.example.com"},
 			wantErr: `records[0].priority is required for MX records`,
+		},
+		{
+			name:    "MX rejects port",
+			record:  map[string]any{"type": "MX", "name": "@", "data": "mail.example.com", "priority": 10, "port": 25},
+			wantErr: `records[0].port is not valid for MX records`,
 		},
 		{
 			name:    "MX data must be hostname",
@@ -1045,6 +1064,11 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			name:    "NS data must be hostname",
 			record:  map[string]any{"type": "NS", "name": "@", "data": "ns_1.example.com"},
 			wantErr: `records[0].data must be a hostname for NS records`,
+		},
+		{
+			name:    "TXT rejects weight",
+			record:  map[string]any{"type": "TXT", "name": "@", "data": "hello", "weight": 5},
+			wantErr: `records[0].weight is not valid for TXT records`,
 		},
 		{
 			name:    "SRV port required",
@@ -1062,9 +1086,19 @@ func TestDNSDriver_Update_RejectsMalformedRecordConfig(t *testing.T) {
 			wantErr: `records[0].tag is required for CAA records`,
 		},
 		{
+			name:    "CAA tag allow-list",
+			record:  map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "accounturi", "flags": 0},
+			wantErr: `records[0].tag must be one of issue, issuewild, iodef`,
+		},
+		{
 			name:    "CAA flags range",
 			record:  map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "issue", "flags": 256},
 			wantErr: `records[0].flags must be between 0 and 255`,
+		},
+		{
+			name:    "CAA rejects priority",
+			record:  map[string]any{"type": "CAA", "name": "@", "data": "letsencrypt.org", "tag": "issue", "flags": 0, "priority": 1},
+			wantErr: `records[0].priority is not valid for CAA records`,
 		},
 	}
 
@@ -1272,6 +1306,43 @@ func TestDNSDriver_Update_PreservesTXTCaseSensitiveIdentity(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_Update_EditsExistingCNAMEWhenTargetChanges(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain: testDomain(),
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "old.example.com", TTL: 300},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "new.example.com", "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(mock.createdRecords) != 0 {
+		t.Fatalf("created records = %d, want 0", len(mock.createdRecords))
+	}
+	if len(mock.editedRecords) != 1 {
+		t.Fatalf("edited records = %d, want 1", len(mock.editedRecords))
+	}
+	if mock.editedRecords[0].id != 10 {
+		t.Fatalf("edited record ID = %d, want 10", mock.editedRecords[0].id)
+	}
+	if got := mock.editedRecords[0].req.Data; got != "new.example.com" {
+		t.Fatalf("edited CNAME data = %q, want new.example.com", got)
+	}
+}
+
 func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *testing.T) {
 	mock := &mockDomainsClient{
 		domain: testDomain(),
@@ -1285,8 +1356,6 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 				Priority: 20,
 				Port:     5060,
 				Weight:   10,
-				Flags:    1,
-				Tag:      "issue",
 			},
 		},
 	}
@@ -1307,8 +1376,6 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 					"priority": 20,
 					"port":     5060,
 					"weight":   10,
-					"flags":    1,
-					"tag":      "issue",
 				},
 			},
 		},
@@ -1329,7 +1396,7 @@ func TestDNSDriver_Update_UpdatesConservativelyMatchedRecordWhenFieldsDiffer(t *
 	if req.TTL != 600 || req.Weight != 10 {
 		t.Errorf("edited request TTL/Weight = %d/%d, want 600/10", req.TTL, req.Weight)
 	}
-	if req.Priority != 20 || req.Port != 5060 || req.Flags != 1 || req.Tag != "issue" {
+	if req.Priority != 20 || req.Port != 5060 {
 		t.Errorf("edited request = %+v, want supported fields preserved", req)
 	}
 }
@@ -1529,7 +1596,7 @@ func TestDNSDriver_Diff_DetectsChangedDeclaredRecordFields(t *testing.T) {
 		ProviderID: "example.com",
 		Outputs: map[string]any{
 			"records": []map[string]any{
-				{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 300, "priority": 20, "port": 5060, "weight": 10, "flags": 1, "tag": "issue"},
+				{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 300, "priority": 20, "port": 5060, "weight": 10},
 			},
 		},
 	}
@@ -1537,7 +1604,7 @@ func TestDNSDriver_Diff_DetectsChangedDeclaredRecordFields(t *testing.T) {
 		Name: "example-dns",
 		Config: map[string]any{
 			"records": []any{
-				map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 600, "priority": 20, "port": 5060, "weight": 10, "flags": 1, "tag": "issue"},
+				map[string]any{"type": "SRV", "name": "_sip._tcp", "data": "sip.example.com", "ttl": 600, "priority": 20, "port": 5060, "weight": 10},
 			},
 		},
 	}, current)
@@ -1575,6 +1642,35 @@ func TestDNSDriver_Diff_NoChangesForMatchingDeclaredRecords(t *testing.T) {
 	}
 	if result.NeedsUpdate {
 		t.Fatal("expected NeedsUpdate=false when declared record exists and matches")
+	}
+}
+
+func TestDNSDriver_Diff_IgnoresSOAInCurrentOutputs(t *testing.T) {
+	mock := &mockDomainsClient{}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	current := &interfaces.ResourceOutput{
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"type": "SOA", "name": "@", "data": "ns1.digitalocean.com hostmaster.example.com 1 10800 3600 604800 1800", "ttl": 1800},
+				{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=false when declared record matches and current has provider-owned SOA")
 	}
 }
 
