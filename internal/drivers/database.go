@@ -225,10 +225,11 @@ func (d *DatabaseDriver) SensitiveKeys() []string {
 }
 
 // resolveAppNamesMap builds a name→UUID map for all non-UUID app names found
-// in the raw trusted_sources list. A single paginated Apps.List call is made
-// regardless of how many type=app rules exist, avoiding repeated full scans.
-// Returns an error only if the Apps client is unavailable for a non-UUID name,
-// or if the DO API call fails.
+// in the raw trusted_sources list. A single paginated listing pass is made
+// (potentially multiple page requests) regardless of how many type=app rules
+// exist, avoiding repeated full scans. Pagination stops early once all
+// requested names have been resolved. Returns an error only if the Apps client
+// is unavailable for a non-UUID name, or if the DO API call fails.
 func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map[string]string, error) {
 	// Collect the distinct non-UUID app names that need resolution.
 	needed := map[string]struct{}{}
@@ -271,6 +272,9 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 			}
 			if _, want := needed[app.Spec.Name]; want {
 				resolved[app.Spec.Name] = app.ID
+				if len(resolved) == len(needed) {
+					return resolved, nil // all names resolved — no more pages needed
+				}
 			}
 		}
 		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
