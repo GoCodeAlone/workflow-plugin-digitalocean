@@ -3,14 +3,21 @@ package internal
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/digitalocean/godo"
 )
 
 // compile-time interface check
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
+
+func providerGodoStatusErr(code int) error {
+	return &godo.ErrorResponse{Response: &http.Response{StatusCode: code, Status: http.StatusText(code)}}
+}
 
 func TestDOProvider_Name(t *testing.T) {
 	p := NewDOProvider()
@@ -146,6 +153,552 @@ func TestConfigHash_Empty(t *testing.T) {
 	h := configHash(nil)
 	if h != "" {
 		t.Errorf("expected empty hash for nil config, got %q", h)
+	}
+}
+
+type planDiffFakeDriver struct {
+	diffResult      *interfaces.DiffResult
+	diffCalls       int
+	receivedSpec    interfaces.ResourceSpec
+	receivedCurrent *interfaces.ResourceOutput
+}
+
+func (f *planDiffFakeDriver) Create(_ context.Context, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
+func (f *planDiffFakeDriver) Diff(_ context.Context, spec interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	f.diffCalls++
+	f.receivedSpec = spec
+	f.receivedCurrent = current
+	return f.diffResult, nil
+}
+func (f *planDiffFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *planDiffFakeDriver) SensitiveKeys() []string { return nil }
+
+func TestDOProvider_Plan_UsesDriverDiffForExistingResource(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name: "example-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "records[TXT/@/expected]", Old: nil, New: "expected"},
+			},
+		},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:          "example-dns",
+			Type:          "infra.dns",
+			ProviderID:    "example.com",
+			AppliedConfig: spec.Config,
+			Outputs: map[string]any{
+				"records": []map[string]any{
+					{"type": "TXT", "name": "@", "data": "other", "ttl": 300},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if fake.diffCalls != 1 {
+		t.Fatalf("Diff calls = %d, want 1", fake.diffCalls)
+	}
+	if fake.receivedCurrent == nil {
+		t.Fatal("Diff current = nil, want reconstructed ResourceOutput")
+	}
+	if fake.receivedCurrent.ProviderID != "example.com" {
+		t.Errorf("Diff current ProviderID = %q, want example.com", fake.receivedCurrent.ProviderID)
+	}
+	if len(plan.Actions) != 1 {
+		t.Fatalf("plan actions = %d, want 1", len(plan.Actions))
+	}
+	action := plan.Actions[0]
+	if action.Action != "update" {
+		t.Fatalf("plan action = %q, want update", action.Action)
+	}
+	if len(action.Changes) != 1 || action.Changes[0].Path != "records[TXT/@/expected]" {
+		t.Fatalf("plan action changes = %+v, want driver changes", action.Changes)
+	}
+}
+
+func TestDOProvider_Plan_KeepsDistinctCurrentStatePerAction(t *testing.T) {
+	desired := []interfaces.ResourceSpec{
+		{
+			Name:   "one-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "one.example.com"},
+		},
+		{
+			Name:   "two-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "two.example.com"},
+		},
+	}
+	current := []interfaces.ResourceState{
+		{
+			Name:          "one-dns",
+			Type:          "infra.dns",
+			ProviderID:    "one.example.com",
+			AppliedConfig: map[string]any{"domain": "old-one.example.com"},
+		},
+		{
+			Name:          "two-dns",
+			Type:          "infra.dns",
+			ProviderID:    "two.example.com",
+			AppliedConfig: map[string]any{"domain": "old-two.example.com"},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{NeedsUpdate: true},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), desired, current)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("plan actions = %d, want 2", len(plan.Actions))
+	}
+	if plan.Actions[0].Current == nil || plan.Actions[0].Current.ProviderID != "one.example.com" {
+		t.Fatalf("first action current = %+v, want one.example.com", plan.Actions[0].Current)
+	}
+	if plan.Actions[1].Current == nil || plan.Actions[1].Current.ProviderID != "two.example.com" {
+		t.Fatalf("second action current = %+v, want two.example.com", plan.Actions[1].Current)
+	}
+}
+
+func TestDOProvider_Plan_KeepsDistinctCurrentStatePerConfigHashAction(t *testing.T) {
+	desired := []interfaces.ResourceSpec{
+		{
+			Name:   "one-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "one.example.com"},
+		},
+		{
+			Name:   "two-dns",
+			Type:   "infra.dns",
+			Config: map[string]any{"domain": "two.example.com"},
+		},
+	}
+	current := []interfaces.ResourceState{
+		{
+			Name:          "one-dns",
+			Type:          "infra.dns",
+			ProviderID:    "one.example.com",
+			AppliedConfig: map[string]any{"domain": "old-one.example.com"},
+		},
+		{
+			Name:          "two-dns",
+			Type:          "infra.dns",
+			ProviderID:    "two.example.com",
+			AppliedConfig: map[string]any{"domain": "old-two.example.com"},
+		},
+	}
+	p := &DOProvider{}
+
+	plan, err := p.Plan(t.Context(), desired, current)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("plan actions = %d, want 2", len(plan.Actions))
+	}
+	if plan.Actions[0].Current == nil || plan.Actions[0].Current.ProviderID != "one.example.com" {
+		t.Fatalf("first action current = %+v, want one.example.com", plan.Actions[0].Current)
+	}
+	if plan.Actions[1].Current == nil || plan.Actions[1].Current.ProviderID != "two.example.com" {
+		t.Fatalf("second action current = %+v, want two.example.com", plan.Actions[1].Current)
+	}
+}
+
+type providerDNSMock struct {
+	domain         *godo.Domain
+	getErrs        []error
+	createErr      error
+	records        []godo.DomainRecord
+	createCalls    int
+	createRecordNs []godo.DomainRecordEditRequest
+}
+
+func (m *providerDNSMock) Create(_ context.Context, req *godo.DomainCreateRequest) (*godo.Domain, *godo.Response, error) {
+	m.createCalls++
+	if m.createErr != nil {
+		return nil, nil, m.createErr
+	}
+	return &godo.Domain{Name: req.Name}, nil, nil
+}
+
+func (m *providerDNSMock) Get(_ context.Context, name string) (*godo.Domain, *godo.Response, error) {
+	if len(m.getErrs) > 0 {
+		err := m.getErrs[0]
+		m.getErrs = m.getErrs[1:]
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if m.domain != nil {
+		return m.domain, nil, nil
+	}
+	return &godo.Domain{Name: name}, nil, nil
+}
+
+func (m *providerDNSMock) Delete(_ context.Context, _ string) (*godo.Response, error) {
+	return nil, nil
+}
+
+func (m *providerDNSMock) CreateRecord(_ context.Context, _ string, req *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error) {
+	m.createRecordNs = append(m.createRecordNs, *req)
+	record := godo.DomainRecord{ID: len(m.records) + 1, Type: req.Type, Name: req.Name, Data: req.Data, TTL: req.TTL, Priority: req.Priority, Port: req.Port, Weight: req.Weight, Flags: req.Flags, Tag: req.Tag}
+	m.records = append(m.records, record)
+	return &record, nil, nil
+}
+
+func (m *providerDNSMock) EditRecord(_ context.Context, _ string, id int, req *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error) {
+	record := godo.DomainRecord{ID: id, Type: req.Type, Name: req.Name, Data: req.Data, TTL: req.TTL, Priority: req.Priority, Port: req.Port, Weight: req.Weight, Flags: req.Flags, Tag: req.Tag}
+	for i := range m.records {
+		if m.records[i].ID == id {
+			m.records[i] = record
+			return &record, nil, nil
+		}
+	}
+	m.records = append(m.records, record)
+	return &record, nil, nil
+}
+
+func (m *providerDNSMock) DeleteRecord(_ context.Context, _ string, _ int) (*godo.Response, error) {
+	return nil, nil
+}
+
+func (m *providerDNSMock) Records(_ context.Context, _ string, _ *godo.ListOptions) ([]godo.DomainRecord, *godo.Response, error) {
+	return append([]godo.DomainRecord(nil), m.records...), &godo.Response{Links: &godo.Links{Pages: &godo.Pages{}}}, nil
+}
+
+func TestDOProvider_Plan_DNSDriverDiffUsesImportedRecordState(t *testing.T) {
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(&providerDNSMock{}),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{{
+		Name:          "site-dns",
+		Type:          "infra.dns",
+		ProviderID:    "example.com",
+		AppliedConfig: spec.Config,
+		Outputs: map[string]any{
+			"records": []map[string]any{{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Action != "update" {
+		t.Fatalf("plan actions = %#v, want one DNS update", plan.Actions)
+	}
+}
+
+func TestDOProvider_Plan_DNSDriverDiffNoopsWhenImportedRecordStateMatches(t *testing.T) {
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(&providerDNSMock{}),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{{
+		Name:          "site-dns",
+		Type:          "infra.dns",
+		ProviderID:    "example.com",
+		AppliedConfig: map[string]any{"domain": "something-stale"},
+		Outputs: map[string]any{
+			"records": []map[string]any{{"type": "TXT", "name": "@", "data": "expected", "ttl": 300}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("plan actions = %#v, want none from matching imported DNS records", plan.Actions)
+	}
+}
+
+func TestDOProvider_Apply_DNSCreateIsIdempotentForExistingDomain(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:  &godo.Domain{Name: "example.com"},
+		records: []godo.DomainRecord{{ID: 10, Type: "A", Name: "@", Data: "1.2.3.4", TTL: 300}},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name: "site-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "1.2.3.4", "ttl": 300},
+			},
+		},
+	}
+
+	result, err := p.Apply(t.Context(), &interfaces.IaCPlan{ID: "plan-dns", Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("Apply errors = %#v", result.Errors)
+	}
+	if mock.createCalls != 0 {
+		t.Fatalf("domain create calls = %d, want 0 for existing domain", mock.createCalls)
+	}
+	if len(mock.createRecordNs) != 0 {
+		t.Fatalf("record create calls = %d, want 0 for matching existing record", len(mock.createRecordNs))
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "example.com" {
+		t.Fatalf("resources = %#v, want adopted DNS output", result.Resources)
+	}
+}
+
+func TestDOProvider_Apply_DNSCreateAdoptsDomainAfterCreateConflict(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:    &godo.Domain{Name: "example.com"},
+		getErrs:   []error{providerGodoStatusErr(http.StatusNotFound), nil},
+		createErr: providerGodoStatusErr(http.StatusConflict),
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+	spec := interfaces.ResourceSpec{
+		Name:   "site-dns",
+		Type:   "infra.dns",
+		Config: map[string]any{"domain": "example.com"},
+	}
+
+	result, err := p.Apply(t.Context(), &interfaces.IaCPlan{ID: "plan-dns", Actions: []interfaces.PlanAction{{Action: "create", Resource: spec}}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("Apply errors = %#v", result.Errors)
+	}
+	if mock.createCalls != 1 {
+		t.Fatalf("domain create calls = %d, want one conflicted create attempt", mock.createCalls)
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "example.com" {
+		t.Fatalf("resources = %#v, want adopted DNS output", result.Resources)
+	}
+}
+
+func TestDOProvider_Import_DNSIncludesExistingRecords(t *testing.T) {
+	mock := &providerDNSMock{
+		domain:  &godo.Domain{Name: "example.com"},
+		records: []godo.DomainRecord{{ID: 10, Type: "TXT", Name: "@", Data: "imported", TTL: 300}},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
+		"infra.dns": drivers.NewDNSDriverWithClient(mock),
+	}}
+
+	state, err := p.Import(t.Context(), "example.com", "infra.dns")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	records, ok := state.Outputs["records"].([]map[string]any)
+	if !ok {
+		t.Fatalf("records output = %T, want []map[string]any", state.Outputs["records"])
+	}
+	if len(records) != 1 || records[0]["data"] != "imported" {
+		t.Fatalf("records = %#v, want imported TXT record", records)
+	}
+}
+
+func TestDOProvider_Plan_UsesReplaceForDriverNeedsReplace(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name:   "example-vpc",
+		Type:   "infra.vpc",
+		Config: map[string]any{"ip_range": "10.20.0.0/16"},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{
+			NeedsReplace: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "ip_range", Old: "10.10.0.0/16", New: "10.20.0.0/16", ForceNew: true},
+			},
+		},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.vpc": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:          "example-vpc",
+			Type:          "infra.vpc",
+			ProviderID:    "vpc-123",
+			AppliedConfig: map[string]any{"ip_range": "10.10.0.0/16"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Actions) != 1 {
+		t.Fatalf("plan actions = %d, want 1", len(plan.Actions))
+	}
+	action := plan.Actions[0]
+	if action.Action != "replace" {
+		t.Fatalf("plan action = %q, want replace", action.Action)
+	}
+	if action.Current == nil || action.Current.ProviderID != "vpc-123" {
+		t.Fatalf("plan current = %+v, want provider ID vpc-123", action.Current)
+	}
+	if len(action.Changes) != 1 || !action.Changes[0].ForceNew {
+		t.Fatalf("plan action changes = %+v, want ForceNew change", action.Changes)
+	}
+}
+
+func TestDOProvider_Plan_TreatsNoopDriverDiffAsAuthoritative(t *testing.T) {
+	spec := interfaces.ResourceSpec{
+		Name: "example-dns",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+			},
+		},
+	}
+	fake := &planDiffFakeDriver{
+		diffResult: &interfaces.DiffResult{NeedsUpdate: false, NeedsReplace: false},
+	}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.dns": fake}}
+
+	plan, err := p.Plan(t.Context(), []interfaces.ResourceSpec{spec}, []interfaces.ResourceState{
+		{
+			Name:       "example-dns",
+			Type:       "infra.dns",
+			ProviderID: "example.com",
+			AppliedConfig: map[string]any{
+				"domain": "example.com",
+				"records": []any{
+					map[string]any{"type": "TXT", "name": "@", "data": "stale", "ttl": 300},
+				},
+			},
+			Outputs: map[string]any{
+				"records": []map[string]any{
+					{"type": "TXT", "name": "@", "data": "expected", "ttl": 300},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if fake.diffCalls != 1 {
+		t.Fatalf("Diff calls = %d, want 1", fake.diffCalls)
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("plan actions = %+v, want none from authoritative driver diff", plan.Actions)
+	}
+}
+
+type replaceFakeDriver struct {
+	calls     []string
+	deleteRef interfaces.ResourceRef
+}
+
+func (f *replaceFakeDriver) Create(_ context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.calls = append(f.calls, "create")
+	return &interfaces.ResourceOutput{Name: spec.Name, Type: spec.Type, ProviderID: "new-provider-id"}, nil
+}
+func (f *replaceFakeDriver) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	f.calls = append(f.calls, "update")
+	return nil, nil
+}
+func (f *replaceFakeDriver) Delete(_ context.Context, ref interfaces.ResourceRef) error {
+	f.calls = append(f.calls, "delete")
+	f.deleteRef = ref
+	return nil
+}
+func (f *replaceFakeDriver) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) HealthCheck(_ context.Context, _ interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
+	return nil, nil
+}
+func (f *replaceFakeDriver) SensitiveKeys() []string { return nil }
+
+func TestDOProvider_Apply_ReplaceDeletesThenCreates(t *testing.T) {
+	fake := &replaceFakeDriver{}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.vpc": fake}}
+
+	spec := interfaces.ResourceSpec{Name: "example-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.20.0.0/16"}}
+	plan := &interfaces.IaCPlan{
+		ID: "plan-replace",
+		Actions: []interfaces.PlanAction{{
+			Action:   "replace",
+			Resource: spec,
+			Current:  &interfaces.ResourceState{Name: "example-vpc", Type: "infra.vpc", ProviderID: "old-provider-id"},
+		}},
+	}
+
+	result, err := p.Apply(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply returned errors: %v", result.Errors)
+	}
+	if got, want := strings.Join(fake.calls, ","), "delete,create"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
+	}
+	if fake.deleteRef.ProviderID != "old-provider-id" {
+		t.Fatalf("delete ProviderID = %q, want old-provider-id", fake.deleteRef.ProviderID)
+	}
+	if len(result.Resources) != 1 || result.Resources[0].ProviderID != "new-provider-id" {
+		t.Fatalf("result resources = %+v, want new provider ID", result.Resources)
 	}
 }
 

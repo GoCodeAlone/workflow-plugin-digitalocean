@@ -138,7 +138,7 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 }
 
 // Plan computes the set of actions needed to reach the desired state.
-func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	currentByName := make(map[string]interfaces.ResourceState, len(current))
 	for _, r := range current {
 		currentByName[r.Name] = r
@@ -158,6 +158,28 @@ func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, 
 			})
 			continue
 		}
+		if driver, err := p.ResourceDriver(spec.Type); err == nil {
+			diff, err := driver.Diff(ctx, spec, resourceOutputFromState(cur))
+			if err != nil {
+				return nil, fmt.Errorf("plan diff %s/%s: %w", spec.Type, spec.Name, err)
+			}
+			if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
+				action := "update"
+				if diff.NeedsReplace {
+					action = "replace"
+				}
+				plan.Actions = append(plan.Actions, interfaces.PlanAction{
+					Action:   action,
+					Resource: spec,
+					Current:  &cur,
+					Changes:  diff.Changes,
+				})
+				continue
+			}
+			if diff != nil {
+				continue
+			}
+		}
 		if configHash(cur.AppliedConfig) != configHash(spec.Config) {
 			plan.Actions = append(plan.Actions, interfaces.PlanAction{
 				Action:   "update",
@@ -167,6 +189,15 @@ func (p *DOProvider) Plan(_ context.Context, desired []interfaces.ResourceSpec, 
 		}
 	}
 	return plan, nil
+}
+
+func resourceOutputFromState(state interfaces.ResourceState) *interfaces.ResourceOutput {
+	return &interfaces.ResourceOutput{
+		Name:       state.Name,
+		Type:       state.Type,
+		ProviderID: state.ProviderID,
+		Outputs:    state.Outputs,
+	}
 }
 
 // upsertSupporter is an optional interface for ResourceDrivers that support
@@ -230,6 +261,20 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 				ProviderID: action.Current.ProviderID,
 			}
 			out, err = d.Update(ctx, ref, action.Resource)
+		case "replace":
+			if action.Current == nil {
+				err = fmt.Errorf("replace action missing current resource state")
+				break
+			}
+			ref := interfaces.ResourceRef{
+				Name:       action.Resource.Name,
+				Type:       action.Resource.Type,
+				ProviderID: action.Current.ProviderID,
+			}
+			if err = d.Delete(ctx, ref); err != nil {
+				break
+			}
+			out, err = d.Create(ctx, action.Resource)
 		default:
 			err = fmt.Errorf("unknown action %q", action.Action)
 		}
