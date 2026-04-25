@@ -594,3 +594,50 @@ func TestDatabaseDriver_Create_AppType_NoAppsClient_ReturnsError(t *testing.T) {
 		t.Errorf("expected error to mention the offending value %q; got: %v", "bmw-staging", err)
 	}
 }
+
+func TestDatabaseDriver_Create_TrustedSources_WrongType_ReturnsError(t *testing.T) {
+	// trusted_sources present but not a list (e.g. user wrote a scalar in YAML)
+	// must return an error rather than silently dropping the rule.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine":          "pg",
+			"trusted_sources": "bmw-staging", // scalar, not a list
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when trusted_sources is not a list, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_sources") {
+		t.Errorf("expected error to mention 'trusted_sources'; got: %v", err)
+	}
+}
+
+func TestDatabaseDriver_Update_TrustedSources_WrongType_ReturnsError(t *testing.T) {
+	// trusted_sources present but not a list on Update path must also error,
+	// not silently clear all firewall rules.
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	d := drivers.NewDatabaseDriverWithClient(dbMock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-db", ProviderID: "db-123",
+	}, interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"size":            "db-s-2vcpu-4gb",
+			"trusted_sources": "bmw-staging", // scalar, not a list
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when trusted_sources is not a list, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_sources") {
+		t.Errorf("expected error to mention 'trusted_sources'; got: %v", err)
+	}
+	if dbMock.lastFirewallReq != nil {
+		t.Error("UpdateFirewallRules must NOT be called when trusted_sources has wrong type")
+	}
+}

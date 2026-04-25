@@ -295,8 +295,15 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 // []*godo.DatabaseCreateFirewallRule, resolving type=app values to UUIDs via
 // a single Apps.List pass (see resolveAppNamesMap).
 func (d *DatabaseDriver) buildCreateFirewallRules(ctx context.Context, cfg map[string]any) ([]*godo.DatabaseCreateFirewallRule, error) {
-	raw, ok := cfg["trusted_sources"].([]any)
-	if !ok || len(raw) == 0 {
+	rawVal, exists := cfg["trusted_sources"]
+	if !exists {
+		return nil, nil
+	}
+	raw, ok := rawVal.([]any)
+	if !ok {
+		return nil, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", rawVal)
+	}
+	if len(raw) == 0 {
 		return nil, nil
 	}
 	appUUIDs, err := d.resolveAppNamesMap(ctx, raw)
@@ -338,7 +345,10 @@ func (d *DatabaseDriver) buildUpdateFirewallRules(ctx context.Context, cfg map[s
 	if !ok {
 		return nil, false, nil // key absent: leave existing rules unchanged
 	}
-	list, _ := raw.([]any)
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", raw)
+	}
 	appUUIDs, err := d.resolveAppNamesMap(ctx, list)
 	if err != nil {
 		return nil, false, err
