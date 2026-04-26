@@ -26,13 +26,11 @@ func makeGodoErr(statusCode int) error {
 type mockAppClient struct {
 	app                    *godo.App
 	err                    error
-	listApps               []*godo.App       // returned by List
-	listErr                error             // error returned by List
+	listApps               []*godo.App        // returned by List
+	listErr                error              // error returned by List
 	deployments            []*godo.Deployment // returned by ListDeployments
-	listDeploymentsErr     error             // error returned by ListDeployments
-	createDeploymentErr    error             // error returned by CreateDeployment
+	listDeploymentsErr     error              // error returned by ListDeployments
 	createDeploymentCalled bool
-	lastCreateDeployReq    *godo.DeploymentCreateRequest
 	lastCreateReq          *godo.AppCreateRequest
 	lastUpdateReq          *godo.AppUpdateRequest
 }
@@ -53,10 +51,7 @@ func (m *mockAppClient) Update(_ context.Context, _ string, req *godo.AppUpdateR
 }
 func (m *mockAppClient) CreateDeployment(_ context.Context, _ string, reqs ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
 	m.createDeploymentCalled = true
-	for _, r := range reqs {
-		m.lastCreateDeployReq = r
-	}
-	return &godo.Deployment{ID: "dep-1"}, nil, m.createDeploymentErr
+	return &godo.Deployment{ID: "dep-1"}, nil, nil
 }
 func (m *mockAppClient) ListDeployments(_ context.Context, _ string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
 	return m.deployments, &godo.Response{}, m.listDeploymentsErr
@@ -185,17 +180,41 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
 		Name:   "my-app",
-		Config: map[string]any{},
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+	if mock.lastUpdateReq == nil {
+		t.Fatal("expected Update API to be called")
 	}
 	if mock.createDeploymentCalled {
 		t.Error("CreateDeployment should not be called on Update failure")
 	}
 }
 
-func TestAppPlatformDriver_Update_TriggersCreateDeployment(t *testing.T) {
+func TestAppPlatformDriver_Update_ErrorSentinelPropagates(t *testing.T) {
+	mock := &mockAppClient{err: makeGodoErr(http.StatusTooManyRequests)}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	})
+	if !errors.Is(err, interfaces.ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited sentinel, got: %v", err)
+	}
+	if mock.lastUpdateReq == nil {
+		t.Fatal("expected Update API to be called")
+	}
+	if mock.createDeploymentCalled {
+		t.Error("CreateDeployment should not be called on Update failure")
+	}
+}
+
+func TestAppPlatformDriver_Update_DoesNotCreateDuplicateDeployment(t *testing.T) {
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
@@ -208,50 +227,65 @@ func TestAppPlatformDriver_Update_TriggersCreateDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if !mock.createDeploymentCalled {
-		t.Error("expected CreateDeployment to be called after Update")
+	if mock.lastUpdateReq == nil {
+		t.Fatal("expected Update API to be called")
 	}
-	if mock.lastCreateDeployReq == nil || !mock.lastCreateDeployReq.ForceBuild {
-		t.Error("expected CreateDeployment called with ForceBuild=true")
+	if mock.createDeploymentCalled {
+		t.Error("CreateDeployment should not be called after Apps.Update; DigitalOcean already creates an app-spec deployment for the update")
 	}
 }
 
-func TestAppPlatformDriver_Update_CreateDeploymentFails(t *testing.T) {
-	mock := &mockAppClient{
-		app:                 testApp(),
-		createDeploymentErr: fmt.Errorf("deployment quota exceeded"),
-	}
+func TestAppPlatformDriver_Update_SendsPreDeployJobRunCommand(t *testing.T) {
+	const repairCommand = "/workflow-migrate repair-dirty --expected-dirty-version 20260426000005 --force-version 20260426000004 --up-if-clean --source-dir /migrations --confirm-force FORCE_MIGRATION_METADATA"
+	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
 		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
 	}, interfaces.ResourceSpec{
-		Name:   "my-app",
-		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+		Name: "my-app",
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v2",
+			"jobs": []any{
+				map[string]any{
+					"name":        "migrate",
+					"kind":        "pre_deploy",
+					"image":       "registry.digitalocean.com/myrepo/workflow-migrate:v2",
+					"run_command": repairCommand,
+				},
+			},
+		},
 	})
-	if err == nil {
-		t.Fatal("expected error when CreateDeployment fails, got nil")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
 	}
-	if !strings.Contains(err.Error(), "deployment quota exceeded") {
-		t.Errorf("error should contain original message, got: %v", err)
+	if mock.lastUpdateReq == nil || mock.lastUpdateReq.Spec == nil {
+		t.Fatal("expected Apps.Update request to be captured")
 	}
-}
-
-func TestAppPlatformDriver_Update_CreateDeploymentSentinelPropagates(t *testing.T) {
-	mock := &mockAppClient{
-		app:                 testApp(),
-		createDeploymentErr: makeGodoErr(http.StatusTooManyRequests),
+	if len(mock.lastUpdateReq.Spec.Jobs) != 1 {
+		t.Fatalf("Update jobs = %d, want 1", len(mock.lastUpdateReq.Spec.Jobs))
 	}
-	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
-
-	_, err := d.Update(context.Background(), interfaces.ResourceRef{
-		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
-	}, interfaces.ResourceSpec{
-		Name:   "my-app",
-		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
-	})
-	if !errors.Is(err, interfaces.ErrRateLimited) {
-		t.Errorf("expected ErrRateLimited sentinel, got: %v", err)
+	job := mock.lastUpdateReq.Spec.Jobs[0]
+	if job.Name != "migrate" {
+		t.Fatalf("Update job Name = %q, want migrate", job.Name)
+	}
+	if job.Kind != godo.AppJobSpecKind_PreDeploy {
+		t.Fatalf("Update job Kind = %q, want PRE_DEPLOY", job.Kind)
+	}
+	if job.Image == nil {
+		t.Fatal("Update job Image is nil")
+	}
+	if got := job.Image.Repository; got != "workflow-migrate" {
+		t.Fatalf("Update job image repository = %q, want workflow-migrate", got)
+	}
+	if got := job.Image.Tag; got != "v2" {
+		t.Fatalf("Update job image tag = %q, want v2", got)
+	}
+	if got := job.RunCommand; got != repairCommand {
+		t.Fatalf("Update job RunCommand = %q, want %q", got, repairCommand)
+	}
+	if mock.createDeploymentCalled {
+		t.Error("CreateDeployment should not be called for a pre-deploy job update")
 	}
 }
 
@@ -623,11 +657,11 @@ func TestParseImageRef_NoTag(t *testing.T) {
 
 func TestParseImageRef_Malformed(t *testing.T) {
 	cases := []string{
-		"",                                     // empty
-		"justarepo",                            // no org/registry prefix
-		"registry.digitalocean.com/onlyone",    // DOCR with only one path segment
-		"ghcr.io/onlyone",                      // GHCR with only org, no repo
-		"docker.io/onlyone",                    // docker.io with only one path segment
+		"",                                  // empty
+		"justarepo",                         // no org/registry prefix
+		"registry.digitalocean.com/onlyone", // DOCR with only one path segment
+		"ghcr.io/onlyone",                   // GHCR with only org, no repo
+		"docker.io/onlyone",                 // docker.io with only one path segment
 	}
 	for _, tc := range cases {
 		_, err := drivers.ParseImageRef(tc)
