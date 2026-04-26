@@ -121,12 +121,6 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
-	// Trigger a new deployment — Update only changes the spec; DO does not auto-deploy.
-	dep, _, err := d.client.CreateDeployment(ctx, providerID, &godo.DeploymentCreateRequest{ForceBuild: true})
-	if err != nil {
-		return nil, fmt.Errorf("app platform create deployment %q: %w", ref.Name, WrapGodoError(err))
-	}
-	fmt.Printf("  app platform deploy %q: triggered deployment %s\n", spec.Name, dep.ID)
 	return appOutput(app), nil
 }
 
@@ -566,4 +560,6 @@ func envVarsFromConfig(cfg map[string]any) []*godo.AppVariableDefinition {
 
 func (d *AppPlatformDriver) SensitiveKeys() []string { return nil }
 
-func (d *AppPlatformDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
+func (d *AppPlatformDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatUUID
+}
