@@ -73,8 +73,11 @@ func TestAppPlatformRepairDirtyMigrationRunsTemporaryPreDeployJobAndRestoresSpec
 		t.Fatalf("temporary jobs = %d, want 1", len(tempSpec.Jobs))
 	}
 	job := tempSpec.Jobs[0]
-	if !strings.HasPrefix(job.Name, "wfctl-migration-repair-") {
+	if !strings.HasPrefix(job.Name, migrationRepairJobPrefix+"-") {
 		t.Fatalf("job name = %q", job.Name)
+	}
+	if len(job.Name) > 32 {
+		t.Fatalf("job name length = %d, want <= 32 for DigitalOcean App Platform", len(job.Name))
 	}
 	if job.Image == nil || job.Image.Repository != "workflow-migrate" || job.Image.Tag != "sha" {
 		t.Fatalf("job image = %+v", job.Image)
@@ -734,6 +737,18 @@ func TestAppPlatformRepairDirtyMigrationGeneratesUniqueJobNames(t *testing.T) {
 	}
 	if client.listInvocationRequests[1].JobNames[0] != first || client.listInvocationRequests[3].JobNames[0] != second {
 		t.Fatalf("listInvocationRequests = %+v, want generated job names %q and %q", client.listInvocationRequests, first, second)
+	}
+}
+
+func TestMigrationRepairJobNameFitsDigitalOceanLimit(t *testing.T) {
+	for range 100 {
+		name := migrationRepairJobName()
+		if !strings.HasPrefix(name, migrationRepairJobPrefix+"-") {
+			t.Fatalf("job name = %q", name)
+		}
+		if len(name) > 32 {
+			t.Fatalf("job name length = %d for %q, want <= 32", len(name), name)
+		}
 	}
 }
 

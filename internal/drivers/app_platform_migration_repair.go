@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const migrationRepairJobPrefix = "wfctl-migration-repair"
+const migrationRepairJobPrefix = "wfctl-mig-repair"
 const defaultMigrationRepairTimeout = 10 * time.Minute
 
 var _ interfaces.ProviderMigrationRepairer = (*AppPlatformDriver)(nil)
