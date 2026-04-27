@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+var migrationRepairNameHookMu sync.Mutex
 
 func TestAppPlatformRepairDirtyMigrationRunsTemporaryPreDeployJobAndRestoresSpec(t *testing.T) {
 	logServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -754,6 +757,8 @@ func TestMigrationRepairJobNameFitsDigitalOceanLimit(t *testing.T) {
 }
 
 func TestMigrationRepairJobNameFallbackFitsDigitalOceanLimit(t *testing.T) {
+	migrationRepairNameHookMu.Lock()
+	t.Cleanup(migrationRepairNameHookMu.Unlock)
 	originalRead := migrationRepairRandomRead
 	migrationRepairRandomRead = func([]byte) (int, error) {
 		return 0, errors.New("entropy unavailable")
@@ -783,6 +788,8 @@ func TestMigrationRepairJobNameAbsentFromSpecRetriesComponentCollisions(t *testi
 
 	for name, spec := range tests {
 		t.Run(name, func(t *testing.T) {
+			migrationRepairNameHookMu.Lock()
+			t.Cleanup(migrationRepairNameHookMu.Unlock)
 			originalGenerator := migrationRepairJobNameGenerator
 			names := []string{"wfctl-mig-repair-collision", "wfctl-mig-repair-available"}
 			migrationRepairJobNameGenerator = func() string {
@@ -806,6 +813,8 @@ func TestMigrationRepairJobNameAbsentFromSpecRetriesComponentCollisions(t *testi
 }
 
 func TestAppPlatformRepairDirtyMigrationRetriesLiveComponentNameCollision(t *testing.T) {
+	migrationRepairNameHookMu.Lock()
+	t.Cleanup(migrationRepairNameHookMu.Unlock)
 	originalGenerator := migrationRepairJobNameGenerator
 	names := []string{"wfctl-mig-repair-collision", "wfctl-mig-repair-available"}
 	migrationRepairJobNameGenerator = func() string {
@@ -858,6 +867,8 @@ func TestAppPlatformRepairDirtyMigrationRetriesLiveComponentNameCollision(t *tes
 }
 
 func TestAppPlatformRepairDirtyMigrationRetriesUpdateComponentNameConflict(t *testing.T) {
+	migrationRepairNameHookMu.Lock()
+	t.Cleanup(migrationRepairNameHookMu.Unlock)
 	originalGenerator := migrationRepairJobNameGenerator
 	names := []string{"wfctl-mig-repair-race", "wfctl-mig-repair-available"}
 	migrationRepairJobNameGenerator = func() string {
@@ -900,6 +911,23 @@ func TestAppPlatformRepairDirtyMigrationRetriesUpdateComponentNameConflict(t *te
 	}
 	if got := client.updates[0].Spec.Jobs[0].Name; got != "wfctl-mig-repair-available" {
 		t.Fatalf("temporary job name = %q, want second generated name after update conflict", got)
+	}
+}
+
+func TestMigrationRepairComponentNameConflictClassifier(t *testing.T) {
+	tests := []string{
+		"component name must be unique across all app components",
+		"services[0].name must be unique",
+		"duplicate name",
+	}
+	for _, message := range tests {
+		err := &godo.ErrorResponse{
+			Response: &http.Response{StatusCode: http.StatusUnprocessableEntity},
+			Message:  message,
+		}
+		if !isMigrationRepairComponentNameConflict(err) {
+			t.Fatalf("isMigrationRepairComponentNameConflict(%q) = false, want true", message)
+		}
 	}
 }
 
@@ -1055,7 +1083,12 @@ func (m *migrationRepairAppClient) Get(_ context.Context, _ string) (*godo.App, 
 			panic(err)
 		}
 		m.getSpecs = m.getSpecs[1:]
-		m.app.Spec = spec
+		appCopy := *m.app
+		appCopy.Spec = spec
+		if m.deploymentOnGet != nil && len(m.updates) > 0 {
+			appCopy.InProgressDeployment = m.deploymentOnGet
+		}
+		return &appCopy, nil, nil
 	}
 	if m.deploymentOnGet != nil && len(m.updates) > 0 {
 		m.app.InProgressDeployment = m.deploymentOnGet

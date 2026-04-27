@@ -182,7 +182,11 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 			}
 			return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(updateErr))
 		}
-		return result, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
+		restored, restoreErr := restore(result)
+		if restoreErr != nil {
+			return restored, restoreErr
+		}
+		return restored, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
 	}
 
 	result := &interfaces.MigrationRepairResult{
@@ -357,8 +361,10 @@ func isMigrationRepairComponentNameConflict(err error) bool {
 		return false
 	}
 	message := strings.ToLower(gErr.Message)
-	return strings.Contains(message, "name") && strings.Contains(message, "component") &&
-		(strings.Contains(message, "unique") || strings.Contains(message, "duplicate") || strings.Contains(message, "already"))
+	if !strings.Contains(message, "name") {
+		return false
+	}
+	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate") || strings.Contains(message, "already")
 }
 
 func appSpecHasComponentName(spec *godo.AppSpec, name string) bool {
