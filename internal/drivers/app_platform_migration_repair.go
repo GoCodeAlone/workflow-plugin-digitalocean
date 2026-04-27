@@ -444,6 +444,9 @@ func waitForMigrationRepairInvocation(ctx context.Context, client appPlatformMig
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return last, fmt.Errorf("timed out waiting for migration repair job %q", jobName)
+			}
 			return last, ctx.Err()
 		case <-deadline.C:
 			return last, fmt.Errorf("timed out waiting for migration repair job %q", jobName)
