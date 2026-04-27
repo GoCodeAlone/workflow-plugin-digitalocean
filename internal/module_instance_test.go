@@ -2,10 +2,13 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // compile-time interface checks
@@ -765,6 +768,134 @@ func TestDoModuleInstance_InvokeMethod_BootstrapStateBackend_EndToEnd(t *testing
 	}
 }
 
+func TestDoModuleInstance_InvokeMethod_RepairDirtyMigration_DispatchesToProvider(t *testing.T) {
+	fake := &fakeRepairProvider{
+		fakeIaCProvider: fakeIaCProvider{},
+		repairResult: &interfaces.MigrationRepairResult{
+			ProviderJobID: "job-123",
+			Status:        interfaces.MigrationRepairStatusSucceeded,
+			Applied:       []string{"20260426000006"},
+			Logs:          "repair complete",
+		},
+	}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.RepairDirtyMigration", map[string]any{
+		"request": map[string]any{
+			"app_resource_name":      "bmw-staging",
+			"database_resource_name": "bmw-staging-db",
+			"job_image":              "registry.digitalocean.com/bmw-registry/workflow-migrate:sha",
+			"source_dir":             "/migrations",
+			"expected_dirty_version": "20260426000005",
+			"force_version":          "20260422000001",
+			"then_up":                true,
+			"confirm_force":          interfaces.MigrationRepairConfirmation,
+			"env":                    map[string]any{"DATABASE_URL": "postgres://example"},
+			"timeout_seconds":        float64(600),
+		},
+	})
+	if err != nil {
+		t.Fatalf("RepairDirtyMigration dispatch: %v", err)
+	}
+	if !fake.repairCalled {
+		t.Fatal("RepairDirtyMigration was not called on provider")
+	}
+	if fake.repairReq.AppResourceName != "bmw-staging" {
+		t.Fatalf("AppResourceName = %q", fake.repairReq.AppResourceName)
+	}
+	if fake.repairReq.Env["DATABASE_URL"] != "postgres://example" {
+		t.Fatalf("DATABASE_URL was not decoded into request env")
+	}
+	if result["provider_job_id"] != "job-123" {
+		t.Fatalf("provider_job_id = %v", result["provider_job_id"])
+	}
+	if result["status"] != interfaces.MigrationRepairStatusSucceeded {
+		t.Fatalf("status = %v", result["status"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_RepairDirtyMigration_Unsupported(t *testing.T) {
+	mi := &doModuleInstance{provider: &fakeIaCProvider{}}
+
+	_, err := mi.InvokeMethod("IaCProvider.RepairDirtyMigration", map[string]any{
+		"request": map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected unsupported error")
+	}
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("code = %s, want %s", status.Code(err), codes.Unimplemented)
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_RepairDirtyMigration_PreservesResultOnError(t *testing.T) {
+	fake := &fakeRepairProvider{
+		fakeIaCProvider: fakeIaCProvider{},
+		repairResult: &interfaces.MigrationRepairResult{
+			ProviderJobID: "job-running",
+			Status:        interfaces.MigrationRepairStatusFailed,
+			Logs:          "repair log tail",
+			Diagnostics: []interfaces.Diagnostic{{
+				ID:     "job-running",
+				Phase:  "cancel",
+				Cause:  "job invocation cancellation requested",
+				Detail: "app_id=app-123 deployment_id=dep-123",
+			}},
+		},
+		repairErr: errors.New("timed out waiting for migration repair job"),
+	}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.RepairDirtyMigration", map[string]any{
+		"request": map[string]any{
+			"app_resource_name":      "bmw-staging",
+			"database_resource_name": "bmw-staging-db",
+			"job_image":              "registry.digitalocean.com/bmw-registry/workflow-migrate:sha",
+			"source_dir":             "/migrations",
+			"expected_dirty_version": "20260426000005",
+			"force_version":          "20260422000001",
+			"confirm_force":          interfaces.MigrationRepairConfirmation,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RepairDirtyMigration dispatch should preserve result without transport error, got %v", err)
+	}
+	if result["provider_job_id"] != "job-running" {
+		t.Fatalf("provider_job_id = %v, want job-running", result["provider_job_id"])
+	}
+	if result["status"] != interfaces.MigrationRepairStatusFailed {
+		t.Fatalf("status = %v, want failed", result["status"])
+	}
+	if result["logs"] != "repair log tail" {
+		t.Fatalf("logs = %v, want repair log tail", result["logs"])
+	}
+}
+
+func TestDoModuleInstance_InvokeMethodContext_RepairDirtyMigration_PropagatesContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fake := &fakeRepairProvider{fakeIaCProvider: fakeIaCProvider{}}
+	mi := &doModuleInstance{provider: fake}
+
+	_, err := mi.InvokeMethodContext(ctx, "IaCProvider.RepairDirtyMigration", map[string]any{
+		"request": map[string]any{
+			"app_resource_name":      "bmw-staging",
+			"database_resource_name": "bmw-staging-db",
+			"job_image":              "registry.digitalocean.com/bmw-registry/workflow-migrate:sha",
+			"source_dir":             "/migrations",
+			"expected_dirty_version": "20260426000005",
+			"force_version":          "20260422000001",
+			"confirm_force":          interfaces.MigrationRepairConfirmation,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if fake.repairContextErr == nil {
+		t.Fatal("expected canceled context to reach provider")
+	}
+}
+
 // ── stub driver ───────────────────────────────────────────────────────────────
 
 type stubResourceDriver struct {
@@ -918,4 +1049,23 @@ func (f *fakeIaCProvider) BootstrapStateBackend(_ context.Context, cfg map[strin
 	f.bootstrapCalled = true
 	f.bootstrapCfg = cfg
 	return f.bootstrapResult, nil
+}
+
+type fakeRepairProvider struct {
+	fakeIaCProvider
+	repairCalled     bool
+	repairReq        interfaces.MigrationRepairRequest
+	repairContextErr error
+	repairResult     *interfaces.MigrationRepairResult
+	repairErr        error
+}
+
+func (f *fakeRepairProvider) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {
+	f.repairCalled = true
+	f.repairReq = req
+	f.repairContextErr = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.repairResult, f.repairErr
 }

@@ -27,6 +27,14 @@ type AppPlatformClient interface {
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
 }
 
+type appPlatformMigrationRepairClient interface {
+	AppPlatformClient
+	ListJobInvocations(ctx context.Context, appID string, opts *godo.ListJobInvocationsOptions) ([]*godo.JobInvocation, *godo.Response, error)
+	GetJobInvocation(ctx context.Context, appID string, jobInvocationID string, opts *godo.GetJobInvocationOptions) (*godo.JobInvocation, *godo.Response, error)
+	GetJobInvocationLogs(ctx context.Context, appID, jobInvocationID string, opts *godo.GetJobInvocationLogsOptions) (*godo.AppLogs, *godo.Response, error)
+	CancelJobInvocation(ctx context.Context, appID, jobInvocationID string, opts *godo.CancelJobInvocationOptions) (*godo.JobInvocation, *godo.Response, error)
+}
+
 // AppPlatformDriver manages DigitalOcean App Platform (infra.container_service).
 type AppPlatformDriver struct {
 	client AppPlatformClient
@@ -422,14 +430,34 @@ func ParseImageRef(imageStr string) (*godo.ImageSourceSpec, error) {
 	if imageStr == "" {
 		return nil, fmt.Errorf("image ref is empty")
 	}
+	if strings.TrimSpace(imageStr) != imageStr || strings.ContainsAny(imageStr, " \t\n\r") {
+		return nil, fmt.Errorf("invalid image ref %q: whitespace is not allowed", imageStr)
+	}
 
 	// Separate tag from the path reference.
-	ref, tag, _ := strings.Cut(imageStr, ":")
+	ref, tag, hasExplicitTag := strings.Cut(imageStr, ":")
+	if hasExplicitTag && tag == "" {
+		return nil, fmt.Errorf("invalid image ref %q: explicit tag is empty", imageStr)
+	}
+	if strings.Contains(tag, ":") {
+		return nil, fmt.Errorf("invalid image ref %q: tag must not contain ':'", imageStr)
+	}
 	if tag == "" {
 		tag = "latest"
 	}
+	if strings.ContainsAny(tag, " \t\n\r") {
+		return nil, fmt.Errorf("invalid image ref %q: tag whitespace is not allowed", imageStr)
+	}
 
 	parts := strings.Split(ref, "/")
+	for _, part := range parts {
+		if part == "" {
+			return nil, fmt.Errorf("invalid image ref %q: empty path segment", imageStr)
+		}
+		if strings.ContainsAny(part, " \t\n\r") {
+			return nil, fmt.Errorf("invalid image ref %q: path whitespace is not allowed", imageStr)
+		}
+	}
 
 	switch {
 	case strings.HasPrefix(ref, "registry.digitalocean.com/"):
