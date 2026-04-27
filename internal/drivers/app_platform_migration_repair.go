@@ -65,7 +65,10 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 	if liveApp == nil || liveApp.Spec == nil {
 		return nil, fmt.Errorf("app platform migration repair %q: live app spec missing", req.AppResourceName)
 	}
-	repairSpec := cloneAppSpec(liveApp.Spec)
+	repairSpec, err := cloneAppSpec(liveApp.Spec)
+	if err != nil {
+		return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
+	}
 	repairSpec.Jobs = append(repairSpec.Jobs, job)
 	restore := func(result *interfaces.MigrationRepairResult) (*interfaces.MigrationRepairResult, error) {
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
@@ -98,7 +101,19 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 			})
 			return result, fmt.Errorf("app platform migration repair restore %q: live app spec missing", req.AppResourceName)
 		}
-		restoreSpec := cloneAppSpec(liveApp.Spec)
+		restoreSpec, err := cloneAppSpec(liveApp.Spec)
+		if err != nil {
+			if result == nil {
+				result = &interfaces.MigrationRepairResult{Status: interfaces.MigrationRepairStatusFailed}
+			}
+			result.Status = interfaces.MigrationRepairStatusFailed
+			result.Diagnostics = append(result.Diagnostics, interfaces.Diagnostic{
+				Phase:  "restore",
+				Cause:  "clone live app spec failed",
+				Detail: err.Error(),
+			})
+			return result, fmt.Errorf("app platform migration repair restore clone %q: %w", req.AppResourceName, err)
+		}
 		restoreSpec.Jobs = withoutMigrationRepairJobName(restoreSpec.Jobs, jobName)
 		if len(restoreSpec.Jobs) == len(liveApp.Spec.Jobs) {
 			result.Diagnostics = append(result.Diagnostics, interfaces.Diagnostic{
@@ -415,34 +430,39 @@ func formatAppLogs(ctx context.Context, logs *godo.AppLogs) string {
 func fetchMigrationRepairLogURL(ctx context.Context, url string) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "log url: " + url
+		return "log unavailable"
 	}
 	resp, err := migrationRepairHTTPClient.Do(req)
 	if err != nil {
-		return "log url: " + url
+		return "log unavailable"
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort close for log body fetch
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "log url: " + url
+		return "log unavailable"
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
-		return "log url: " + url
+		return "log unavailable"
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return "log url: " + url
+		return "log unavailable"
 	}
 	return string(data)
 }
 
-func cloneAppSpec(spec *godo.AppSpec) *godo.AppSpec {
+func cloneAppSpec(spec *godo.AppSpec) (*godo.AppSpec, error) {
 	if spec == nil {
-		return nil
+		return nil, nil
 	}
-	data, _ := json.Marshal(spec)
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("marshal app spec: %w", err)
+	}
 	var out godo.AppSpec
-	_ = json.Unmarshal(data, &out)
-	return &out
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal app spec: %w", err)
+	}
+	return &out, nil
 }
 
 func shellQuote(value string) string {

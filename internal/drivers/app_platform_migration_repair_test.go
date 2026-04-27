@@ -111,6 +111,23 @@ func TestAppPlatformRepairDirtyMigrationRunsTemporaryPreDeployJobAndRestoresSpec
 	}
 }
 
+func TestFetchMigrationRepairLogURLDoesNotLeakSignedURLOnFailure(t *testing.T) {
+	logServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer logServer.Close()
+
+	logs := formatAppLogs(context.Background(), &godo.AppLogs{
+		HistoricURLs: []string{logServer.URL + "/job-123?token=secret"},
+	})
+	if strings.Contains(logs, "token=secret") || strings.Contains(logs, logServer.URL) {
+		t.Fatalf("logs = %q, want no signed URL leak", logs)
+	}
+	if logs != "log unavailable" {
+		t.Fatalf("logs = %q, want generic placeholder", logs)
+	}
+}
+
 func TestAppPlatformRepairDirtyMigrationRejectsInvalidJobImageBeforeMutation(t *testing.T) {
 	client := &migrationRepairAppClient{
 		app: &godo.App{ID: "app-123", Spec: &godo.AppSpec{Name: "bmw-staging"}},
@@ -895,7 +912,10 @@ func (m *migrationRepairAppClient) Update(_ context.Context, _ string, req *godo
 		}
 		m.bindRepairJobName(req.Spec.Jobs[len(req.Spec.Jobs)-1].Name)
 		if m.externalSpecBeforeRestore != nil {
-			live := cloneAppSpec(m.externalSpecBeforeRestore)
+			live, err := cloneAppSpec(m.externalSpecBeforeRestore)
+			if err != nil {
+				panic(err)
+			}
 			if m.includeRepairJobInLiveSpec {
 				live.Jobs = append(live.Jobs, req.Spec.Jobs[len(req.Spec.Jobs)-1])
 			}
