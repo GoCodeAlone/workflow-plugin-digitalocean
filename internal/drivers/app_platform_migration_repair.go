@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -27,6 +28,7 @@ var migrationRepairHTTPClient = http.DefaultClient
 var migrationRepairPollInterval = 2 * time.Second
 var migrationRepairRandomRead = rand.Read
 var migrationRepairJobNameGenerator = migrationRepairJobName
+var migrationRepairFallbackCounter atomic.Uint64
 
 func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {
 	if err := req.Validate(); err != nil {
@@ -66,7 +68,7 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 	if err != nil {
 		return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
 	}
-	jobName, err := migrationRepairJobNameAbsentFromJobs(repairSpec.Jobs)
+	jobName, err := migrationRepairJobNameAbsentFromSpec(repairSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -306,22 +308,51 @@ func migrationRepairJobName() string {
 	if _, err := migrationRepairRandomRead(token[:]); err == nil {
 		return migrationRepairJobPrefix + "-" + hex.EncodeToString(token[:])
 	}
-	return fmt.Sprintf("%s-%08x", migrationRepairJobPrefix, uint32(time.Now().UnixNano()))
+	seed := uint64(time.Now().UnixNano()) ^ (migrationRepairFallbackCounter.Add(1) * 0x9e3779b97f4a7c15)
+	return fmt.Sprintf("%s-%012x", migrationRepairJobPrefix, seed&0xffffffffffff)
 }
 
-func migrationRepairJobNameAbsentFromJobs(jobs []*godo.AppJobSpec) (string, error) {
+func migrationRepairJobNameAbsentFromSpec(spec *godo.AppSpec) (string, error) {
 	for range 32 {
 		name := migrationRepairJobNameGenerator()
-		if !appSpecHasJobName(jobs, name) {
+		if !appSpecHasComponentName(spec, name) {
 			return name, nil
 		}
 	}
 	return "", errors.New("app platform migration repair: could not generate a unique temporary job name")
 }
 
-func appSpecHasJobName(jobs []*godo.AppJobSpec, name string) bool {
-	for _, job := range jobs {
+func appSpecHasComponentName(spec *godo.AppSpec, name string) bool {
+	if spec == nil {
+		return false
+	}
+	for _, service := range spec.Services {
+		if service != nil && service.Name == name {
+			return true
+		}
+	}
+	for _, site := range spec.StaticSites {
+		if site != nil && site.Name == name {
+			return true
+		}
+	}
+	for _, worker := range spec.Workers {
+		if worker != nil && worker.Name == name {
+			return true
+		}
+	}
+	for _, job := range spec.Jobs {
 		if job != nil && job.Name == name {
+			return true
+		}
+	}
+	for _, fn := range spec.Functions {
+		if fn != nil && fn.Name == name {
+			return true
+		}
+	}
+	for _, database := range spec.Databases {
+		if database != nil && database.Name == name {
 			return true
 		}
 	}

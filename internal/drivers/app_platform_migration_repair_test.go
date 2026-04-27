@@ -689,11 +689,11 @@ func TestAppPlatformRepairDirtyMigrationPreservesOtherTemporaryRepairJobs(t *tes
 func TestWithoutMigrationRepairJobNamePreservesNilJobs(t *testing.T) {
 	jobs := []*godo.AppJobSpec{
 		nil,
-		{Name: "wfctl-migration-repair-current"},
-		{Name: "wfctl-migration-repair-other"},
+		{Name: migrationRepairJobPrefix + "-current"},
+		{Name: migrationRepairJobPrefix + "-other"},
 	}
-	out := withoutMigrationRepairJobName(jobs, "wfctl-migration-repair-current")
-	if len(out) != 2 || out[0] != nil || out[1].Name != "wfctl-migration-repair-other" {
+	out := withoutMigrationRepairJobName(jobs, migrationRepairJobPrefix+"-current")
+	if len(out) != 2 || out[0] != nil || out[1].Name != migrationRepairJobPrefix+"-other" {
 		t.Fatalf("jobs = %+v, want nil and unrelated job preserved", out)
 	}
 }
@@ -771,7 +771,7 @@ func TestMigrationRepairJobNameFallbackFitsDigitalOceanLimit(t *testing.T) {
 	}
 }
 
-func TestMigrationRepairJobNameAbsentFromJobsRetriesCollisions(t *testing.T) {
+func TestMigrationRepairJobNameAbsentFromSpecRetriesComponentCollisions(t *testing.T) {
 	originalGenerator := migrationRepairJobNameGenerator
 	names := []string{"wfctl-mig-repair-collision", "wfctl-mig-repair-available"}
 	migrationRepairJobNameGenerator = func() string {
@@ -783,12 +783,61 @@ func TestMigrationRepairJobNameAbsentFromJobsRetriesCollisions(t *testing.T) {
 		migrationRepairJobNameGenerator = originalGenerator
 	})
 
-	got, err := migrationRepairJobNameAbsentFromJobs([]*godo.AppJobSpec{{Name: "wfctl-mig-repair-collision"}})
+	got, err := migrationRepairJobNameAbsentFromSpec(&godo.AppSpec{
+		Services: []*godo.AppServiceSpec{{Name: "wfctl-mig-repair-collision"}},
+	})
 	if err != nil {
-		t.Fatalf("migrationRepairJobNameAbsentFromJobs() error = %v", err)
+		t.Fatalf("migrationRepairJobNameAbsentFromSpec() error = %v", err)
 	}
 	if got != "wfctl-mig-repair-available" {
-		t.Fatalf("migrationRepairJobNameAbsentFromJobs() = %q, want available candidate", got)
+		t.Fatalf("migrationRepairJobNameAbsentFromSpec() = %q, want available candidate", got)
+	}
+}
+
+func TestAppPlatformRepairDirtyMigrationRetriesLiveComponentNameCollision(t *testing.T) {
+	originalGenerator := migrationRepairJobNameGenerator
+	names := []string{"wfctl-mig-repair-collision", "wfctl-mig-repair-available"}
+	migrationRepairJobNameGenerator = func() string {
+		name := names[0]
+		names = names[1:]
+		return name
+	}
+	t.Cleanup(func() {
+		migrationRepairJobNameGenerator = originalGenerator
+	})
+
+	client := &migrationRepairAppClient{
+		app: &godo.App{
+			ID: "app-123",
+			Spec: &godo.AppSpec{
+				Name:     "bmw-staging",
+				Services: []*godo.AppServiceSpec{{Name: "wfctl-mig-repair-collision"}},
+			},
+		},
+		deployment: &godo.Deployment{ID: "dep-123", Phase: godo.DeploymentPhase_Deploying},
+		invocations: [][]*godo.JobInvocation{{
+			{ID: "job-123", JobName: "$repair", DeploymentID: "dep-123", Phase: godo.JOBINVOCATIONPHASE_Succeeded},
+		}},
+	}
+	driver := NewAppPlatformDriverWithClient(client, "nyc3")
+	_, err := driver.RepairDirtyMigration(context.Background(), interfaces.MigrationRepairRequest{
+		AppResourceName:      "bmw-staging",
+		DatabaseResourceName: "bmw-staging-db",
+		JobImage:             "registry.digitalocean.com/bmw-registry/workflow-migrate:sha",
+		SourceDir:            "/migrations",
+		ExpectedDirtyVersion: "20260426000005",
+		ForceVersion:         "20260422000001",
+		ThenUp:               true,
+		ConfirmForce:         interfaces.MigrationRepairConfirmation,
+	})
+	if err != nil {
+		t.Fatalf("RepairDirtyMigration: %v", err)
+	}
+	if got := client.updates[0].Spec.Jobs[0].Name; got != "wfctl-mig-repair-available" {
+		t.Fatalf("temporary job name = %q, want collision-free generated name", got)
+	}
+	if client.listInvocationRequests[1].JobNames[0] != "wfctl-mig-repair-available" {
+		t.Fatalf("listInvocationRequests = %+v, want collision-free generated name", client.listInvocationRequests)
 	}
 }
 
