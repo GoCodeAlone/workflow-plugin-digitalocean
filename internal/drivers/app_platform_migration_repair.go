@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -27,6 +28,7 @@ var migrationRepairHTTPClient = http.DefaultClient
 var migrationRepairPollInterval = 2 * time.Second
 var migrationRepairRandomRead = rand.Read
 var migrationRepairJobNameGenerator = migrationRepairJobName
+var migrationRepairFallbackCounter atomic.Uint64
 
 func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {
 	if err := req.Validate(); err != nil {
@@ -55,26 +57,34 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 	if err := preflightMigrationRepairJobInvocations(operationCtx, client, app.ID); err != nil {
 		return nil, err
 	}
-	liveApp, _, err := client.Get(operationCtx, app.ID)
-	if err != nil {
-		return nil, fmt.Errorf("app platform migration repair read live spec %q: %w", req.AppResourceName, WrapGodoError(err))
+	var jobName string
+	prepareRepairSpec := func() (*godo.AppSpec, error) {
+		liveApp, _, err := client.Get(operationCtx, app.ID)
+		if err != nil {
+			return nil, fmt.Errorf("app platform migration repair read live spec %q: %w", req.AppResourceName, WrapGodoError(err))
+		}
+		if liveApp == nil || liveApp.Spec == nil {
+			return nil, fmt.Errorf("app platform migration repair %q: live app spec missing", req.AppResourceName)
+		}
+		repairSpec, err := cloneAppSpec(liveApp.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
+		}
+		jobName, err = migrationRepairJobNameAbsentFromSpec(repairSpec)
+		if err != nil {
+			return nil, err
+		}
+		job, err := migrationRepairJobSpec(jobName, req)
+		if err != nil {
+			return nil, err
+		}
+		repairSpec.Jobs = append(repairSpec.Jobs, job)
+		return repairSpec, nil
 	}
-	if liveApp == nil || liveApp.Spec == nil {
-		return nil, fmt.Errorf("app platform migration repair %q: live app spec missing", req.AppResourceName)
-	}
-	repairSpec, err := cloneAppSpec(liveApp.Spec)
-	if err != nil {
-		return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
-	}
-	jobName, err := migrationRepairJobNameAbsentFromJobs(repairSpec.Jobs)
+	repairSpec, err := prepareRepairSpec()
 	if err != nil {
 		return nil, err
 	}
-	job, err := migrationRepairJobSpec(jobName, req)
-	if err != nil {
-		return nil, err
-	}
-	repairSpec.Jobs = append(repairSpec.Jobs, job)
 	restore := func(result *interfaces.MigrationRepairResult) (*interfaces.MigrationRepairResult, error) {
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
@@ -141,20 +151,39 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 		}
 		return result, nil
 	}
-	if _, _, err := client.Update(operationCtx, app.ID, &godo.AppUpdateRequest{Spec: repairSpec}); err != nil {
+	var updateErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			repairSpec, err = prepareRepairSpec()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if _, _, updateErr = client.Update(operationCtx, app.ID, &godo.AppUpdateRequest{Spec: repairSpec}); updateErr == nil {
+			break
+		}
+		if !isMigrationRepairComponentNameConflict(updateErr) {
+			break
+		}
+	}
+	if updateErr != nil {
 		result := &interfaces.MigrationRepairResult{
 			Status: interfaces.MigrationRepairStatusFailed,
 			Diagnostics: []interfaces.Diagnostic{{
 				Phase:  "update",
 				Cause:  "temporary repair job update failed",
-				Detail: err.Error(),
+				Detail: updateErr.Error(),
 			}},
 		}
-		restored, restoreErr := restore(result)
-		if restoreErr != nil {
-			return restored, restoreErr
+		componentNameConflict := isMigrationRepairComponentNameConflict(updateErr)
+		if !componentNameConflict {
+			restored, restoreErr := restore(result)
+			if restoreErr != nil {
+				return restored, restoreErr
+			}
+			return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(updateErr))
 		}
-		return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(err))
+		return result, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
 	}
 
 	result := &interfaces.MigrationRepairResult{
@@ -306,22 +335,76 @@ func migrationRepairJobName() string {
 	if _, err := migrationRepairRandomRead(token[:]); err == nil {
 		return migrationRepairJobPrefix + "-" + hex.EncodeToString(token[:])
 	}
-	return fmt.Sprintf("%s-%08x", migrationRepairJobPrefix, uint32(time.Now().UnixNano()))
+	seed := uint64(time.Now().UnixNano()) ^ (migrationRepairFallbackCounter.Add(1) * 0x9e3779b97f4a7c15)
+	return fmt.Sprintf("%s-%012x", migrationRepairJobPrefix, seed&0xffffffffffff)
 }
 
-func migrationRepairJobNameAbsentFromJobs(jobs []*godo.AppJobSpec) (string, error) {
+func migrationRepairJobNameAbsentFromSpec(spec *godo.AppSpec) (string, error) {
 	for range 32 {
 		name := migrationRepairJobNameGenerator()
-		if !appSpecHasJobName(jobs, name) {
+		if !appSpecHasComponentName(spec, name) {
 			return name, nil
 		}
 	}
 	return "", errors.New("app platform migration repair: could not generate a unique temporary job name")
 }
 
-func appSpecHasJobName(jobs []*godo.AppJobSpec, name string) bool {
-	for _, job := range jobs {
+func isMigrationRepairComponentNameConflict(err error) bool {
+	var gErr *godo.ErrorResponse
+	if !errors.As(err, &gErr) || gErr.Response == nil {
+		return false
+	}
+	if gErr.Response.StatusCode != http.StatusBadRequest && gErr.Response.StatusCode != http.StatusUnprocessableEntity && gErr.Response.StatusCode != http.StatusConflict {
+		return false
+	}
+	message := strings.ToLower(gErr.Message)
+	if !strings.Contains(message, "name") {
+		return false
+	}
+	componentScoped := strings.Contains(message, "component") ||
+		strings.Contains(message, "services[") ||
+		strings.Contains(message, "static_sites[") ||
+		strings.Contains(message, "workers[") ||
+		strings.Contains(message, "jobs[") ||
+		strings.Contains(message, "functions[") ||
+		strings.Contains(message, "databases[")
+	if !componentScoped {
+		return false
+	}
+	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate") || strings.Contains(message, "already")
+}
+
+func appSpecHasComponentName(spec *godo.AppSpec, name string) bool {
+	if spec == nil {
+		return false
+	}
+	for _, service := range spec.Services {
+		if service != nil && service.Name == name {
+			return true
+		}
+	}
+	for _, site := range spec.StaticSites {
+		if site != nil && site.Name == name {
+			return true
+		}
+	}
+	for _, worker := range spec.Workers {
+		if worker != nil && worker.Name == name {
+			return true
+		}
+	}
+	for _, job := range spec.Jobs {
 		if job != nil && job.Name == name {
+			return true
+		}
+	}
+	for _, fn := range spec.Functions {
+		if fn != nil && fn.Name == name {
+			return true
+		}
+	}
+	for _, database := range spec.Databases {
+		if database != nil && database.Name == name {
 			return true
 		}
 	}
@@ -368,6 +451,9 @@ func waitForMigrationRepairInvocation(ctx context.Context, client appPlatformMig
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return last, fmt.Errorf("timed out waiting for migration repair job %q", jobName)
+			}
 			return last, ctx.Err()
 		case <-deadline.C:
 			return last, fmt.Errorf("timed out waiting for migration repair job %q", jobName)
