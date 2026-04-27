@@ -25,6 +25,8 @@ var _ interfaces.ProviderMigrationRepairer = (*AppPlatformDriver)(nil)
 
 var migrationRepairHTTPClient = http.DefaultClient
 var migrationRepairPollInterval = 2 * time.Second
+var migrationRepairRandomRead = rand.Read
+var migrationRepairJobNameGenerator = migrationRepairJobName
 
 func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {
 	if err := req.Validate(); err != nil {
@@ -50,11 +52,6 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 		return nil, fmt.Errorf("app platform migration repair %q: app is missing ID or spec", req.AppResourceName)
 	}
 
-	jobName := migrationRepairJobName()
-	job, err := migrationRepairJobSpec(jobName, req)
-	if err != nil {
-		return nil, err
-	}
 	if err := preflightMigrationRepairJobInvocations(operationCtx, client, app.ID); err != nil {
 		return nil, err
 	}
@@ -68,6 +65,14 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 	repairSpec, err := cloneAppSpec(liveApp.Spec)
 	if err != nil {
 		return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
+	}
+	jobName, err := migrationRepairJobNameAbsentFromJobs(repairSpec.Jobs)
+	if err != nil {
+		return nil, err
+	}
+	job, err := migrationRepairJobSpec(jobName, req)
+	if err != nil {
+		return nil, err
 	}
 	repairSpec.Jobs = append(repairSpec.Jobs, job)
 	restore := func(result *interfaces.MigrationRepairResult) (*interfaces.MigrationRepairResult, error) {
@@ -298,10 +303,29 @@ func withoutMigrationRepairJobName(jobs []*godo.AppJobSpec, name string) []*godo
 
 func migrationRepairJobName() string {
 	var token [6]byte
-	if _, err := rand.Read(token[:]); err == nil {
+	if _, err := migrationRepairRandomRead(token[:]); err == nil {
 		return migrationRepairJobPrefix + "-" + hex.EncodeToString(token[:])
 	}
-	return fmt.Sprintf("%s-%d", migrationRepairJobPrefix, time.Now().UnixNano())
+	return fmt.Sprintf("%s-%08x", migrationRepairJobPrefix, uint32(time.Now().UnixNano()))
+}
+
+func migrationRepairJobNameAbsentFromJobs(jobs []*godo.AppJobSpec) (string, error) {
+	for range 32 {
+		name := migrationRepairJobNameGenerator()
+		if !appSpecHasJobName(jobs, name) {
+			return name, nil
+		}
+	}
+	return "", errors.New("app platform migration repair: could not generate a unique temporary job name")
+}
+
+func appSpecHasJobName(jobs []*godo.AppJobSpec, name string) bool {
+	for _, job := range jobs {
+		if job != nil && job.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func preflightMigrationRepairJobInvocations(ctx context.Context, client appPlatformMigrationRepairClient, appID string) error {
