@@ -14,14 +14,19 @@ import (
 
 // deployMockClient supports stateful create/get/update/delete for deploy tests.
 type deployMockClient struct {
-	apps   map[string]*godo.App
-	err    error
-	nextID int
+	apps        map[string]*godo.App
+	deployments map[string][]*godo.Deployment
+	err         error
+	nextID      int
 }
 
 func newDeployMock() *deployMockClient {
 	// Start at 100 so seeded apps like "app-1" don't collide with generated IDs.
-	return &deployMockClient{apps: make(map[string]*godo.App), nextID: 100}
+	return &deployMockClient{
+		apps:        make(map[string]*godo.App),
+		deployments: make(map[string][]*godo.Deployment),
+		nextID:      100,
+	}
 }
 
 func (m *deployMockClient) Create(_ context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
@@ -83,8 +88,11 @@ func (m *deployMockClient) CreateDeployment(_ context.Context, _ string, _ ...*g
 	return &godo.Deployment{ID: "dep-deploy"}, nil, nil
 }
 
-func (m *deployMockClient) ListDeployments(_ context.Context, _ string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
-	return nil, &godo.Response{}, m.err
+func (m *deployMockClient) ListDeployments(_ context.Context, appID string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
+	if m.err != nil {
+		return nil, &godo.Response{}, m.err
+	}
+	return m.deployments[appID], &godo.Response{}, nil
 }
 func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Response, error) {
 	if m.err != nil {
@@ -120,6 +128,15 @@ func seedApp(m *deployMockClient, id, name, image string) *godo.App {
 	return app
 }
 
+func findAppExceptID(m *deployMockClient, id string) *godo.App {
+	for appID, app := range m.apps {
+		if appID != id {
+			return app
+		}
+	}
+	return nil
+}
+
 func splitImage(image string) (repo, tag string) {
 	parts := strings.SplitN(image, ":", 2)
 	if len(parts) == 2 {
@@ -144,6 +161,99 @@ func TestAppDeployDriver_Update(t *testing.T) {
 	}
 	if img != "registry.digitalocean.com/myrepo/myapp:v2" {
 		t.Errorf("CurrentImage = %q, want v2", img)
+	}
+}
+
+func TestAppDeployDriver_HealthCheck_WaitsForUpdateDeployment(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.ActiveDeployment.ID = "dep-old"
+	app.InProgressDeployment = &godo.Deployment{
+		ID:    "dep-new",
+		Phase: godo.DeploymentPhase_Building,
+	}
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "deployment in progress") ||
+		!strings.Contains(err.Error(), "dep-new") {
+		t.Fatalf("HealthCheck should wait for new deployment, got: %v", err)
+	}
+
+	app.InProgressDeployment = nil
+	app.ActiveDeployment = &godo.Deployment{
+		ID:    "dep-new",
+		Phase: godo.DeploymentPhase_Active,
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err != nil {
+		t.Fatalf("HealthCheck after new deployment active: %v", err)
+	}
+}
+
+func TestAppDeployDriver_HealthCheck_FailsUpdateDeploymentErrorDespiteOldActive(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.ActiveDeployment.ID = "dep-old"
+	app.InProgressDeployment = &godo.Deployment{
+		ID:    "dep-new",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "pre-deploy job failed",
+	}
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "deployment failed") ||
+		!strings.Contains(err.Error(), "pre-deploy job failed") {
+		t.Fatalf("HealthCheck should fail on update deployment error, got: %v", err)
+	}
+}
+
+func TestAppDeployDriver_HealthCheck_WaitsUntilNewDeploymentObserved(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.ActiveDeployment.ID = "dep-old"
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "waiting for deployment") {
+		t.Fatalf("HealthCheck should wait instead of passing old active deployment, got: %v", err)
+	}
+
+	m.deployments["app-1"] = []*godo.Deployment{{
+		ID:                   "dep-new",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-old",
+	}}
+	if err := d.HealthCheck(context.Background(), "/health"); err != nil {
+		t.Fatalf("HealthCheck after observed deployment active: %v", err)
+	}
+}
+
+func TestAppDeployDriver_HealthCheck_IgnoresUnrelatedHistoricalDeployments(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.ActiveDeployment.ID = "dep-old"
+	m.deployments["app-1"] = []*godo.Deployment{
+		{ID: "dep-unrelated", Phase: godo.DeploymentPhase_Active},
+		{ID: "dep-old", Phase: godo.DeploymentPhase_Active},
+	}
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "waiting for deployment") {
+		t.Fatalf("HealthCheck should ignore unrelated historical deployment, got: %v", err)
 	}
 }
 
@@ -249,6 +359,63 @@ func TestAppBlueGreenDriver_SwitchTraffic(t *testing.T) {
 	}
 }
 
+func TestAppBlueGreenDriver_SwitchTraffic_HealthCheckWaitsForBlueDeployment(t *testing.T) {
+	m := newDeployMock()
+	blue := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	blue.ActiveDeployment.ID = "dep-old"
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	blue.InProgressDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Building}
+	if err := d.SwitchTraffic(context.Background()); err != nil {
+		t.Fatalf("SwitchTraffic: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "deployment in progress") ||
+		!strings.Contains(err.Error(), "dep-new") {
+		t.Fatalf("HealthCheck should wait for switched blue deployment, got: %v", err)
+	}
+}
+
+func TestAppBlueGreenDriver_CreateGreenAfterSwitchChecksNewGreen(t *testing.T) {
+	m := newDeployMock()
+	blue := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	blue.ActiveDeployment.ID = "dep-old"
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("CreateGreen first: %v", err)
+	}
+	blue.InProgressDeployment = &godo.Deployment{ID: "dep-switch", Phase: godo.DeploymentPhase_Building}
+	if err := d.SwitchTraffic(context.Background()); err != nil {
+		t.Fatalf("SwitchTraffic: %v", err)
+	}
+	blue.InProgressDeployment = nil
+	blue.ActiveDeployment = &godo.Deployment{ID: "dep-switch", Phase: godo.DeploymentPhase_Active}
+	if err := d.HealthCheck(context.Background(), "/health"); err != nil {
+		t.Fatalf("HealthCheck after switch active: %v", err)
+	}
+
+	if err := d.DestroyBlue(context.Background()); err != nil {
+		t.Fatalf("DestroyBlue: %v", err)
+	}
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/myapp:v3"); err != nil {
+		t.Fatalf("CreateGreen second: %v", err)
+	}
+	green := findAppExceptID(m, "app-1")
+	if green == nil {
+		t.Fatal("second green app missing")
+	}
+	green.ActiveDeployment = nil
+	green.InProgressDeployment = &godo.Deployment{ID: "dep-green-next", Phase: godo.DeploymentPhase_Building}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "not active") && !strings.Contains(err.Error(), "deployment in progress") {
+		t.Fatalf("HealthCheck should inspect second green deployment, got: %v", err)
+	}
+}
+
 func TestAppBlueGreenDriver_DestroyBlue(t *testing.T) {
 	m := newDeployMock()
 	seedApp(m, "app-1", "myapp", "image:v1")
@@ -350,6 +517,26 @@ func TestAppCanaryDriver_PromoteCanary(t *testing.T) {
 			tag = svc.Image.Tag
 		}
 		t.Errorf("after promote stable image tag = %q, want v2", tag)
+	}
+}
+
+func TestAppCanaryDriver_PromoteCanary_HealthCheckWaitsForStableDeployment(t *testing.T) {
+	m := newDeployMock()
+	stable := seedApp(m, "app-1", "myapp", "image:v1")
+	stable.ActiveDeployment.ID = "dep-old"
+
+	d := drivers.NewAppCanaryDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.CreateCanary(context.Background(), "image:v2"); err != nil {
+		t.Fatalf("CreateCanary: %v", err)
+	}
+	stable.InProgressDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Building}
+	if err := d.PromoteCanary(context.Background()); err != nil {
+		t.Fatalf("PromoteCanary: %v", err)
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil ||
+		!strings.Contains(err.Error(), "deployment in progress") ||
+		!strings.Contains(err.Error(), "dep-new") {
+		t.Fatalf("HealthCheck should wait for promoted stable deployment, got: %v", err)
 	}
 }
 
