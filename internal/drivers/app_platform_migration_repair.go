@@ -57,26 +57,34 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 	if err := preflightMigrationRepairJobInvocations(operationCtx, client, app.ID); err != nil {
 		return nil, err
 	}
-	liveApp, _, err := client.Get(operationCtx, app.ID)
-	if err != nil {
-		return nil, fmt.Errorf("app platform migration repair read live spec %q: %w", req.AppResourceName, WrapGodoError(err))
+	var jobName string
+	prepareRepairSpec := func() (*godo.AppSpec, error) {
+		liveApp, _, err := client.Get(operationCtx, app.ID)
+		if err != nil {
+			return nil, fmt.Errorf("app platform migration repair read live spec %q: %w", req.AppResourceName, WrapGodoError(err))
+		}
+		if liveApp == nil || liveApp.Spec == nil {
+			return nil, fmt.Errorf("app platform migration repair %q: live app spec missing", req.AppResourceName)
+		}
+		repairSpec, err := cloneAppSpec(liveApp.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
+		}
+		jobName, err = migrationRepairJobNameAbsentFromSpec(repairSpec)
+		if err != nil {
+			return nil, err
+		}
+		job, err := migrationRepairJobSpec(jobName, req)
+		if err != nil {
+			return nil, err
+		}
+		repairSpec.Jobs = append(repairSpec.Jobs, job)
+		return repairSpec, nil
 	}
-	if liveApp == nil || liveApp.Spec == nil {
-		return nil, fmt.Errorf("app platform migration repair %q: live app spec missing", req.AppResourceName)
-	}
-	repairSpec, err := cloneAppSpec(liveApp.Spec)
-	if err != nil {
-		return nil, fmt.Errorf("app platform migration repair clone live spec %q: %w", req.AppResourceName, err)
-	}
-	jobName, err := migrationRepairJobNameAbsentFromSpec(repairSpec)
+	repairSpec, err := prepareRepairSpec()
 	if err != nil {
 		return nil, err
 	}
-	job, err := migrationRepairJobSpec(jobName, req)
-	if err != nil {
-		return nil, err
-	}
-	repairSpec.Jobs = append(repairSpec.Jobs, job)
 	restore := func(result *interfaces.MigrationRepairResult) (*interfaces.MigrationRepairResult, error) {
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
@@ -143,20 +151,38 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 		}
 		return result, nil
 	}
-	if _, _, err := client.Update(operationCtx, app.ID, &godo.AppUpdateRequest{Spec: repairSpec}); err != nil {
+	var updateErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			repairSpec, err = prepareRepairSpec()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if _, _, updateErr = client.Update(operationCtx, app.ID, &godo.AppUpdateRequest{Spec: repairSpec}); updateErr == nil {
+			break
+		}
+		if !isMigrationRepairComponentNameConflict(updateErr) {
+			break
+		}
+	}
+	if updateErr != nil {
 		result := &interfaces.MigrationRepairResult{
 			Status: interfaces.MigrationRepairStatusFailed,
 			Diagnostics: []interfaces.Diagnostic{{
 				Phase:  "update",
 				Cause:  "temporary repair job update failed",
-				Detail: err.Error(),
+				Detail: updateErr.Error(),
 			}},
 		}
-		restored, restoreErr := restore(result)
-		if restoreErr != nil {
-			return restored, restoreErr
+		if !isMigrationRepairComponentNameConflict(updateErr) {
+			restored, restoreErr := restore(result)
+			if restoreErr != nil {
+				return restored, restoreErr
+			}
+			return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(updateErr))
 		}
-		return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(err))
+		return result, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
 	}
 
 	result := &interfaces.MigrationRepairResult{
@@ -320,6 +346,19 @@ func migrationRepairJobNameAbsentFromSpec(spec *godo.AppSpec) (string, error) {
 		}
 	}
 	return "", errors.New("app platform migration repair: could not generate a unique temporary job name")
+}
+
+func isMigrationRepairComponentNameConflict(err error) bool {
+	var gErr *godo.ErrorResponse
+	if !errors.As(err, &gErr) || gErr.Response == nil {
+		return false
+	}
+	if gErr.Response.StatusCode != http.StatusBadRequest && gErr.Response.StatusCode != http.StatusUnprocessableEntity && gErr.Response.StatusCode != http.StatusConflict {
+		return false
+	}
+	message := strings.ToLower(gErr.Message)
+	return strings.Contains(message, "name") && strings.Contains(message, "component") &&
+		(strings.Contains(message, "unique") || strings.Contains(message, "duplicate") || strings.Contains(message, "already"))
 }
 
 func appSpecHasComponentName(spec *godo.AppSpec, name string) bool {
