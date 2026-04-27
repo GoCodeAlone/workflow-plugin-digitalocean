@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -647,7 +648,7 @@ func TestAppPlatformRepairDirtyMigrationPreservesOtherTemporaryRepairJobs(t *tes
 			Spec: &godo.AppSpec{
 				Name: "bmw-staging",
 				Jobs: []*godo.AppJobSpec{{
-					Name: "wfctl-migration-repair-other",
+					Name: migrationRepairJobPrefix + "-other",
 					Kind: godo.AppJobSpecKind_PreDeploy,
 				}},
 			},
@@ -676,11 +677,11 @@ func TestAppPlatformRepairDirtyMigrationPreservesOtherTemporaryRepairJobs(t *tes
 	if len(tempSpec.Jobs) != 2 {
 		t.Fatalf("temporary jobs = %d, want existing repair job plus this repair job", len(tempSpec.Jobs))
 	}
-	if tempSpec.Jobs[0].Name != "wfctl-migration-repair-other" {
+	if tempSpec.Jobs[0].Name != migrationRepairJobPrefix+"-other" {
 		t.Fatalf("existing repair job was not preserved: %+v", tempSpec.Jobs)
 	}
 	restoredSpec := client.updates[len(client.updates)-1].Spec
-	if len(restoredSpec.Jobs) != 1 || restoredSpec.Jobs[0].Name != "wfctl-migration-repair-other" {
+	if len(restoredSpec.Jobs) != 1 || restoredSpec.Jobs[0].Name != migrationRepairJobPrefix+"-other" {
 		t.Fatalf("restored jobs = %+v, want only other repair job preserved", restoredSpec.Jobs)
 	}
 }
@@ -749,6 +750,45 @@ func TestMigrationRepairJobNameFitsDigitalOceanLimit(t *testing.T) {
 		if len(name) > 32 {
 			t.Fatalf("job name length = %d for %q, want <= 32", len(name), name)
 		}
+	}
+}
+
+func TestMigrationRepairJobNameFallbackFitsDigitalOceanLimit(t *testing.T) {
+	originalRead := migrationRepairRandomRead
+	migrationRepairRandomRead = func([]byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+	t.Cleanup(func() {
+		migrationRepairRandomRead = originalRead
+	})
+
+	name := migrationRepairJobName()
+	if !strings.HasPrefix(name, migrationRepairJobPrefix+"-") {
+		t.Fatalf("job name = %q", name)
+	}
+	if len(name) > 32 {
+		t.Fatalf("job name length = %d for %q, want <= 32", len(name), name)
+	}
+}
+
+func TestMigrationRepairJobNameAbsentFromJobsRetriesCollisions(t *testing.T) {
+	originalGenerator := migrationRepairJobNameGenerator
+	names := []string{"wfctl-mig-repair-collision", "wfctl-mig-repair-available"}
+	migrationRepairJobNameGenerator = func() string {
+		name := names[0]
+		names = names[1:]
+		return name
+	}
+	t.Cleanup(func() {
+		migrationRepairJobNameGenerator = originalGenerator
+	})
+
+	got, err := migrationRepairJobNameAbsentFromJobs([]*godo.AppJobSpec{{Name: "wfctl-mig-repair-collision"}})
+	if err != nil {
+		t.Fatalf("migrationRepairJobNameAbsentFromJobs() error = %v", err)
+	}
+	if got != "wfctl-mig-repair-available" {
+		t.Fatalf("migrationRepairJobNameAbsentFromJobs() = %q, want available candidate", got)
 	}
 }
 
