@@ -249,10 +249,12 @@ func TestGRPCDispatch_NilArgs_NoPanic(t *testing.T) {
 		sizingResult:    &interfaces.ProviderSizing{InstanceType: "xs"},
 		bootstrapResult: &interfaces.BootstrapResult{},
 	}
+	repairFake := &fakeRepairProvider{fakeIaCProvider: *fake}
 	provider := &DOProvider{
 		drivers: map[string]interfaces.ResourceDriver{"infra.droplet": stub},
 	}
 	miProvider := &doModuleInstance{provider: fake}
+	miRepairProvider := &doModuleInstance{provider: repairFake}
 	miDrivers := &doModuleInstance{provider: provider}
 
 	cases := []struct {
@@ -273,6 +275,7 @@ func TestGRPCDispatch_NilArgs_NoPanic(t *testing.T) {
 		{miProvider, "IaCProvider.Import"},
 		{miProvider, "IaCProvider.ResolveSizing"},
 		{miProvider, "IaCProvider.BootstrapStateBackend"},
+		{miRepairProvider, "IaCProvider.RepairDirtyMigration"},
 		// Driver methods with nil args → resource_type missing → error (not panic).
 		{miDrivers, "ResourceDriver.Create"},
 		{miDrivers, "ResourceDriver.Read"},
@@ -311,10 +314,12 @@ func TestGRPCDispatch_EmptyArgs_NoPanic(t *testing.T) {
 		sizingResult:    &interfaces.ProviderSizing{InstanceType: "xs"},
 		bootstrapResult: &interfaces.BootstrapResult{},
 	}
+	repairFake := &fakeRepairProvider{fakeIaCProvider: *fake}
 	provider := &DOProvider{
 		drivers: map[string]interfaces.ResourceDriver{"infra.droplet": stub},
 	}
 	miProvider := &doModuleInstance{provider: fake}
+	miRepairProvider := &doModuleInstance{provider: repairFake}
 	miDrivers := &doModuleInstance{provider: provider}
 
 	cases := []struct {
@@ -333,6 +338,7 @@ func TestGRPCDispatch_EmptyArgs_NoPanic(t *testing.T) {
 		{miProvider, "IaCProvider.Import"},
 		{miProvider, "IaCProvider.ResolveSizing"},
 		{miProvider, "IaCProvider.BootstrapStateBackend"},
+		{miRepairProvider, "IaCProvider.RepairDirtyMigration"},
 		{miDrivers, "ResourceDriver.Create"},
 		{miDrivers, "ResourceDriver.Read"},
 		{miDrivers, "ResourceDriver.Update"},

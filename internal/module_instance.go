@@ -29,6 +29,10 @@ func (m *doModuleInstance) Stop(_ context.Context) error  { return nil }
 // InvokeMethod dispatches host calls to the underlying DOProvider and its
 // resource drivers. Method names follow the convention "Interface.MethodName".
 func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map[string]any, error) {
+	return m.InvokeMethodContext(context.Background(), method, args)
+}
+
+func (m *doModuleInstance) InvokeMethodContext(ctx context.Context, method string, args map[string]any) (map[string]any, error) {
 	switch method {
 	case "IaCProvider.Initialize":
 		// Already initialised in CreateModule; accept a re-init call as a no-op.
@@ -53,28 +57,31 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 		return map[string]any{"capabilities": out}, nil
 
 	case "IaCProvider.Plan":
-		return m.invokeProviderPlan(args)
+		return m.invokeProviderPlan(ctx, args)
 
 	case "IaCProvider.Apply":
-		return m.invokeProviderApply(args)
+		return m.invokeProviderApply(ctx, args)
 
 	case "IaCProvider.Destroy":
-		return m.invokeProviderDestroy(args)
+		return m.invokeProviderDestroy(ctx, args)
 
 	case "IaCProvider.Status":
-		return m.invokeProviderStatus(args)
+		return m.invokeProviderStatus(ctx, args)
 
 	case "IaCProvider.DetectDrift":
-		return m.invokeProviderDetectDrift(args)
+		return m.invokeProviderDetectDrift(ctx, args)
 
 	case "IaCProvider.Import":
-		return m.invokeProviderImport(args)
+		return m.invokeProviderImport(ctx, args)
 
 	case "IaCProvider.ResolveSizing":
 		return m.invokeProviderResolveSizing(args)
 
 	case "IaCProvider.BootstrapStateBackend":
-		return m.invokeProviderBootstrapStateBackend(args)
+		return m.invokeProviderBootstrapStateBackend(ctx, args)
+
+	case "IaCProvider.RepairDirtyMigration":
+		return m.invokeProviderRepairDirtyMigration(ctx, args)
 
 	case "ResourceDriver.Update":
 		return m.invokeDriverUpdate(args)
@@ -111,7 +118,7 @@ func (m *doModuleInstance) InvokeMethod(method string, args map[string]any) (map
 // ── IaCProvider bulk-method helpers ──────────────────────────────────────────
 
 // invokeProviderPlan decodes desired+current and calls IaCProvider.Plan.
-func (m *doModuleInstance) invokeProviderPlan(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderPlan(ctx context.Context, args map[string]any) (map[string]any, error) {
 	var desired []interfaces.ResourceSpec
 	if err := decodeJSONField(args, "desired", &desired); err != nil {
 		return nil, fmt.Errorf("IaCProvider.Plan: %w", err)
@@ -120,7 +127,7 @@ func (m *doModuleInstance) invokeProviderPlan(args map[string]any) (map[string]a
 	if err := decodeJSONField(args, "current", &current); err != nil {
 		return nil, fmt.Errorf("IaCProvider.Plan: %w", err)
 	}
-	plan, err := m.provider.Plan(context.Background(), desired, current)
+	plan, err := m.provider.Plan(ctx, desired, current)
 	if err != nil {
 		return nil, err
 	}
@@ -128,12 +135,12 @@ func (m *doModuleInstance) invokeProviderPlan(args map[string]any) (map[string]a
 }
 
 // invokeProviderApply decodes the plan and calls IaCProvider.Apply.
-func (m *doModuleInstance) invokeProviderApply(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderApply(ctx context.Context, args map[string]any) (map[string]any, error) {
 	var plan interfaces.IaCPlan
 	if err := decodeJSONField(args, "plan", &plan); err != nil {
 		return nil, fmt.Errorf("IaCProvider.Apply: %w", err)
 	}
-	result, err := m.provider.Apply(context.Background(), &plan)
+	result, err := m.provider.Apply(ctx, &plan)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +148,12 @@ func (m *doModuleInstance) invokeProviderApply(args map[string]any) (map[string]
 }
 
 // invokeProviderDestroy decodes refs and calls IaCProvider.Destroy.
-func (m *doModuleInstance) invokeProviderDestroy(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderDestroy(ctx context.Context, args map[string]any) (map[string]any, error) {
 	refs, err := refsFromArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("IaCProvider.Destroy: %w", err)
 	}
-	result, err := m.provider.Destroy(context.Background(), refs)
+	result, err := m.provider.Destroy(ctx, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -154,12 +161,12 @@ func (m *doModuleInstance) invokeProviderDestroy(args map[string]any) (map[strin
 }
 
 // invokeProviderStatus decodes refs and calls IaCProvider.Status.
-func (m *doModuleInstance) invokeProviderStatus(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderStatus(ctx context.Context, args map[string]any) (map[string]any, error) {
 	refs, err := refsFromArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("IaCProvider.Status: %w", err)
 	}
-	statuses, err := m.provider.Status(context.Background(), refs)
+	statuses, err := m.provider.Status(ctx, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -172,12 +179,12 @@ func (m *doModuleInstance) invokeProviderStatus(args map[string]any) (map[string
 }
 
 // invokeProviderDetectDrift decodes refs and calls IaCProvider.DetectDrift.
-func (m *doModuleInstance) invokeProviderDetectDrift(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderDetectDrift(ctx context.Context, args map[string]any) (map[string]any, error) {
 	refs, err := refsFromArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("IaCProvider.DetectDrift: %w", err)
 	}
-	drifts, err := m.provider.DetectDrift(context.Background(), refs)
+	drifts, err := m.provider.DetectDrift(ctx, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -190,10 +197,10 @@ func (m *doModuleInstance) invokeProviderDetectDrift(args map[string]any) (map[s
 }
 
 // invokeProviderImport decodes resource_type + provider_id and calls IaCProvider.Import.
-func (m *doModuleInstance) invokeProviderImport(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderImport(ctx context.Context, args map[string]any) (map[string]any, error) {
 	resourceType := stringArg(args, "resource_type")
 	providerID := stringArg(args, "provider_id")
-	state, err := m.provider.Import(context.Background(), providerID, resourceType)
+	state, err := m.provider.Import(ctx, providerID, resourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -220,12 +227,12 @@ func (m *doModuleInstance) invokeProviderResolveSizing(args map[string]any) (map
 
 // invokeProviderBootstrapStateBackend decodes the cfg map and calls
 // IaCProvider.BootstrapStateBackend, returning the result as a flat map.
-func (m *doModuleInstance) invokeProviderBootstrapStateBackend(args map[string]any) (map[string]any, error) {
+func (m *doModuleInstance) invokeProviderBootstrapStateBackend(ctx context.Context, args map[string]any) (map[string]any, error) {
 	cfg := args // args IS the cfg map (wfctl sends it unwrapped, matching Initialize convention)
 	if cfg == nil {
 		cfg = map[string]any{}
 	}
-	result, err := m.provider.BootstrapStateBackend(context.Background(), cfg)
+	result, err := m.provider.BootstrapStateBackend(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +240,25 @@ func (m *doModuleInstance) invokeProviderBootstrapStateBackend(args map[string]a
 		return map[string]any{}, nil
 	}
 	return structToMap(result)
+}
+
+func (m *doModuleInstance) invokeProviderRepairDirtyMigration(ctx context.Context, args map[string]any) (map[string]any, error) {
+	repairer, ok := m.provider.(interfaces.ProviderMigrationRepairer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "provider does not implement ProviderMigrationRepairer")
+	}
+	var req interfaces.MigrationRepairRequest
+	if err := decodeJSONField(args, "request", &req); err != nil {
+		return nil, fmt.Errorf("IaCProvider.RepairDirtyMigration: %w", err)
+	}
+	result, err := repairer.RepairDirtyMigration(ctx, req)
+	if result != nil {
+		return structToMap(result)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{}, nil
 }
 
 // invokeDriverUpdate decodes args and calls ResourceDriver.Update.

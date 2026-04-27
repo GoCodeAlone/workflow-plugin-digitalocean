@@ -13,6 +13,8 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // tokenSource implements oauth2.TokenSource for the godo client.
@@ -34,6 +36,7 @@ type DOProvider struct {
 }
 
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
+var _ interfaces.ProviderMigrationRepairer = (*DOProvider)(nil)
 
 // NewDOProvider creates an uninitialised DOProvider.
 func NewDOProvider() *DOProvider {
@@ -111,6 +114,18 @@ func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 		return nil, fmt.Errorf("digitalocean: unsupported resource type %q", resourceType)
 	}
 	return d, nil
+}
+
+func (p *DOProvider) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {
+	driver, err := p.ResourceDriver("infra.container_service")
+	if err != nil {
+		return nil, err
+	}
+	repairer, ok := driver.(interfaces.ProviderMigrationRepairer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "digitalocean: app platform driver does not implement migration repair")
+	}
+	return repairer.RepairDirtyMigration(ctx, req)
 }
 
 // doUnsupportedCanonicalKeys lists canonical keys that the DO plugin does not yet map.

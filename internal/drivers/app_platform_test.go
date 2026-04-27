@@ -662,6 +662,12 @@ func TestParseImageRef_Malformed(t *testing.T) {
 		"registry.digitalocean.com/onlyone", // DOCR with only one path segment
 		"ghcr.io/onlyone",                   // GHCR with only org, no repo
 		"docker.io/onlyone",                 // docker.io with only one path segment
+		"registry.digitalocean.com/reg/workflow migrate:sha",
+		"registry.digitalocean.com/reg/:sha",
+		"registry.digitalocean.com/reg/app:bad tag",
+		"registry.digitalocean.com/reg/app:bad:tag",
+		"registry.digitalocean.com/reg/app:",
+		"ghcr.io//app:sha",
 	}
 	for _, tc := range cases {
 		_, err := drivers.ParseImageRef(tc)
