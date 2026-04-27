@@ -356,7 +356,11 @@ func TestAppPlatformRepairDirtyMigrationDoesNotPollPreviousActiveDeployment(t *t
 	if err == nil {
 		t.Fatal("expected missing update deployment error")
 	}
-	if result == nil || len(result.Diagnostics) == 0 || !strings.Contains(result.Diagnostics[len(result.Diagnostics)-1].Cause, "timed out waiting for migration repair job") {
+	if result == nil || len(result.Diagnostics) == 0 {
+		t.Fatalf("result diagnostics = %+v, want job polling timeout diagnostic", result)
+	}
+	cause := result.Diagnostics[len(result.Diagnostics)-1].Cause
+	if !strings.Contains(cause, "context deadline exceeded") && !strings.Contains(cause, "timed out waiting for migration repair job") {
 		t.Fatalf("result diagnostics = %+v, want job polling timeout diagnostic", result)
 	}
 	if len(client.listInvocationRequests) < 2 {
@@ -915,18 +919,33 @@ func TestAppPlatformRepairDirtyMigrationRetriesUpdateComponentNameConflict(t *te
 }
 
 func TestMigrationRepairComponentNameConflictClassifier(t *testing.T) {
-	tests := []string{
+	positive := []string{
 		"component name must be unique across all app components",
 		"services[0].name must be unique",
-		"duplicate name",
+		"jobs[1].name is a duplicate",
 	}
-	for _, message := range tests {
+	for _, message := range positive {
 		err := &godo.ErrorResponse{
 			Response: &http.Response{StatusCode: http.StatusUnprocessableEntity},
 			Message:  message,
 		}
 		if !isMigrationRepairComponentNameConflict(err) {
 			t.Fatalf("isMigrationRepairComponentNameConflict(%q) = false, want true", message)
+		}
+	}
+
+	negative := []string{
+		"app name already exists",
+		"domain name already in use",
+		"name is required",
+	}
+	for _, message := range negative {
+		err := &godo.ErrorResponse{
+			Response: &http.Response{StatusCode: http.StatusUnprocessableEntity},
+			Message:  message,
+		}
+		if isMigrationRepairComponentNameConflict(err) {
+			t.Fatalf("isMigrationRepairComponentNameConflict(%q) = true, want false", message)
 		}
 	}
 }

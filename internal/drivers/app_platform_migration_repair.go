@@ -175,18 +175,15 @@ func (d *AppPlatformDriver) RepairDirtyMigration(ctx context.Context, req interf
 				Detail: updateErr.Error(),
 			}},
 		}
-		if !isMigrationRepairComponentNameConflict(updateErr) {
+		componentNameConflict := isMigrationRepairComponentNameConflict(updateErr)
+		if !componentNameConflict {
 			restored, restoreErr := restore(result)
 			if restoreErr != nil {
 				return restored, restoreErr
 			}
 			return restored, fmt.Errorf("app platform migration repair update %q: %w", req.AppResourceName, WrapGodoError(updateErr))
 		}
-		restored, restoreErr := restore(result)
-		if restoreErr != nil {
-			return restored, restoreErr
-		}
-		return restored, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
+		return result, fmt.Errorf("app platform migration repair update %q after component name retries: %w", req.AppResourceName, WrapGodoError(updateErr))
 	}
 
 	result := &interfaces.MigrationRepairResult{
@@ -362,6 +359,16 @@ func isMigrationRepairComponentNameConflict(err error) bool {
 	}
 	message := strings.ToLower(gErr.Message)
 	if !strings.Contains(message, "name") {
+		return false
+	}
+	componentScoped := strings.Contains(message, "component") ||
+		strings.Contains(message, "services[") ||
+		strings.Contains(message, "static_sites[") ||
+		strings.Contains(message, "workers[") ||
+		strings.Contains(message, "jobs[") ||
+		strings.Contains(message, "functions[") ||
+		strings.Contains(message, "databases[")
+	if !componentScoped {
 		return false
 	}
 	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate") || strings.Contains(message, "already")
