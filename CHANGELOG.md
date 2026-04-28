@@ -4,6 +4,14 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-04-28
+
+P-2 staging IaC alignment. Three independent canonical-config additions
+(F4 / F5 / F7) plus the surrounding Plan/Diff cascade fixes flagged
+during quality review. Bumps `minEngineVersion` to `0.20.1` so plugin
+tests + alignment integration can reference align/security-check
+fixtures from workflow v0.20.1.
+
 ### Added
 
 - **`expose: internal` on `infra.container_service`** (P-2.F4) — App Platform
