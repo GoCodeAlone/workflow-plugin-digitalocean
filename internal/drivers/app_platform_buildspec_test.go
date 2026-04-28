@@ -317,6 +317,103 @@ func TestBuildAppSpec_Expose_Internal_NoPorts_Fails(t *testing.T) {
 	}
 }
 
+// Round-5 finding: applyExposeInternal previously checked only whether
+// http_port was SET (not its value), so `expose: internal` + `http_port: 0`
+// silently appended 0 to InternalPorts → unreachable service spec. Same gap
+// existed for internal_ports entries (any out-of-range port). Both now reject
+// at apply time, before any DO API call. Tests cover the team-lead-named case
+// and the parallel internal_ports case.
+
+func TestBuildAppSpec_Expose_Internal_HTTPPort_Zero_Fails(t *testing.T) {
+	cfg := map[string]any{
+		"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port": 0,
+		"expose":    "internal",
+	}
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+		Name:   "test-app",
+		Config: cfg,
+	})
+	if err == nil {
+		t.Fatal("expected error for http_port: 0 under expose: internal, got nil")
+	}
+	if !strings.Contains(err.Error(), "http_port: 0 invalid") {
+		t.Errorf("error %q should contain 'http_port: 0 invalid'", err.Error())
+	}
+}
+
+func TestBuildAppSpec_Expose_Internal_HTTPPort_OutOfRange_Fails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		port int
+	}{
+		{"negative", -1},
+		{"zero", 0},
+		{"above_max_tcp", 65536},
+		{"way_above_max", 999999},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := map[string]any{
+				"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+				"http_port": tc.port,
+				"expose":    "internal",
+			}
+			mock := &mockAppClient{app: testApp()}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+				Name:   "test-app",
+				Config: cfg,
+			})
+			if err == nil {
+				t.Fatalf("expected error for http_port: %d under expose: internal, got nil", tc.port)
+			}
+			if !strings.Contains(err.Error(), "http_port:") || !strings.Contains(err.Error(), "invalid") {
+				t.Errorf("error %q should mention `http_port:` and `invalid`", err.Error())
+			}
+			if !strings.Contains(err.Error(), "1 and 65535") {
+				t.Errorf("error %q should hint at the valid range 1..65535", err.Error())
+			}
+		})
+	}
+}
+
+func TestBuildAppSpec_Expose_Internal_InternalPorts_OutOfRange_Fails(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ports []any
+	}{
+		{"contains_zero", []any{0}},
+		{"contains_negative", []any{-1}},
+		{"contains_above_max", []any{65536}},
+		{"valid_then_invalid", []any{4222, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := map[string]any{
+				"image":          "registry.digitalocean.com/myrepo/myapp:v1",
+				"expose":         "internal",
+				"internal_ports": tc.ports,
+			}
+			mock := &mockAppClient{app: testApp()}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+				Name:   "test-app",
+				Config: cfg,
+			})
+			if err == nil {
+				t.Fatalf("expected error for internal_ports: %v under expose: internal, got nil", tc.ports)
+			}
+			if !strings.Contains(err.Error(), "internal_ports") {
+				t.Errorf("error %q should mention `internal_ports`", err.Error())
+			}
+			if !strings.Contains(err.Error(), "1 and 65535") {
+				t.Errorf("error %q should hint at the valid range 1..65535", err.Error())
+			}
+		})
+	}
+}
+
 func TestBuildAppSpec_Expose_NonStringValue_Fails(t *testing.T) {
 	// Round-3 Finding B (security-relevant): if `expose` is not a string —
 	// e.g. accidental YAML bool `true` or a number — the type-assertion

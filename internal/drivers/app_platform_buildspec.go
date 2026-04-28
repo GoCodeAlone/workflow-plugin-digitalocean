@@ -189,14 +189,21 @@ func exposeFromConfig(cfg map[string]any) (string, error) {
 //   - Routes is dropped — `internal` promises no public surface, even if the
 //     caller supplied a routes list.
 //
+// All errors below short-circuit the build at apply time, before any DO API
+// call, so misconfiguration never reaches the wire.
+//
 // Validation: `expose` must be one of {"", "public", "internal"}. Any other
 // value (typo'd "intenral", unsupported "private", etc.) returns an enum
-// error so misconfigurations fail at plan time rather than silently
-// defaulting to public — quality-review F4 Finding 3.
+// error rather than silently defaulting to public — F4 Finding 3 / round 3.
 //
 // Reachability: when `expose: internal` is set with neither http_port nor
 // internal_ports, the result would be a service with no listening port —
-// silently unreachable. Reject this combination — quality-review F4 Finding 2.
+// silently unreachable. Reject this combination — F4 Finding 2.
+//
+// Port range: http_port and every internal_ports entry must be in the valid
+// TCP range [1, 65535]. http_port: 0 used to slip through the "is the key
+// set?" check and append 0 to InternalPorts → unreachable spec — F4
+// round-5 finding.
 //
 // Port-mismatch: when both http_port and internal_ports are set under
 // `expose: internal` with disjoint values, return an explicit error so the
@@ -220,6 +227,19 @@ func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort 
 		return fmt.Errorf("expose: internal requires http_port or internal_ports to be set")
 	}
 
+	// Reject out-of-range http_port (including 0, the previous silent-default
+	// landmine that produced unreachable services).
+	if httpPortSet && !validTCPPort(httpPort) {
+		return fmt.Errorf("http_port: %d invalid (must be between 1 and 65535)", httpPort)
+	}
+
+	// Reject any out-of-range internal_ports entry.
+	for _, p := range svc.InternalPorts {
+		if !validTCPPort(int(p)) {
+			return fmt.Errorf("internal_ports: %d invalid (must be between 1 and 65535)", p)
+		}
+	}
+
 	// Detect mismatched http_port vs internal_ports before mutating anything.
 	if httpPortSet {
 		hp := int64(httpPort)
@@ -240,6 +260,13 @@ func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort 
 	svc.HTTPPort = 0
 	svc.Routes = nil
 	return nil
+}
+
+// validTCPPort returns true when p is in the valid TCP port range [1, 65535].
+// Used by applyExposeInternal to reject http_port: 0 and any out-of-range
+// internal_ports entry — F4 round-5 finding.
+func validTCPPort(p int) bool {
+	return p >= 1 && p <= 65535
 }
 
 // routesFromConfig converts the canonical "routes" list to []*godo.AppRouteSpec.

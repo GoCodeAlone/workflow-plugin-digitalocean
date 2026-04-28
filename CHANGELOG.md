@@ -14,7 +14,8 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   DO App Platform's internal DNS (`<service-name>.internal:<port>`). Default
   remains `expose: public`.
 
-  Misconfiguration guards (all reject at plan time before any DO API call):
+  Misconfiguration guards (all reject at apply time, before any DO API
+  call):
   - `expose` must be a string. Non-string values (accidental YAML bool
     `true`, numbers, maps, etc.) return `expose: must be a string (one of
     [public, internal]), got <type>` rather than silently defaulting to
@@ -27,6 +28,12 @@ All notable changes to workflow-plugin-digitalocean are documented here.
     would produce a service with no listening port — silently unreachable.
     Returns `expose: internal requires http_port or internal_ports to be
     set`.
+  - Under `expose: internal`, every port (`http_port` and each entry in
+    `internal_ports`) must be in the valid TCP range [1, 65535]. Returns
+    `http_port: %d invalid (must be between 1 and 65535)` or
+    `internal_ports: %d invalid (must be between 1 and 65535)`. This
+    closes the `http_port: 0` landmine where a previous "is the key set"
+    check would silently append 0 to InternalPorts → unreachable spec.
   - `http_port` and `internal_ports` set with disjoint values returns
     `internal_ports must include http_port when both are set; use one or
     the other`.
