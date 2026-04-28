@@ -529,9 +529,16 @@ func formatImageSpec(img *godo.ImageSourceSpec) string {
 }
 
 // imageRefsEqual compares two image-ref strings structurally: parses both via
-// ParseImageRef and compares RegistryType+Repository+Tag. Falls back to raw
-// string equality when either side fails to parse. Two empty strings are
-// equal; an empty paired with a non-empty is unequal. Round-3 Finding A.
+// ParseImageRef and compares RegistryType+Registry+Repository+Tag. Falls back
+// to raw string equality when either side fails to parse. Two empty strings
+// are equal; an empty paired with a non-empty is unequal.
+//
+// Registry is compared in the structural form, not the raw string. This
+// matters for GHCR/DockerHub: `ghcr.io/orgA/app:v1` vs `ghcr.io/orgB/app:v1`
+// is a real change Plan must surface (round-4 finding). For DOCR the
+// comparison is still safe — ParseImageRef discards the middle segment for
+// DOCR, so both sides yield Registry="" regardless of the
+// formatImageSpec placeholder used during the round-trip.
 func imageRefsEqual(a, b string) bool {
 	if a == b {
 		return true
@@ -545,6 +552,7 @@ func imageRefsEqual(a, b string) bool {
 		return false
 	}
 	return aSpec.RegistryType == bSpec.RegistryType &&
+		aSpec.Registry == bSpec.Registry &&
 		aSpec.Repository == bSpec.Repository &&
 		aSpec.Tag == bSpec.Tag
 }

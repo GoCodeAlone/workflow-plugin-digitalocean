@@ -434,8 +434,8 @@ func TestAppPlatformDriver_Diff_DetectsExposeChange_InternalToPublic(t *testing.
 // equivalent.
 func TestAppPlatformDriver_AppOutput_ImageDerivedFromAppSpec(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		image     *godo.ImageSourceSpec
+		name         string
+		image        *godo.ImageSourceSpec
 		wantNonEmpty bool
 		wantContains []string // substrings every well-formed output must include
 	}{
@@ -520,6 +520,88 @@ func TestAppPlatformDriver_AppOutput_ImageDerivedFromAppSpec(t *testing.T) {
 	}
 }
 
+// TestAppPlatformDriver_Diff_DetectsRegistryChange covers F4 round-4 finding:
+// imageRefsEqual must compare the Registry field too, otherwise GHCR/DockerHub
+// org-changes (same repo+tag, different registry-org) silently slip past Plan.
+// DOCR is regression-pinned to confirm the round-trip placeholder doesn't
+// trigger a spurious change.
+func TestAppPlatformDriver_Diff_DetectsRegistryChange(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		current  *godo.ImageSourceSpec
+		desired  string
+		wantDiff bool
+	}{
+		{
+			// GHCR registry-org migration: orgA → orgB, same repo+tag.
+			// Real lifecycle event (e.g. ownership transfer, namespace rename).
+			name:     "ghcr_org_change_detected",
+			current:  &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "orgA", Repository: "app", Tag: "v1"},
+			desired:  "ghcr.io/orgB/app:v1",
+			wantDiff: true,
+		},
+		{
+			// DockerHub registry change: library → myorg, same repo+tag.
+			// Real change: switching from official image to fork.
+			name:     "dockerhub_registry_change_detected",
+			current:  &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DockerHub, Registry: "library", Repository: "redis", Tag: "7"},
+			desired:  "docker.io/myorg/redis:7",
+			wantDiff: true,
+		},
+		{
+			// DOCR no-op: live spec has Registry="" (DO API convention) and
+			// the desired ref's middle segment ("myrepo") is dropped on
+			// parse. Both sides should structurally compare equal — the
+			// regression-pin for round-3's DOCR fix.
+			name:     "docr_placeholder_no_spurious_change",
+			current:  &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DOCR, Registry: "", Repository: "myapp", Tag: "v1"},
+			desired:  "registry.digitalocean.com/myrepo/myapp:v1",
+			wantDiff: false,
+		},
+		{
+			// GHCR no-op: same registry, repo, tag → no change.
+			name:     "ghcr_unchanged_no_spurious_change",
+			current:  &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "myorg", Repository: "app", Tag: "v1"},
+			desired:  "ghcr.io/myorg/app:v1",
+			wantDiff: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &godo.App{
+				ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+				Spec: &godo.AppSpec{
+					Name:     "registry-app",
+					Services: []*godo.AppServiceSpec{{Name: "svc", Image: tc.current, HTTPPort: 8080}},
+				},
+				ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+			}
+			mock := &mockAppClient{app: app}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			out, err := d.Read(context.Background(), interfaces.ResourceRef{ProviderID: app.ID, Name: app.Spec.Name})
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+				Config: map[string]any{"image": tc.desired, "http_port": 8080},
+			}, out)
+			if err != nil {
+				t.Fatalf("Diff: %v", err)
+			}
+			gotImageChange := false
+			for _, c := range result.Changes {
+				if c.Path == "image" {
+					gotImageChange = true
+					break
+				}
+			}
+			if gotImageChange != tc.wantDiff {
+				t.Errorf("image FieldChange present = %v, want %v\n  current.Outputs[image] = %q\n  desired.cfg[image] = %q\n  changes = %+v",
+					gotImageChange, tc.wantDiff, out.Outputs["image"], tc.desired, result.Changes)
+			}
+		})
+	}
+}
+
 // TestAppPlatformDriver_Diff_NoSpurious_ImageChange covers the practical
 // outcome of Finding A: a Read whose Outputs["image"] was derived from the
 // AppSpec via appOutput must NOT trigger a spurious FieldChange when the
@@ -578,13 +660,13 @@ func TestAppPlatformDriver_Diff_NoSpurious_ImageChange_DOCR(t *testing.T) {
 // would silently no-op on the round-trip.
 func TestAppPlatformDriver_AppOutput_ExposeDerivedFromAppSpec(t *testing.T) {
 	internalApp := &godo.App{
-		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
-		Spec: &godo.AppSpec{Name: "internal-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 0, InternalPorts: []int64{4222}}}},
+		ID:               "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec:             &godo.AppSpec{Name: "internal-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 0, InternalPorts: []int64{4222}}}},
 		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
 	}
 	publicApp := &godo.App{
-		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb6",
-		Spec: &godo.AppSpec{Name: "public-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 8080}}},
+		ID:               "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb6",
+		Spec:             &godo.AppSpec{Name: "public-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 8080}}},
 		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
 	}
 
