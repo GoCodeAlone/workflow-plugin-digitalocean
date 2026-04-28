@@ -46,7 +46,10 @@ func NewFirewallDriverWithClient(c FirewallClient) *FirewallDriver {
 }
 
 func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	req := firewallRequest(spec)
+	req, err := firewallRequest(spec)
+	if err != nil {
+		return nil, fmt.Errorf("firewall create %q: %w", spec.Name, err)
+	}
 	if err := validateFirewallTargets(spec.Name, req); err != nil {
 		return nil, err
 	}
@@ -118,7 +121,10 @@ func (d *FirewallDriver) resolveProviderID(ctx context.Context, ref interfaces.R
 }
 
 func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	req := firewallRequest(spec)
+	req, err := firewallRequest(spec)
+	if err != nil {
+		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, err)
+	}
 	if err := validateFirewallTargets(spec.Name, req); err != nil {
 		return nil, err
 	}
@@ -157,15 +163,22 @@ func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 // because rule order is preserved in the API response and may carry user
 // intent.
 //
+// Both sides of the rule comparison are normalized to the structpb-
+// compatible canonical map shape so the comparison is symmetric whether
+// `current.Outputs` is read in-process or after a wfctl→plugin gRPC round-
+// trip. (F7 round 3 — gRPC boundary fix.)
+//
 // Pre-F7 state without the recorded keys (legacy ResourceOutputs from older
 // plugin versions) is treated as having empty fields, which surfaces a Plan
 // action on first Diff post-upgrade — the safe over-detect direction.
-// (Code-review Finding 1, F7 round 2.)
 func (d *FirewallDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
-	desiredReq := firewallRequest(desired)
+	desiredReq, err := firewallRequest(desired)
+	if err != nil {
+		return nil, fmt.Errorf("firewall diff %q: %w", desired.Name, err)
+	}
 	var changes []interfaces.FieldChange
 
 	curIDs := outputsAsIntSlice(current.Outputs["droplet_ids"])
@@ -182,17 +195,19 @@ func (d *FirewallDriver) Diff(_ context.Context, desired interfaces.ResourceSpec
 		})
 	}
 
-	curIn, _ := current.Outputs["inbound_rules"].([]godo.InboundRule)
-	if !reflect.DeepEqual(curIn, desiredReq.InboundRules) {
+	desiredIn := inboundRulesCanonical(desiredReq.InboundRules)
+	curIn, _ := current.Outputs["inbound_rules"].([]any)
+	if !reflect.DeepEqual(curIn, desiredIn) {
 		changes = append(changes, interfaces.FieldChange{
-			Path: "inbound_rules", Old: curIn, New: desiredReq.InboundRules,
+			Path: "inbound_rules", Old: curIn, New: desiredIn,
 		})
 	}
 
-	curOut, _ := current.Outputs["outbound_rules"].([]godo.OutboundRule)
-	if !reflect.DeepEqual(curOut, desiredReq.OutboundRules) {
+	desiredOut := outboundRulesCanonical(desiredReq.OutboundRules)
+	curOut, _ := current.Outputs["outbound_rules"].([]any)
+	if !reflect.DeepEqual(curOut, desiredOut) {
 		changes = append(changes, interfaces.FieldChange{
-			Path: "outbound_rules", Old: curOut, New: desiredReq.OutboundRules,
+			Path: "outbound_rules", Old: curOut, New: desiredOut,
 		})
 	}
 
@@ -306,14 +321,22 @@ func (d *FirewallDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ in
 //
 // At least one of `droplet_ids` or `tags` must be set; this is enforced by
 // validateFirewallTargets, which Create and Update both call.
-func firewallRequest(spec interfaces.ResourceSpec) *godo.FirewallRequest {
+//
+// Returns an error when `droplet_ids` contains a fractional float — YAML
+// `123.9` would otherwise silently truncate to Droplet ID 123, attaching
+// the wrong Droplet.
+func firewallRequest(spec interfaces.ResourceSpec) (*godo.FirewallRequest, error) {
+	ids, err := dropletIDsFromConfig(spec.Config)
+	if err != nil {
+		return nil, err
+	}
 	return &godo.FirewallRequest{
 		Name:          spec.Name,
-		DropletIDs:    dropletIDsFromConfig(spec.Config),
+		DropletIDs:    ids,
 		Tags:          tagsFromConfig(spec.Config),
 		InboundRules:  inboundRulesFromConfig(spec.Config),
 		OutboundRules: outboundRulesFromConfig(spec.Config),
-	}
+	}, nil
 }
 
 // inboundRulesFromConfig extracts canonical "inbound_rules" into godo shape.
@@ -381,9 +404,14 @@ func outboundRulesFromConfig(cfg map[string]any) []godo.OutboundRule {
 
 // fwOutput records the firewall's targets (droplet_ids, tags) and rules
 // (inbound_rules, outbound_rules) on Outputs so Diff can detect in-place
-// reconfiguration. Storing the godo-shape directly keeps the comparison
-// symmetric with what `firewallRequest` builds from the desired cfg.
-// (F7 round 2 — Diff cascade fix.)
+// reconfiguration. Values are stored in structpb-compatible canonical
+// shapes (`[]any` of `float64` / `string` / `map[string]any`) — the wfctl→
+// plugin gRPC dispatch path encodes Outputs through `structpb.NewStruct`,
+// which rejects native typed slices ([]int, []string, []godo.InboundRule)
+// with "proto: invalid type", and demotes all numerics to float64 on the
+// way out. Storing canonical-from-the-start ensures the comparison
+// performed in Diff is symmetric whether Outputs is consumed in-process
+// or after a structpb round-trip. (F7 round 3 — gRPC boundary fix.)
 func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 	return &interfaces.ResourceOutput{
 		Name:       fw.Name,
@@ -391,29 +419,117 @@ func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 		ProviderID: fw.ID,
 		Outputs: map[string]any{
 			"status":         fw.Status,
-			"droplet_ids":    append([]int(nil), fw.DropletIDs...),
-			"tags":           append([]string(nil), fw.Tags...),
-			"inbound_rules":  append([]godo.InboundRule(nil), fw.InboundRules...),
-			"outbound_rules": append([]godo.OutboundRule(nil), fw.OutboundRules...),
+			"droplet_ids":    intsToAnySlice(fw.DropletIDs),
+			"tags":           stringsToAnySlice(fw.Tags),
+			"inbound_rules":  inboundRulesCanonical(fw.InboundRules),
+			"outbound_rules": outboundRulesCanonical(fw.OutboundRules),
 		},
 		Status: fw.Status,
 	}
+}
+
+// intsToAnySlice converts a typed []int to the structpb-compatible
+// []any-of-float64 shape. structpb represents all numerics as float64 on
+// the wire, so storing Outputs in this shape is symmetric with what
+// arrives back after a round-trip.
+func intsToAnySlice(ids []int) []any {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(ids))
+	for _, n := range ids {
+		out = append(out, float64(n))
+	}
+	return out
+}
+
+// stringsToAnySlice converts a typed []string to []any of strings —
+// structpb's required shape for list values.
+func stringsToAnySlice(ss []string) []any {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s)
+	}
+	return out
+}
+
+// inboundRuleCanonical flattens a godo.InboundRule into the canonical map
+// representation used for both Outputs storage and Diff comparison. The
+// shape mirrors how the cfg expresses rules: {protocol, ports, sources}
+// where sources is `[]any` of address strings. This drops Sources fields
+// the cfg cannot express (Tags, DropletIDs, LoadBalancerUIDs,
+// KubernetesIDs) — by design: those are outside the canonical schema, so
+// changes to them must not surface in Diff.
+func inboundRuleCanonical(r godo.InboundRule) map[string]any {
+	var addrs []any
+	if r.Sources != nil {
+		addrs = stringsToAnySlice(r.Sources.Addresses)
+	}
+	return map[string]any{
+		"protocol": r.Protocol,
+		"ports":    r.PortRange,
+		"sources":  addrs,
+	}
+}
+
+// inboundRulesCanonical converts a slice of godo.InboundRule into a
+// structpb-compatible []any-of-map.
+func inboundRulesCanonical(rules []godo.InboundRule) []any {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, inboundRuleCanonical(r))
+	}
+	return out
+}
+
+// outboundRuleCanonical mirrors inboundRuleCanonical for outbound rules
+// (uses Destinations.Addresses).
+func outboundRuleCanonical(r godo.OutboundRule) map[string]any {
+	var addrs []any
+	if r.Destinations != nil {
+		addrs = stringsToAnySlice(r.Destinations.Addresses)
+	}
+	return map[string]any{
+		"protocol":     r.Protocol,
+		"ports":        r.PortRange,
+		"destinations": addrs,
+	}
+}
+
+// outboundRulesCanonical converts a slice of godo.OutboundRule into a
+// structpb-compatible []any-of-map.
+func outboundRulesCanonical(rules []godo.OutboundRule) []any {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, outboundRuleCanonical(r))
+	}
+	return out
 }
 
 func (d *FirewallDriver) SensitiveKeys() []string { return nil }
 
 func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
 
-// dropletIDsFromConfig extracts the canonical "droplet_ids" list. Accepts the
-// numeric variants the modular YAML loader can emit (int, int64, float64).
-// Non-numeric entries and non-positive IDs are silently dropped: Droplet IDs
-// are positive integers assigned by the DO API, so 0 / negatives are never
-// valid and would only fail at apply time, defeating F7's plan-time-fail
-// contract. (Code-review Finding 3, F7 round 2.)
-func dropletIDsFromConfig(cfg map[string]any) []int {
+// dropletIDsFromConfig extracts the canonical "droplet_ids" list. Accepts
+// the numeric variants the modular YAML loader can emit (int, int64,
+// float64) — and, post-structpb-roundtrip, all of these collapse to
+// float64. Non-numeric entries and non-positive IDs are silently dropped
+// (so the all-non-positive case is caught by validateFirewallTargets);
+// fractional floats return an error rather than truncating, since YAML
+// `123.9` silently becoming Droplet ID 123 would attach the wrong Droplet.
+func dropletIDsFromConfig(cfg map[string]any) ([]int, error) {
 	raw, ok := cfg["droplet_ids"].([]any)
 	if !ok || len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]int, 0, len(raw))
 	for _, v := range raw {
@@ -424,6 +540,12 @@ func dropletIDsFromConfig(cfg map[string]any) []int {
 		case int64:
 			id = int(t)
 		case float64:
+			// structpb represents all numerics as float64. Reject
+			// fractional values explicitly so silent truncation can't
+			// substitute the wrong Droplet ID.
+			if t != float64(int64(t)) {
+				return nil, fmt.Errorf("droplet_ids: %v is not an integer", t)
+			}
 			id = int(t)
 		default:
 			continue
@@ -433,7 +555,7 @@ func dropletIDsFromConfig(cfg map[string]any) []int {
 		}
 		out = append(out, id)
 	}
-	return out
+	return out, nil
 }
 
 // tagsFromConfig extracts the canonical "tags" list of Droplet/DOKS-pool tag

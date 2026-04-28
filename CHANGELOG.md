@@ -15,14 +15,17 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Changed
 
-- **Firewall specs without targets now fail at plan time (P-2.F7)** —
-  `FirewallDriver.Create` and `FirewallDriver.Update` now reject specs that
-  declare neither `droplet_ids` nor `tags` with the error:
+- **Firewall specs without targets now fail at apply time (P-2.F7)** —
+  `FirewallDriver.Create` and `FirewallDriver.Update` reject specs that
+  declare neither `droplet_ids` nor `tags` BEFORE any DO API call, with
+  the error:
   `firewall %q has no targets (specify droplet_ids or tags) — App Platform
   services cannot be firewall-protected; use expose: internal or
-  trusted_sources`. DO firewalls do **not** attach to App Platform apps;
-  for App-Platform-only deployments, omit `infra.firewall` and use
-  `expose: internal` services plus `trusted_sources` on managed databases.
+  trusted_sources`. The validation runs at the start of every Apply
+  reconcile (Create + Update). DO firewalls do **not** attach to App
+  Platform apps; for App-Platform-only deployments, omit `infra.firewall`
+  and use `expose: internal` services plus `trusted_sources` on managed
+  databases.
 
 ### Fixed
 
@@ -37,11 +40,23 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   state without recorded fields is treated as having empty fields, so the
   first plan post-upgrade safely over-detects and re-asserts current
   configuration.
-- **Empty / non-positive target entries now fail at plan time (P-2.F7)** —
+- **Empty / non-positive target entries now fail at apply time (P-2.F7)** —
   `tagsFromConfig` filters empty strings and `dropletIDsFromConfig` filters
   IDs ≤ 0. Without these filters, a spec like `tags: [""]` or
   `droplet_ids: [0]` would slip past `validateFirewallTargets` (slice is
   non-empty after parsing) and fail only at the DO API call.
+- **Fractional `droplet_ids` rejected, not truncated (P-2.F7)** —
+  `dropletIDsFromConfig` now returns an error when a numeric value is not
+  integer-valued. Pre-fix, a YAML `droplet_ids: [123.9]` silently truncated
+  to `123`, attaching the wrong Droplet.
+- **Outputs are gRPC structpb-compatible (P-2.F7)** — `fwOutput` stores
+  `droplet_ids` / `tags` / `inbound_rules` / `outbound_rules` in the
+  canonical `[]any` shape (numerics as `float64`, rules as
+  `[]any`-of-`map[string]any`). The wfctl→plugin gRPC dispatch path
+  encodes Outputs through `structpb.NewStruct`, which rejects native typed
+  slices (`[]int`, `[]string`, struct slices). Storing canonical-from-the-
+  start ensures `Diff` reads symmetric values whether `current.Outputs`
+  is consumed in-process or after a structpb round-trip.
 
 ## [v0.7.9] - 2026-04-24
 

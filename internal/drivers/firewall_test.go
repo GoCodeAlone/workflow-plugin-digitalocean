@@ -9,6 +9,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type mockFirewallClient struct {
@@ -671,16 +672,78 @@ func TestFirewallDriver_Diff_DetectsTargetsChange(t *testing.T) {
 	ctx := context.Background()
 
 	// Helper: build a current ResourceOutput whose Outputs reflects a live
-	// firewall (the way fwOutput will populate it after F7 round 2).
+	// firewall in the structpb-compatible canonical shape that fwOutput
+	// produces in round 3 (no typed slices on Outputs — see the
+	// StructpbBoundary tests).
+	canonicalInbound := func(rules []godo.InboundRule) []any {
+		if len(rules) == 0 {
+			return nil
+		}
+		out := make([]any, 0, len(rules))
+		for _, r := range rules {
+			var addrs []any
+			if r.Sources != nil {
+				for _, a := range r.Sources.Addresses {
+					addrs = append(addrs, a)
+				}
+			}
+			out = append(out, map[string]any{
+				"protocol": r.Protocol,
+				"ports":    r.PortRange,
+				"sources":  addrs,
+			})
+		}
+		return out
+	}
+	canonicalOutbound := func(rules []godo.OutboundRule) []any {
+		if len(rules) == 0 {
+			return nil
+		}
+		out := make([]any, 0, len(rules))
+		for _, r := range rules {
+			var addrs []any
+			if r.Destinations != nil {
+				for _, a := range r.Destinations.Addresses {
+					addrs = append(addrs, a)
+				}
+			}
+			out = append(out, map[string]any{
+				"protocol":     r.Protocol,
+				"ports":        r.PortRange,
+				"destinations": addrs,
+			})
+		}
+		return out
+	}
+	idsToAny := func(ids []int) []any {
+		if len(ids) == 0 {
+			return nil
+		}
+		out := make([]any, 0, len(ids))
+		for _, n := range ids {
+			out = append(out, float64(n))
+		}
+		return out
+	}
+	tagsToAny := func(tags []string) []any {
+		if len(tags) == 0 {
+			return nil
+		}
+		out := make([]any, 0, len(tags))
+		for _, t := range tags {
+			out = append(out, t)
+		}
+		return out
+	}
 	makeCurrent := func(ids []int, tags []string, in []godo.InboundRule, out []godo.OutboundRule) *interfaces.ResourceOutput {
 		return &interfaces.ResourceOutput{
 			ProviderID: "fw-uuid",
 			Outputs: map[string]any{
 				"status":         "succeeded",
-				"droplet_ids":    ids,
-				"tags":           tags,
-				"inbound_rules":  in,
-				"outbound_rules": out,
+				"droplet_ids":    idsToAny(ids),
+				"tags":           tagsToAny(tags),
+				"inbound_rules":  canonicalInbound(in),
+				"outbound_rules": canonicalOutbound(out),
 			},
 		}
 	}
@@ -865,4 +928,164 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ── F7 Round 3 — gRPC structpb boundary regression ──────────────────────────
+//
+// The wfctl→plugin gRPC dispatch path encodes outputs through
+// `structpb.NewStruct` then decodes via `.AsMap()`. structpb rejects native
+// typed slices ([]string, []int, []godo.InboundRule, …) with "proto: invalid
+// type"; numerics survive only as float64; structs lose their type identity
+// and become map[string]any. Round-2 stored typed slices on Outputs, which
+// meant the entire Diff cascade fix was a no-op in production gRPC mode —
+// every reconcile would either fail at structpb encoding or surface spurious
+// FieldChange because the post-roundtrip type-assertions returned ok=false.
+//
+// These tests pin the structpb-compatible Outputs contract.
+
+// firewallOutputsRoundTrip simulates the wfctl→plugin gRPC dispatch boundary
+// by encoding Outputs through structpb.NewStruct then decoding via AsMap().
+// Mirrors `internal.grpcRoundTrip` (kept local because that helper lives in
+// a different package).
+func firewallOutputsRoundTrip(t *testing.T, outputs map[string]any) map[string]any {
+	t.Helper()
+	if outputs == nil {
+		return nil
+	}
+	s, err := structpb.NewStruct(outputs)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct rejected Outputs (typed slices on Outputs are a bug): %v", err)
+	}
+	return s.AsMap()
+}
+
+// TestFirewallDriver_StructpbBoundary_FwOutputAcceptedByStructpb pins the
+// invariant that Outputs values returned by Create / Read are structpb-
+// compatible. Without this, the wfctl→plugin gRPC encoding fails before the
+// outputs even reach the wire.
+func TestFirewallDriver_StructpbBoundary_FwOutputAcceptedByStructpb(t *testing.T) {
+	fw := &godo.Firewall{
+		ID: "fw-uuid", Name: "my-fw", Status: "succeeded",
+		DropletIDs: []int{123, 456},
+		Tags:       []string{"bmw-prod", "edge"},
+		InboundRules: []godo.InboundRule{
+			{Protocol: "tcp", PortRange: "443", Sources: &godo.Sources{Addresses: []string{"0.0.0.0/0"}}},
+		},
+		OutboundRules: []godo.OutboundRule{
+			{Protocol: "tcp", PortRange: "1-65535", Destinations: &godo.Destinations{Addresses: []string{"0.0.0.0/0"}}},
+		},
+	}
+	mock := &mockFirewallClient{fw: fw}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{"droplet_ids": []any{123, 456}},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := structpb.NewStruct(out.Outputs); err != nil {
+		t.Fatalf("structpb.NewStruct rejected Outputs (Outputs must be structpb-compatible — no typed slices, no struct values): %v", err)
+	}
+}
+
+// TestFirewallDriver_StructpbBoundary_DiffSurvivesRoundTrip is the canonical
+// regression for round-2's bug. It records the live firewall via fwOutput,
+// round-trips Outputs through structpb, then asserts Diff against the
+// matching desired spec produces NeedsUpdate=false. A failure here means the
+// Diff cascade fix is a no-op in production gRPC mode.
+func TestFirewallDriver_StructpbBoundary_DiffSurvivesRoundTrip(t *testing.T) {
+	fw := &godo.Firewall{
+		ID: "fw-uuid", Name: "my-fw", Status: "succeeded",
+		DropletIDs: []int{123, 456},
+		Tags:       []string{"bmw-prod"},
+		InboundRules: []godo.InboundRule{
+			{Protocol: "tcp", PortRange: "443", Sources: &godo.Sources{Addresses: []string{"0.0.0.0/0"}}},
+		},
+		OutboundRules: []godo.OutboundRule{
+			{Protocol: "tcp", PortRange: "1-65535", Destinations: &godo.Destinations{Addresses: []string{"0.0.0.0/0"}}},
+		},
+	}
+	mock := &mockFirewallClient{fw: fw}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	// Record the firewall via Create (which calls fwOutput internally).
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{"droplet_ids": []any{123, 456}},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Round-trip Outputs through the structpb gRPC boundary.
+	rtOutputs := firewallOutputsRoundTrip(t, out.Outputs)
+
+	// Build a current state with the round-tripped Outputs.
+	current := &interfaces.ResourceOutput{
+		ProviderID: out.ProviderID,
+		Outputs:    rtOutputs,
+	}
+
+	// Same desired spec — Diff must NOT report a change.
+	desired := interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"droplet_ids": []any{123, 456},
+			"tags":        []any{"bmw-prod"},
+			"inbound_rules": []any{
+				map[string]any{"protocol": "tcp", "ports": "443", "sources": []any{"0.0.0.0/0"}},
+			},
+			"outbound_rules": []any{
+				map[string]any{"protocol": "tcp", "ports": "1-65535", "destinations": []any{"0.0.0.0/0"}},
+			},
+		},
+	}
+	got, err := d.Diff(context.Background(), desired, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if got.NeedsUpdate {
+		t.Errorf("NeedsUpdate = true after structpb round-trip, want false. Spurious changes: %+v", got.Changes)
+	}
+}
+
+// TestFirewallDriver_DropletIDs_FractionalFloat_Rejected verifies that
+// fractional float values are rejected rather than silently truncated.
+// YAML's `123.9` would otherwise become Droplet ID 123 — wrong droplet
+// attached. (Code-review round-2 follow-up: float64 truncation.)
+func TestFirewallDriver_DropletIDs_FractionalFloat_Rejected(t *testing.T) {
+	t.Run("fractional float rejected", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"droplet_ids": []any{123.9}},
+		})
+		if err == nil {
+			t.Fatal("expected error for fractional droplet_ids, got nil")
+		}
+		if mock.lastReq != nil {
+			t.Error("FirewallRequest reached godo client despite fractional droplet_ids")
+		}
+	})
+
+	t.Run("integer-valued float accepted", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"droplet_ids": []any{123.0}},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if got, want := mock.lastReq.DropletIDs, []int{123}; !equalIntSlices(got, want) {
+			t.Errorf("DropletIDs = %v, want %v", got, want)
+		}
+	})
 }
