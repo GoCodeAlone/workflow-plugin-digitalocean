@@ -519,6 +519,330 @@ func TestFirewallDriver_Create_DropletIDs_AcceptsMixedNumeric(t *testing.T) {
 	}
 }
 
+// TestFirewallDriver_Create_EmptyStringTagsRejected verifies that an
+// all-empty-string tags slice fails the targets-required validation, and
+// that a mixed slice is filtered to only the non-empty entries.
+//
+// Without filtering, `tagsFromConfig` appends "" to its output, making
+// `len(req.Tags) > 0` falsely succeed; the DO API then rejects the empty
+// tag at apply time — defeating F7's plan-time-fail contract. Fix is in
+// `tagsFromConfig` (filter `s != ""`). (Code-review Finding 2, F7 round 2.)
+func TestFirewallDriver_Create_EmptyStringTagsRejected(t *testing.T) {
+	t.Run("all empty strings → no targets error", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"tags": []any{""}},
+		})
+		if err == nil {
+			t.Fatal("expected no-targets error for tags: [\"\"]; got nil")
+		}
+		want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+		if got := err.Error(); got != want {
+			t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
+		}
+		if mock.lastReq != nil {
+			t.Error("FirewallRequest reached godo client despite all-empty tags")
+		}
+	})
+
+	t.Run("mixed slice → empty entries filtered, non-empty kept", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"tags": []any{"", "bmw-prod", ""}},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if got, want := mock.lastReq.Tags, []string{"bmw-prod"}; !equalStringSlices(got, want) {
+			t.Errorf("Tags = %v, want %v (empty entries should be filtered)", got, want)
+		}
+	})
+}
+
+// TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered verifies that
+// non-positive Droplet IDs are filtered out, by symmetry with the
+// empty-string tag filter (Finding 2). Droplet IDs are positive integers
+// assigned by the DO API; 0 and negatives are never valid and would be
+// rejected at apply time.
+//
+// Without filtering, `dropletIDsFromConfig` appends every numeric to its
+// output, so `droplet_ids: [0]` slips past validation and the DO API rejects
+// it at runtime. (Code-review Finding 3, F7 round 2.)
+func TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered(t *testing.T) {
+	t.Run("only non-positives → no targets error", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"droplet_ids": []any{0, -1, int64(-2), float64(0)}},
+		})
+		if err == nil {
+			t.Fatal("expected no-targets error for non-positive droplet IDs; got nil")
+		}
+		want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+		if got := err.Error(); got != want {
+			t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
+		}
+		if mock.lastReq != nil {
+			t.Error("FirewallRequest reached godo client despite all-non-positive droplet IDs")
+		}
+	})
+
+	t.Run("mixed slice → non-positives filtered, positives kept", func(t *testing.T) {
+		mock := &mockFirewallClient{fw: testFirewall()}
+		d := drivers.NewFirewallDriverWithClient(mock)
+
+		_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+			Name:   "my-fw",
+			Config: map[string]any{"droplet_ids": []any{0, 123, int64(-1), float64(456)}},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if got, want := mock.lastReq.DropletIDs, []int{123, 456}; !equalIntSlices(got, want) {
+			t.Errorf("DropletIDs = %v, want %v (non-positives should be filtered)", got, want)
+		}
+	})
+}
+
+// ── F7 Finding 1 — Diff cascade ──────────────────────────────────────────────
+//
+// Pre-F7, FirewallDriver.Diff was a stub: it returned NeedsUpdate=true for nil
+// current and NeedsUpdate=false otherwise, which made every in-place toggle of
+// targets, tags, or rules a silent no-op at plan time. F7 makes target
+// reconfiguration the most common firewall lifecycle action, so Diff must
+// detect changes to droplet_ids, tags, inbound_rules, and outbound_rules.
+// (Code-review Finding 1, F7 round 2.)
+
+// TestFirewallDriver_FwOutput_RecordsTargetsAndRules verifies that Create
+// returns a ResourceOutput whose Outputs map carries the four target/rule
+// fields recovered from the godo.Firewall API response. Without these, Diff
+// has nothing to compare against.
+func TestFirewallDriver_FwOutput_RecordsTargetsAndRules(t *testing.T) {
+	fw := &godo.Firewall{
+		ID:         "fw-uuid",
+		Name:       "my-fw",
+		Status:     "succeeded",
+		DropletIDs: []int{123, 456},
+		Tags:       []string{"bmw-prod"},
+		InboundRules: []godo.InboundRule{
+			{Protocol: "tcp", PortRange: "443", Sources: &godo.Sources{Addresses: []string{"0.0.0.0/0"}}},
+		},
+		OutboundRules: []godo.OutboundRule{
+			{Protocol: "tcp", PortRange: "1-65535", Destinations: &godo.Destinations{Addresses: []string{"0.0.0.0/0"}}},
+		},
+	}
+	mock := &mockFirewallClient{fw: fw}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{"droplet_ids": []any{123, 456}, "tags": []any{"bmw-prod"}},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := out.Outputs["droplet_ids"]; !equalIntSlices(toInts(got), []int{123, 456}) {
+		t.Errorf("Outputs[droplet_ids] = %v, want [123 456]", got)
+	}
+	if got := out.Outputs["tags"]; !equalStringSlices(toStrings(got), []string{"bmw-prod"}) {
+		t.Errorf("Outputs[tags] = %v, want [bmw-prod]", got)
+	}
+	if _, ok := out.Outputs["inbound_rules"]; !ok {
+		t.Error("Outputs[inbound_rules] missing")
+	}
+	if _, ok := out.Outputs["outbound_rules"]; !ok {
+		t.Error("Outputs[outbound_rules] missing")
+	}
+}
+
+// TestFirewallDriver_Diff_DetectsTargetsChange parametrically verifies that
+// changes to each of the four canonical firewall fields produce a Plan
+// action, and that no-op cases (and reorder for set fields) don't.
+func TestFirewallDriver_Diff_DetectsTargetsChange(t *testing.T) {
+	d := drivers.NewFirewallDriverWithClient(&mockFirewallClient{fw: testFirewall()})
+	ctx := context.Background()
+
+	// Helper: build a current ResourceOutput whose Outputs reflects a live
+	// firewall (the way fwOutput will populate it after F7 round 2).
+	makeCurrent := func(ids []int, tags []string, in []godo.InboundRule, out []godo.OutboundRule) *interfaces.ResourceOutput {
+		return &interfaces.ResourceOutput{
+			ProviderID: "fw-uuid",
+			Outputs: map[string]any{
+				"status":         "succeeded",
+				"droplet_ids":    ids,
+				"tags":           tags,
+				"inbound_rules":  in,
+				"outbound_rules": out,
+			},
+		}
+	}
+
+	cases := []struct {
+		name       string
+		desiredCfg map[string]any
+		current    *interfaces.ResourceOutput
+		wantUpdate bool
+		wantPath   string // expected FieldChange.Path on first change; "" if no change
+	}{
+		{
+			name: "droplet_ids change",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{789},
+			},
+			current:    makeCurrent([]int{123}, nil, nil, nil),
+			wantUpdate: true,
+			wantPath:   "droplet_ids",
+		},
+		{
+			name: "tags change",
+			desiredCfg: map[string]any{
+				"tags": []any{"new-tag"},
+			},
+			current:    makeCurrent(nil, []string{"old-tag"}, nil, nil),
+			wantUpdate: true,
+			wantPath:   "tags",
+		},
+		{
+			name: "inbound_rules change",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{123},
+				"inbound_rules": []any{
+					map[string]any{"protocol": "tcp", "ports": "443", "sources": []any{"0.0.0.0/0"}},
+				},
+			},
+			current: makeCurrent(
+				[]int{123}, nil,
+				[]godo.InboundRule{{Protocol: "tcp", PortRange: "80", Sources: &godo.Sources{Addresses: []string{"0.0.0.0/0"}}}},
+				nil,
+			),
+			wantUpdate: true,
+			wantPath:   "inbound_rules",
+		},
+		{
+			name: "outbound_rules change",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{123},
+				"outbound_rules": []any{
+					map[string]any{"protocol": "tcp", "ports": "1-65535", "destinations": []any{"0.0.0.0/0"}},
+				},
+			},
+			current: makeCurrent(
+				[]int{123}, nil, nil,
+				[]godo.OutboundRule{{Protocol: "tcp", PortRange: "53", Destinations: &godo.Destinations{Addresses: []string{"0.0.0.0/0"}}}},
+			),
+			wantUpdate: true,
+			wantPath:   "outbound_rules",
+		},
+		{
+			name: "no change — droplet_ids and tags identical",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{123, 456},
+				"tags":        []any{"bmw-prod"},
+			},
+			current:    makeCurrent([]int{123, 456}, []string{"bmw-prod"}, nil, nil),
+			wantUpdate: false,
+		},
+		{
+			name: "droplet_ids reorder is NOT a change (set semantics)",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{456, 123},
+			},
+			current:    makeCurrent([]int{123, 456}, nil, nil, nil),
+			wantUpdate: false,
+		},
+		{
+			name: "tags reorder is NOT a change (set semantics)",
+			desiredCfg: map[string]any{
+				"tags": []any{"b", "a"},
+			},
+			current:    makeCurrent(nil, []string{"a", "b"}, nil, nil),
+			wantUpdate: false,
+		},
+		{
+			name: "pre-F7 state — Outputs lacks target keys, desired has targets",
+			desiredCfg: map[string]any{
+				"droplet_ids": []any{123},
+			},
+			current:    &interfaces.ResourceOutput{ProviderID: "fw-uuid", Outputs: map[string]any{"status": "succeeded"}},
+			wantUpdate: true,
+			wantPath:   "droplet_ids",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := d.Diff(ctx, interfaces.ResourceSpec{Name: "my-fw", Config: tc.desiredCfg}, tc.current)
+			if err != nil {
+				t.Fatalf("Diff: %v", err)
+			}
+			if got.NeedsUpdate != tc.wantUpdate {
+				t.Errorf("NeedsUpdate = %v, want %v (changes=%v)", got.NeedsUpdate, tc.wantUpdate, got.Changes)
+			}
+			if tc.wantPath != "" {
+				found := false
+				for _, c := range got.Changes {
+					if c.Path == tc.wantPath {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected FieldChange with Path=%q in Changes=%+v", tc.wantPath, got.Changes)
+				}
+			}
+		})
+	}
+}
+
+// toInts is a tolerant Outputs-coercer for tests that may receive []int or
+// []any-of-numerics depending on whether state was round-tripped through
+// JSON/YAML state encoding.
+func toInts(v any) []int {
+	switch t := v.(type) {
+	case []int:
+		return append([]int(nil), t...)
+	case []any:
+		out := make([]int, 0, len(t))
+		for _, x := range t {
+			switch n := x.(type) {
+			case int:
+				out = append(out, n)
+			case int64:
+				out = append(out, int(n))
+			case float64:
+				out = append(out, int(n))
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// toStrings is the analogous coercer for []string Outputs.
+func toStrings(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return append([]string(nil), t...)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func equalIntSlices(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

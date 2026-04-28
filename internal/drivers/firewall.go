@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"reflect"
+	"sort"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -143,11 +145,135 @@ func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 	return nil
 }
 
+// Diff compares the desired spec against the live firewall recorded on
+// `current` to detect in-place reconfiguration. Pre-F7 the body was a stub
+// that always returned NeedsUpdate=false — meaning every droplet_ids/tags
+// toggle silently no-op'd at plan time. F7 round 2 extends it to compare the
+// four canonical fields (`droplet_ids`, `tags`, `inbound_rules`,
+// `outbound_rules`).
+//
+// `droplet_ids` and `tags` use SET semantics: reorder is not a change, since
+// DO normalizes membership server-side. Rules use ORDER-SENSITIVE deep-equal
+// because rule order is preserved in the API response and may carry user
+// intent.
+//
+// Pre-F7 state without the recorded keys (legacy ResourceOutputs from older
+// plugin versions) is treated as having empty fields, which surfaces a Plan
+// action on first Diff post-upgrade — the safe over-detect direction.
+// (Code-review Finding 1, F7 round 2.)
 func (d *FirewallDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
-	return &interfaces.DiffResult{NeedsUpdate: false}, nil
+	desiredReq := firewallRequest(desired)
+	var changes []interfaces.FieldChange
+
+	curIDs := outputsAsIntSlice(current.Outputs["droplet_ids"])
+	if !equalIntSet(desiredReq.DropletIDs, curIDs) {
+		changes = append(changes, interfaces.FieldChange{
+			Path: "droplet_ids", Old: curIDs, New: desiredReq.DropletIDs,
+		})
+	}
+
+	curTags := outputsAsStringSlice(current.Outputs["tags"])
+	if !equalStringSet(desiredReq.Tags, curTags) {
+		changes = append(changes, interfaces.FieldChange{
+			Path: "tags", Old: curTags, New: desiredReq.Tags,
+		})
+	}
+
+	curIn, _ := current.Outputs["inbound_rules"].([]godo.InboundRule)
+	if !reflect.DeepEqual(curIn, desiredReq.InboundRules) {
+		changes = append(changes, interfaces.FieldChange{
+			Path: "inbound_rules", Old: curIn, New: desiredReq.InboundRules,
+		})
+	}
+
+	curOut, _ := current.Outputs["outbound_rules"].([]godo.OutboundRule)
+	if !reflect.DeepEqual(curOut, desiredReq.OutboundRules) {
+		changes = append(changes, interfaces.FieldChange{
+			Path: "outbound_rules", Old: curOut, New: desiredReq.OutboundRules,
+		})
+	}
+
+	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
+}
+
+// outputsAsIntSlice tolerantly coerces a stored Outputs value to []int,
+// accepting both the in-memory []int that fwOutput writes and the []any of
+// numerics that JSON/YAML state round-trips can produce.
+func outputsAsIntSlice(v any) []int {
+	switch t := v.(type) {
+	case []int:
+		return append([]int(nil), t...)
+	case []any:
+		out := make([]int, 0, len(t))
+		for _, x := range t {
+			switch n := x.(type) {
+			case int:
+				out = append(out, n)
+			case int64:
+				out = append(out, int(n))
+			case float64:
+				out = append(out, int(n))
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// outputsAsStringSlice is the analogous coercer for []string Outputs.
+func outputsAsStringSlice(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return append([]string(nil), t...)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// equalIntSet returns true iff a and b contain the same multiset of ints,
+// ignoring order. DO normalizes droplet_ids server-side; reorders should
+// not produce Plan actions.
+func equalIntSet(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sa := append([]int(nil), a...)
+	sb := append([]int(nil), b...)
+	sort.Ints(sa)
+	sort.Ints(sb)
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalStringSet is the string analogue of equalIntSet.
+func equalStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sa := append([]string(nil), a...)
+	sb := append([]string(nil), b...)
+	sort.Strings(sa)
+	sort.Strings(sb)
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *FirewallDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
@@ -181,66 +307,94 @@ func (d *FirewallDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ in
 // At least one of `droplet_ids` or `tags` must be set; this is enforced by
 // validateFirewallTargets, which Create and Update both call.
 func firewallRequest(spec interfaces.ResourceSpec) *godo.FirewallRequest {
-	req := &godo.FirewallRequest{
-		Name:       spec.Name,
-		DropletIDs: dropletIDsFromConfig(spec.Config),
-		Tags:       tagsFromConfig(spec.Config),
+	return &godo.FirewallRequest{
+		Name:          spec.Name,
+		DropletIDs:    dropletIDsFromConfig(spec.Config),
+		Tags:          tagsFromConfig(spec.Config),
+		InboundRules:  inboundRulesFromConfig(spec.Config),
+		OutboundRules: outboundRulesFromConfig(spec.Config),
 	}
-
-	if rules, ok := spec.Config["inbound_rules"].([]any); ok {
-		for _, r := range rules {
-			m, _ := r.(map[string]any)
-			if m == nil {
-				continue
-			}
-			rule := godo.InboundRule{
-				Protocol:  strFromConfig(m, "protocol", "tcp"),
-				PortRange: strFromConfig(m, "ports", "all"),
-				Sources:   &godo.Sources{},
-			}
-			if srcs, ok := m["sources"].([]any); ok {
-				for _, s := range srcs {
-					if addr, ok := s.(string); ok {
-						rule.Sources.Addresses = append(rule.Sources.Addresses, addr)
-					}
-				}
-			}
-			req.InboundRules = append(req.InboundRules, rule)
-		}
-	}
-
-	if rules, ok := spec.Config["outbound_rules"].([]any); ok {
-		for _, r := range rules {
-			m, _ := r.(map[string]any)
-			if m == nil {
-				continue
-			}
-			rule := godo.OutboundRule{
-				Protocol:     strFromConfig(m, "protocol", "tcp"),
-				PortRange:    strFromConfig(m, "ports", "all"),
-				Destinations: &godo.Destinations{},
-			}
-			if dsts, ok := m["destinations"].([]any); ok {
-				for _, s := range dsts {
-					if addr, ok := s.(string); ok {
-						rule.Destinations.Addresses = append(rule.Destinations.Addresses, addr)
-					}
-				}
-			}
-			req.OutboundRules = append(req.OutboundRules, rule)
-		}
-	}
-
-	return req
 }
 
+// inboundRulesFromConfig extracts canonical "inbound_rules" into godo shape.
+// Each rule: {protocol, ports, sources: [<CIDR>...]}. Defaults: tcp / all /
+// no sources. The Sources struct is always allocated (matching DO API
+// convention) so equality comparisons in Diff don't fight nil-vs-empty
+// pointer differences.
+func inboundRulesFromConfig(cfg map[string]any) []godo.InboundRule {
+	raw, ok := cfg["inbound_rules"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]godo.InboundRule, 0, len(raw))
+	for _, r := range raw {
+		m, _ := r.(map[string]any)
+		if m == nil {
+			continue
+		}
+		rule := godo.InboundRule{
+			Protocol:  strFromConfig(m, "protocol", "tcp"),
+			PortRange: strFromConfig(m, "ports", "all"),
+			Sources:   &godo.Sources{},
+		}
+		if srcs, ok := m["sources"].([]any); ok {
+			for _, s := range srcs {
+				if addr, ok := s.(string); ok {
+					rule.Sources.Addresses = append(rule.Sources.Addresses, addr)
+				}
+			}
+		}
+		out = append(out, rule)
+	}
+	return out
+}
+
+// outboundRulesFromConfig extracts canonical "outbound_rules" into godo
+// shape. Mirror of inboundRulesFromConfig but uses Destinations.
+func outboundRulesFromConfig(cfg map[string]any) []godo.OutboundRule {
+	raw, ok := cfg["outbound_rules"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]godo.OutboundRule, 0, len(raw))
+	for _, r := range raw {
+		m, _ := r.(map[string]any)
+		if m == nil {
+			continue
+		}
+		rule := godo.OutboundRule{
+			Protocol:     strFromConfig(m, "protocol", "tcp"),
+			PortRange:    strFromConfig(m, "ports", "all"),
+			Destinations: &godo.Destinations{},
+		}
+		if dsts, ok := m["destinations"].([]any); ok {
+			for _, s := range dsts {
+				if addr, ok := s.(string); ok {
+					rule.Destinations.Addresses = append(rule.Destinations.Addresses, addr)
+				}
+			}
+		}
+		out = append(out, rule)
+	}
+	return out
+}
+
+// fwOutput records the firewall's targets (droplet_ids, tags) and rules
+// (inbound_rules, outbound_rules) on Outputs so Diff can detect in-place
+// reconfiguration. Storing the godo-shape directly keeps the comparison
+// symmetric with what `firewallRequest` builds from the desired cfg.
+// (F7 round 2 — Diff cascade fix.)
 func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 	return &interfaces.ResourceOutput{
 		Name:       fw.Name,
 		Type:       "infra.firewall",
 		ProviderID: fw.ID,
 		Outputs: map[string]any{
-			"status": fw.Status,
+			"status":         fw.Status,
+			"droplet_ids":    append([]int(nil), fw.DropletIDs...),
+			"tags":           append([]string(nil), fw.Tags...),
+			"inbound_rules":  append([]godo.InboundRule(nil), fw.InboundRules...),
+			"outbound_rules": append([]godo.OutboundRule(nil), fw.OutboundRules...),
 		},
 		Status: fw.Status,
 	}
@@ -252,8 +406,10 @@ func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return
 
 // dropletIDsFromConfig extracts the canonical "droplet_ids" list. Accepts the
 // numeric variants the modular YAML loader can emit (int, int64, float64).
-// Non-numeric entries are silently dropped, matching how other helpers in
-// this package degrade malformed input.
+// Non-numeric entries and non-positive IDs are silently dropped: Droplet IDs
+// are positive integers assigned by the DO API, so 0 / negatives are never
+// valid and would only fail at apply time, defeating F7's plan-time-fail
+// contract. (Code-review Finding 3, F7 round 2.)
 func dropletIDsFromConfig(cfg map[string]any) []int {
 	raw, ok := cfg["droplet_ids"].([]any)
 	if !ok || len(raw) == 0 {
@@ -261,20 +417,30 @@ func dropletIDsFromConfig(cfg map[string]any) []int {
 	}
 	out := make([]int, 0, len(raw))
 	for _, v := range raw {
+		var id int
 		switch t := v.(type) {
 		case int:
-			out = append(out, t)
+			id = t
 		case int64:
-			out = append(out, int(t))
+			id = int(t)
 		case float64:
-			out = append(out, int(t))
+			id = int(t)
+		default:
+			continue
 		}
+		if id <= 0 {
+			continue
+		}
+		out = append(out, id)
 	}
 	return out
 }
 
 // tagsFromConfig extracts the canonical "tags" list of Droplet/DOKS-pool tag
-// strings. Non-string entries are dropped.
+// strings. Non-string entries and empty strings are dropped: the DO API
+// rejects empty tags, so a slice that contains only empty strings must fail
+// the targets-required validation rather than being silently sent to the
+// API. (Code-review Finding 2, F7 round 2.)
 func tagsFromConfig(cfg map[string]any) []string {
 	raw, ok := cfg["tags"].([]any)
 	if !ok || len(raw) == 0 {
@@ -282,7 +448,7 @@ func tagsFromConfig(cfg map[string]any) []string {
 	}
 	out := make([]string, 0, len(raw))
 	for _, v := range raw {
-		if s, ok := v.(string); ok {
+		if s, ok := v.(string); ok && s != "" {
 			out = append(out, s)
 		}
 	}

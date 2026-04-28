@@ -24,6 +24,25 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   for App-Platform-only deployments, omit `infra.firewall` and use
   `expose: internal` services plus `trusted_sources` on managed databases.
 
+### Fixed
+
+- **`FirewallDriver.Diff` detects in-place target/rule changes (P-2.F7)** —
+  pre-F7 `Diff` was a stub that returned `NeedsUpdate=false` for every
+  non-nil current state, silently suppressing in-place toggles of
+  `droplet_ids`, `tags`, `inbound_rules`, or `outbound_rules` from `wfctl
+  infra plan` output. F7 round 2 extends `Diff` to compare those four
+  canonical fields against state recorded by `fwOutput`, surfacing a Plan
+  action when any diverges. Set semantics for `droplet_ids` and `tags`
+  (reorder is not a change); order-sensitive deep-equal for rules. Pre-F7
+  state without recorded fields is treated as having empty fields, so the
+  first plan post-upgrade safely over-detects and re-asserts current
+  configuration.
+- **Empty / non-positive target entries now fail at plan time (P-2.F7)** —
+  `tagsFromConfig` filters empty strings and `dropletIDsFromConfig` filters
+  IDs ≤ 0. Without these filters, a spec like `tags: [""]` or
+  `droplet_ids: [0]` would slip past `validateFirewallTargets` (slice is
+  non-empty after parsing) and fail only at the DO API call.
+
 ## [v0.7.9] - 2026-04-24
 
 ### Added
