@@ -32,7 +32,17 @@
         "infra.droplet",
         "infra.iam_role",
         "infra.api_gateway"
-      ]
+      ],
+      "configSchema": {
+        "infra.container_service": {
+          "expose": {
+            "type": "string",
+            "enum": ["public", "internal"],
+            "default": "public",
+            "description": "Whether the service has a public edge route (public, default) or is reachable only from sibling components via DO App Platform internal DNS (<name>.internal:<port>) (internal)."
+          }
+        }
+      }
     }
   }
 }

@@ -24,7 +24,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		return nil, fmt.Errorf("app platform image config: %w", err)
 	}
 
-	httpPort, _ := intFromConfig(cfg, "http_port", 8080)
+	httpPort, httpPortSet := intFromConfig(cfg, "http_port", 8080)
 	instanceCount, _ := intFromConfig(cfg, "instance_count", 1)
 
 	svc := &godo.AppServiceSpec{
@@ -48,6 +48,13 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		Termination:         serviceTerminationFromConfig(cfg),
 		LogDestinations:     logDestinationsFromConfig(cfg),
 		Alerts:              componentAlertsFromConfig(cfg),
+	}
+
+	// Apply expose: internal semantics — see exposeFromConfig comment.
+	// Sibling services reach an internal component via `<name>.internal:<port>`
+	// (DO App Platform runtime contract).
+	if err := applyExposeInternal(svc, cfg, httpPort, httpPortSet); err != nil {
+		return nil, fmt.Errorf("app platform expose config: %w", err)
 	}
 
 	// Extract provider_specific.digitalocean overrides for top-level AppSpec fields.
@@ -150,6 +157,54 @@ func internalPortsFromConfig(cfg map[string]any) []int64 {
 		}
 	}
 	return out
+}
+
+// exposeFromConfig returns the canonical exposure mode for a container service:
+// "public" (default — service has an edge HTTP port and may carry routes) or
+// "internal" (no edge port; reachable only from sibling services via App
+// Platform's internal DNS at `<name>.internal:<port>`). An empty string means
+// the field was omitted; treat as "public".
+func exposeFromConfig(cfg map[string]any) string {
+	v, ok := cfg["expose"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+// applyExposeInternal mutates svc when `expose: internal` is set:
+//   - HTTPPort is zeroed so DO does not provision a public edge route.
+//   - http_port (if any) is folded into InternalPorts so siblings can dial it.
+//   - Routes is dropped — `internal` promises no public surface, even if the
+//     caller supplied a routes list.
+//
+// When the user declared both http_port and internal_ports with conflicting
+// values, return an error so misconfiguration fails fast at plan time rather
+// than silently dropping the http_port.
+func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort int, httpPortSet bool) error {
+	if exposeFromConfig(cfg) != "internal" {
+		return nil
+	}
+	// Detect mismatched http_port vs internal_ports before mutating anything.
+	if httpPortSet {
+		hp := int64(httpPort)
+		hasMatch := false
+		for _, p := range svc.InternalPorts {
+			if p == hp {
+				hasMatch = true
+				break
+			}
+		}
+		if len(svc.InternalPorts) > 0 && !hasMatch {
+			return fmt.Errorf("internal_ports must include http_port when both are set; use one or the other")
+		}
+		if !hasMatch {
+			svc.InternalPorts = append(svc.InternalPorts, hp)
+		}
+	}
+	svc.HTTPPort = 0
+	svc.Routes = nil
+	return nil
 }
 
 // routesFromConfig converts the canonical "routes" list to []*godo.AppRouteSpec.

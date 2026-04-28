@@ -1,6 +1,7 @@
 package drivers_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -195,6 +196,118 @@ func TestBuildAppSpec_InternalPorts(t *testing.T) {
 	}
 	if ports[0] != 9090 || ports[1] != 9091 {
 		t.Errorf("InternalPorts = %v, want [9090, 9091]", ports)
+	}
+}
+
+// ── Expose: internal ─────────────────────────────────────────────────────────
+//
+// `expose: internal` makes a service reachable only via App Platform's internal
+// service-DNS (`<name>.internal:<port>` from sibling components) — no public
+// route, no edge HTTP port. This is the contract relied on by core-dump P-1's
+// NATS sidecar (and any backing-service component that must not face the open
+// internet). Implementation contract:
+//
+//   - HTTPPort is zeroed so DO does not provision an edge route.
+//   - InternalPorts contains the (single) port siblings dial.
+//   - Routes is nil — DO would otherwise auto-create a default `/` route.
+//
+// Cross-component reach: with `expose: internal`, sibling services in the same
+// app reach this component at `<service-name>.internal:<port>` (DO App Platform
+// runtime semantics). There is no code under test for the DNS path; this is a
+// platform contract documented here for downstream readers.
+
+func TestBuildAppSpec_Expose_Internal_HTTPPort(t *testing.T) {
+	cfg := map[string]any{
+		"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port": 4222,
+		"expose":    "internal",
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	svc := spec.Services[0]
+	if svc.HTTPPort != 0 {
+		t.Errorf("HTTPPort = %d, want 0 (internal services must not expose an edge port)", svc.HTTPPort)
+	}
+	if len(svc.InternalPorts) != 1 || svc.InternalPorts[0] != 4222 {
+		t.Errorf("InternalPorts = %v, want [4222] (http_port copied to internal_ports)", svc.InternalPorts)
+	}
+	if len(svc.Routes) != 0 {
+		t.Errorf("Routes = %+v, want nil (no public routes for internal services)", svc.Routes)
+	}
+}
+
+func TestBuildAppSpec_Expose_Internal_InternalPortsOnly(t *testing.T) {
+	cfg := map[string]any{
+		"image":          "registry.digitalocean.com/myrepo/myapp:v1",
+		"internal_ports": []any{4222},
+		"expose":         "internal",
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	svc := spec.Services[0]
+	if svc.HTTPPort != 0 {
+		t.Errorf("HTTPPort = %d, want 0", svc.HTTPPort)
+	}
+	if len(svc.InternalPorts) != 1 || svc.InternalPorts[0] != 4222 {
+		t.Errorf("InternalPorts = %v, want [4222]", svc.InternalPorts)
+	}
+	if len(svc.Routes) != 0 {
+		t.Errorf("Routes = %+v, want nil", svc.Routes)
+	}
+}
+
+func TestBuildAppSpec_Expose_Internal_ExplicitRoutesDropped(t *testing.T) {
+	// Even if the caller passes routes, expose: internal must drop them — the
+	// promise of `internal` is "no public surface".
+	cfg := map[string]any{
+		"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port": 4222,
+		"expose":    "internal",
+		"routes":    []any{map[string]any{"path": "/"}},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Services[0].Routes) != 0 {
+		t.Errorf("Routes = %+v, want nil (expose: internal must drop user-supplied routes)", spec.Services[0].Routes)
+	}
+}
+
+func TestBuildAppSpec_Expose_Internal_PortMismatchFails(t *testing.T) {
+	// Catch the user error of declaring both http_port and internal_ports
+	// where they disagree — the user almost certainly meant to use one or
+	// the other, not both with different ports.
+	cfg := map[string]any{
+		"image":          "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port":      4222,
+		"internal_ports": []any{9999},
+		"expose":         "internal",
+	}
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+		Name:   "test-app",
+		Config: cfg,
+	})
+	if err == nil {
+		t.Fatal("expected error for mismatched http_port vs internal_ports under expose: internal, got nil")
+	}
+	wantSubstr := "internal_ports must include http_port when both are set; use one or the other"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error message = %q, want it to contain %q", err.Error(), wantSubstr)
+	}
+}
+
+func TestBuildAppSpec_Expose_Public_Default(t *testing.T) {
+	// expose unset (or "public") preserves the prior behaviour: HTTPPort set,
+	// no InternalPorts unless explicitly configured, default route possible.
+	cfg := map[string]any{
+		"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port": 8080,
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	svc := spec.Services[0]
+	if svc.HTTPPort != 8080 {
+		t.Errorf("HTTPPort = %d, want 8080 (default expose=public should leave HTTPPort unchanged)", svc.HTTPPort)
+	}
+	if len(svc.InternalPorts) != 0 {
+		t.Errorf("InternalPorts = %v, want empty (default expose=public should not auto-populate)", svc.InternalPorts)
 	}
 }
 

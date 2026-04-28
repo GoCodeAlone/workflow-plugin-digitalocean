@@ -2,6 +2,26 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`expose: internal` on `infra.container_service`** (P-2.F4) — App Platform
+  services may now declare `expose: internal` to opt out of the public edge
+  route. When set, `buildAppSpec` zeroes `HTTPPort`, folds `http_port` into
+  `InternalPorts` (so siblings can dial it), and drops `Routes` entirely. The
+  service becomes reachable only from sibling components in the same app via
+  DO App Platform's internal DNS (`<service-name>.internal:<port>`). Default
+  remains `expose: public`.
+
+  Misconfiguration guard: declaring both `http_port` and `internal_ports` with
+  conflicting values under `expose: internal` returns the explicit error
+  `internal_ports must include http_port when both are set; use one or the
+  other` at plan time, rather than silently dropping the http port.
+
+  This unblocks core-dump P-1's NATS sidecar and any other backing-service
+  component that must not face the open internet.
+
 ## [v0.7.9] - 2026-04-24
 
 ### Added
