@@ -350,6 +350,116 @@ func TestAppPlatformDriver_Diff_NoChanges(t *testing.T) {
 	}
 }
 
+// TestAppPlatformDriver_Diff_DetectsExposeChange covers quality-review Finding
+// 1: changing `expose` (a security-relevant toggle) on an existing service
+// must produce a Plan action — Diff cannot silently no-op the way the
+// pre-F4 image-only Diff did.
+//
+// Today appOutput populates Outputs["expose"] from the live AppSpec
+// (HTTPPort==0 && len(InternalPorts)>0 → "internal" else "public"), and
+// Diff compares it against the desired config.
+func TestAppPlatformDriver_Diff_DetectsExposeChange_PublicToInternal(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+			"http_port": 4222,
+			"expose":    "internal",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when expose toggles public→internal")
+	}
+	// At least one change must reference "expose" so the user sees what changed.
+	found := false
+	for _, c := range result.Changes {
+		if c.Path == "expose" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a FieldChange with Path=\"expose\"; got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_DetectsExposeChange_InternalToPublic(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "internal",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+			"http_port": 8080,
+			"expose":    "public",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when expose toggles internal→public")
+	}
+}
+
+// TestAppPlatformDriver_AppOutput_ExposeDerivedFromAppSpec verifies that the
+// live-state derivation from godo.AppSpec is correct: HTTPPort==0 with
+// InternalPorts populated → "internal"; everything else → "public". Without
+// this, Diff comparing against current state can't tell whether a previously
+// applied service is internal or public, so the toggle detection (above)
+// would silently no-op on the round-trip.
+func TestAppPlatformDriver_AppOutput_ExposeDerivedFromAppSpec(t *testing.T) {
+	internalApp := &godo.App{
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec: &godo.AppSpec{Name: "internal-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 0, InternalPorts: []int64{4222}}}},
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}
+	publicApp := &godo.App{
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb6",
+		Spec: &godo.AppSpec{Name: "public-app", Services: []*godo.AppServiceSpec{{Name: "svc", HTTPPort: 8080}}},
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}
+
+	for _, tc := range []struct {
+		name string
+		app  *godo.App
+		want string
+	}{
+		{"internal_when_http_port_zero_and_internal_ports_set", internalApp, "internal"},
+		{"public_when_http_port_set", publicApp, "public"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockAppClient{app: tc.app}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			out, err := d.Read(context.Background(), interfaces.ResourceRef{ProviderID: tc.app.ID, Name: tc.app.Spec.Name})
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			got, _ := out.Outputs["expose"].(string)
+			if got != tc.want {
+				t.Errorf("Outputs[\"expose\"] = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAppPlatformDriver_Create_EnvVars(t *testing.T) {
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")

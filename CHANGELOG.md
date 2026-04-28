@@ -14,10 +14,27 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   DO App Platform's internal DNS (`<service-name>.internal:<port>`). Default
   remains `expose: public`.
 
-  Misconfiguration guard: declaring both `http_port` and `internal_ports` with
-  conflicting values under `expose: internal` returns the explicit error
-  `internal_ports must include http_port when both are set; use one or the
-  other` at plan time, rather than silently dropping the http port.
+  Misconfiguration guards (all reject at plan time before any DO API call):
+  - `expose` must be one of `[public, internal]`. Typos like `intenral` or
+    unsupported values like `private` return the error
+    `expose: %q invalid; must be one of [public, internal]` rather than
+    silently defaulting to public.
+  - `expose: internal` requires at least one of `http_port` or
+    `internal_ports` to be set. Setting `expose: internal` with no ports
+    would produce a service with no listening port — silently unreachable.
+    Returns `expose: internal requires http_port or internal_ports to be
+    set`.
+  - `http_port` and `internal_ports` set with disjoint values returns
+    `internal_ports must include http_port when both are set; use one or
+    the other`.
+
+  Plan/Diff: `appOutput` now records `Outputs["expose"]` derived from the
+  live `AppSpec` (HTTPPort==0 with InternalPorts populated → "internal";
+  otherwise "public"). `Diff` compares the canonical `expose` field so
+  in-place public↔internal toggles produce a Plan action with a
+  `FieldChange{Path: "expose"}`, rather than silently no-op'ing as the
+  pre-F4 image-only Diff would have done. Pre-F4 state without recorded
+  expose is treated as `public` for the comparison.
 
   This unblocks core-dump P-1's NATS sidecar and any other backing-service
   component that must not face the open internet.

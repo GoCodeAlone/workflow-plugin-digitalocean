@@ -172,19 +172,41 @@ func exposeFromConfig(cfg map[string]any) string {
 	return strings.ToLower(strings.TrimSpace(v))
 }
 
-// applyExposeInternal mutates svc when `expose: internal` is set:
+// applyExposeInternal validates the canonical `expose` value and, when set to
+// "internal", mutates svc:
 //   - HTTPPort is zeroed so DO does not provision a public edge route.
 //   - http_port (if any) is folded into InternalPorts so siblings can dial it.
 //   - Routes is dropped — `internal` promises no public surface, even if the
 //     caller supplied a routes list.
 //
-// When the user declared both http_port and internal_ports with conflicting
-// values, return an error so misconfiguration fails fast at plan time rather
-// than silently dropping the http_port.
+// Validation: `expose` must be one of {"", "public", "internal"}. Any other
+// value (typo'd "intenral", unsupported "private", etc.) returns an enum
+// error so misconfigurations fail at plan time rather than silently
+// defaulting to public — quality-review F4 Finding 3.
+//
+// Reachability: when `expose: internal` is set with neither http_port nor
+// internal_ports, the result would be a service with no listening port —
+// silently unreachable. Reject this combination — quality-review F4 Finding 2.
+//
+// Port-mismatch: when both http_port and internal_ports are set under
+// `expose: internal` with disjoint values, return an explicit error so the
+// caller picks one. (Original F4 behaviour.)
 func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort int, httpPortSet bool) error {
-	if exposeFromConfig(cfg) != "internal" {
+	exp := exposeFromConfig(cfg)
+	switch exp {
+	case "", "public":
 		return nil
+	case "internal":
+		// fall through to the internal-mode mutation below
+	default:
+		return fmt.Errorf("expose: %q invalid; must be one of [public, internal]", exp)
 	}
+
+	// Internal-mode requires at least one port to be reachable from siblings.
+	if !httpPortSet && len(svc.InternalPorts) == 0 {
+		return fmt.Errorf("expose: internal requires http_port or internal_ports to be set")
+	}
+
 	// Detect mismatched http_port vs internal_ports before mutating anything.
 	if httpPortSet {
 		hp := int64(httpPort)

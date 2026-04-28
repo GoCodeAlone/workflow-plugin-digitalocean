@@ -294,6 +294,56 @@ func TestBuildAppSpec_Expose_Internal_PortMismatchFails(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_Expose_Internal_NoPorts_Fails(t *testing.T) {
+	// expose: internal with neither http_port nor internal_ports would produce
+	// a service with no listening port — silently unreachable. Fail fast at
+	// plan time per the F4 fail-fast contract; quality-review Finding 2.
+	cfg := map[string]any{
+		"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+		"expose": "internal",
+	}
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+		Name:   "test-app",
+		Config: cfg,
+	})
+	if err == nil {
+		t.Fatal("expected error for expose: internal with no ports, got nil")
+	}
+	wantSubstr := "expose: internal requires http_port or internal_ports to be set"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error message = %q, want it to contain %q", err.Error(), wantSubstr)
+	}
+}
+
+func TestBuildAppSpec_Expose_Invalid_Fails(t *testing.T) {
+	// Typo'd values like "intenral" or "private" must not silently fall
+	// through to public. Reject with an enum-listing error; quality-review
+	// Finding 3.
+	cfg := map[string]any{
+		"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port": 8080,
+		"expose":    "intenral", // typo
+	}
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+		Name:   "test-app",
+		Config: cfg,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid expose value, got nil")
+	}
+	// Error must mention the bad value and the allowed enum.
+	if !strings.Contains(err.Error(), `"intenral"`) {
+		t.Errorf("error %q should quote the bad value 'intenral'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[public, internal]") {
+		t.Errorf("error %q should list the allowed enum [public, internal]", err.Error())
+	}
+}
+
 func TestBuildAppSpec_Expose_Public_Default(t *testing.T) {
 	// expose unset (or "public") preserves the prior behaviour: HTTPPort set,
 	// no InternalPorts unless explicitly configured, default route possible.

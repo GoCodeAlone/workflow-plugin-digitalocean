@@ -173,7 +173,38 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 			changes = append(changes, interfaces.FieldChange{Path: "image", Old: curImg, New: img})
 		}
 	}
+	// Compare canonical `expose` so in-place public↔internal toggles produce a
+	// Plan action rather than silently no-op'ing — quality-review F4 Finding 1.
+	// Desired side is the canonical string from cfg (default "public" when
+	// unset/empty). Current side is the value `appOutput` derived from the
+	// live AppSpec at last Read.
+	desiredExpose := canonicalExpose(desired.Config)
+	curExpose, _ := current.Outputs["expose"].(string)
+	if curExpose == "" {
+		// Pre-F4 state has no `expose` recorded; treat absence as public so a
+		// transition to `internal` is detected.
+		curExpose = "public"
+	}
+	if desiredExpose != curExpose {
+		changes = append(changes, interfaces.FieldChange{Path: "expose", Old: curExpose, New: desiredExpose})
+	}
 	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
+}
+
+// canonicalExpose returns the canonical `expose` value for a desired-spec
+// config: "public" (default when unset/empty), "internal", or whatever
+// non-empty string the user supplied. Validation of the enum is performed
+// later in `applyExposeInternal` during buildAppSpec.
+func canonicalExpose(cfg map[string]any) string {
+	v, ok := cfg["expose"].(string)
+	if !ok {
+		return "public"
+	}
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "public"
+	}
+	return v
 }
 
 func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
@@ -408,6 +439,11 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		ProviderID: app.ID,
 		Outputs: map[string]any{
 			"live_url": app.LiveURL,
+			// `expose` is derived from the first service component:
+			// HTTPPort==0 with InternalPorts populated → "internal";
+			// otherwise "public". Stored on Outputs so Diff can detect
+			// in-place public↔internal toggles — F4 Finding 1.
+			"expose": deriveExposeFromAppSpec(app.Spec),
 		},
 		Status: "running",
 	}
@@ -415,6 +451,26 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		out.Status = "pending"
 	}
 	return out
+}
+
+// deriveExposeFromAppSpec inspects the first service component of an AppSpec
+// to determine whether the deployed app is public or internal. App Platform
+// allows multiple services per app; the canonical `expose` key applies to the
+// primary service (matching the pattern used in buildAppSpec where `svc` is
+// services[0]). Apps with no services default to "public" (cannot be
+// internal-only by definition).
+func deriveExposeFromAppSpec(spec *godo.AppSpec) string {
+	if spec == nil || len(spec.Services) == 0 {
+		return "public"
+	}
+	svc := spec.Services[0]
+	if svc == nil {
+		return "public"
+	}
+	if svc.HTTPPort == 0 && len(svc.InternalPorts) > 0 {
+		return "internal"
+	}
+	return "public"
 }
 
 // ParseImageRef parses a flat image reference string into a DO App Platform
