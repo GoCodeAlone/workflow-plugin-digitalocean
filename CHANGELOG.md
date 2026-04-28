@@ -12,6 +12,12 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   `godo.FirewallRequest.DropletIDs` / `Tags`. Tag-based attachment lets
   future Droplets and DOKS pools auto-join the firewall when they receive
   the matching tag.
+- **`http_port_protocol` canonical key + `protocol: grpc` alias (P-2.F5)** —
+  App Platform services now honor an explicit `http_port_protocol` config key
+  that maps to `godo.AppServiceSpec.Protocol` (godo v1.178.0 `apps.gen.go:568`).
+  The historic `protocol` shorthand still works and gains a `grpc` alias that
+  resolves to `HTTP2` (gRPC requires HTTP/2 with prior knowledge per DO docs).
+  When both keys are set, `http_port_protocol` takes precedence.
 
 ### Changed
 
