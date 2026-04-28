@@ -33,7 +33,7 @@
         "infra.iam_role",
         "infra.api_gateway"
       ],
-      "canonicalSchema": {
+      "configSchema": {
         "infra.firewall": {
           "description": "DigitalOcean cloud firewall. Attaches to Droplets by ID or by tag (which auto-attaches future Droplets / DOKS pools that receive the tag). Either `droplet_ids` or `tags` is REQUIRED; `wfctl infra plan` rejects firewalls with no targets. NOTE: DO firewalls do not attach to App Platform apps — for App-Platform-only deployments, use `expose: internal` services plus `trusted_sources` on managed databases.",
           "fields": {
