@@ -334,13 +334,12 @@ func TestFirewallDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	}
 }
 
-// ── F7: Firewall target enforcement ──────────────────────────────────────────
+// ── Firewall target enforcement ──────────────────────────────────────────────
 
-// noTargetsErrFmt is the verbatim error string the spec requires when a
-// firewall declares no targets. Character-for-character, including the em
-// dash (U+2014) and the App Platform clause. Format-arg %q quotes the
-// firewall name. See plan P-2.F7 step 3.
-const noTargetsErrFmt = `firewall %q has no targets (specify droplet_ids or tags) — App Platform services cannot be firewall-protected; use expose: internal or trusted_sources`
+// Tests reference the no-targets error format string via
+// `drivers.NoTargetsErrFmt`, the exported source-of-truth in firewall.go.
+// Re-defining the literal here would risk drift the next time the
+// validator's wording is tightened.
 
 // TestFirewallDriver_Create_DropletIDs_PassThrough verifies droplet_ids reach
 // godo.FirewallRequest.DropletIDs.
@@ -465,7 +464,7 @@ func TestFirewallDriver_Create_NoTargets_Errors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty targets, got nil")
 	}
-	want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+	want := fmt.Sprintf(drivers.NoTargetsErrFmt, "my-fw")
 	if got := err.Error(); got != want {
 		t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
 	}
@@ -490,7 +489,7 @@ func TestFirewallDriver_Update_NoTargets_Errors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty targets, got nil")
 	}
-	want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+	want := fmt.Sprintf(drivers.NoTargetsErrFmt, "my-fw")
 	if got := err.Error(); got != want {
 		t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
 	}
@@ -522,12 +521,10 @@ func TestFirewallDriver_Create_DropletIDs_AcceptsMixedNumeric(t *testing.T) {
 
 // TestFirewallDriver_Create_EmptyStringTagsRejected verifies that an
 // all-empty-string tags slice fails the targets-required validation, and
-// that a mixed slice is filtered to only the non-empty entries.
-//
-// Without filtering, `tagsFromConfig` appends "" to its output, making
-// `len(req.Tags) > 0` falsely succeed; the DO API then rejects the empty
-// tag at apply time — defeating F7's plan-time-fail contract. Fix is in
-// `tagsFromConfig` (filter `s != ""`). (Code-review Finding 2, F7 round 2.)
+// that a mixed slice is filtered to only the non-empty entries. This is a
+// regression: empty-string tags must be filtered so target validation
+// catches the no-targets condition at validation time rather than letting
+// the DO API reject them at apply time — defeating F7's fail-fast contract.
 func TestFirewallDriver_Create_EmptyStringTagsRejected(t *testing.T) {
 	t.Run("all empty strings → no targets error", func(t *testing.T) {
 		mock := &mockFirewallClient{fw: testFirewall()}
@@ -540,7 +537,7 @@ func TestFirewallDriver_Create_EmptyStringTagsRejected(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected no-targets error for tags: [\"\"]; got nil")
 		}
-		want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+		want := fmt.Sprintf(drivers.NoTargetsErrFmt, "my-fw")
 		if got := err.Error(); got != want {
 			t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
 		}
@@ -568,13 +565,11 @@ func TestFirewallDriver_Create_EmptyStringTagsRejected(t *testing.T) {
 
 // TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered verifies that
 // non-positive Droplet IDs are filtered out, by symmetry with the
-// empty-string tag filter (Finding 2). Droplet IDs are positive integers
-// assigned by the DO API; 0 and negatives are never valid and would be
-// rejected at apply time.
-//
-// Without filtering, `dropletIDsFromConfig` appends every numeric to its
-// output, so `droplet_ids: [0]` slips past validation and the DO API rejects
-// it at runtime. (Code-review Finding 3, F7 round 2.)
+// empty-string tag filter. Droplet IDs are positive integers assigned by
+// the DO API; 0 and negatives are never valid and would be rejected at
+// apply time. This is a regression: non-positive droplet IDs must be
+// filtered so target validation catches no-targets at validation time
+// rather than letting the DO API reject them at apply time.
 func TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered(t *testing.T) {
 	t.Run("only non-positives → no targets error", func(t *testing.T) {
 		mock := &mockFirewallClient{fw: testFirewall()}
@@ -587,7 +582,7 @@ func TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected no-targets error for non-positive droplet IDs; got nil")
 		}
-		want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+		want := fmt.Sprintf(drivers.NoTargetsErrFmt, "my-fw")
 		if got := err.Error(); got != want {
 			t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
 		}
@@ -613,14 +608,14 @@ func TestFirewallDriver_Create_ZeroOrNegativeDropletIDsFiltered(t *testing.T) {
 	})
 }
 
-// ── F7 Finding 1 — Diff cascade ──────────────────────────────────────────────
+// ── Diff cascade ─────────────────────────────────────────────────────────────
 //
-// Pre-F7, FirewallDriver.Diff was a stub: it returned NeedsUpdate=true for nil
-// current and NeedsUpdate=false otherwise, which made every in-place toggle of
-// targets, tags, or rules a silent no-op at plan time. F7 makes target
-// reconfiguration the most common firewall lifecycle action, so Diff must
-// detect changes to droplet_ids, tags, inbound_rules, and outbound_rules.
-// (Code-review Finding 1, F7 round 2.)
+// FirewallDriver.Diff must detect target/rule changes so that toggling
+// droplet_ids, tags, inbound_rules, or outbound_rules between deploys
+// produces a Plan action. A stub Diff that always reported NeedsUpdate=false
+// for non-nil current would silently no-op the most common firewall lifecycle
+// action — target reconfiguration — so the comparison covers all four
+// canonical fields against state recorded by `fwOutput`.
 
 // TestFirewallDriver_FwOutput_RecordsTargetsAndRules verifies that Create
 // returns a ResourceOutput whose Outputs map carries the four target/rule
@@ -673,8 +668,8 @@ func TestFirewallDriver_Diff_DetectsTargetsChange(t *testing.T) {
 
 	// Helper: build a current ResourceOutput whose Outputs reflects a live
 	// firewall in the structpb-compatible canonical shape that fwOutput
-	// produces in round 3 (no typed slices on Outputs — see the
-	// StructpbBoundary tests).
+	// produces (no typed slices on Outputs — see the StructpbBoundary
+	// tests for why).
 	canonicalInbound := func(rules []godo.InboundRule) []any {
 		if len(rules) == 0 {
 			return nil
@@ -1054,8 +1049,10 @@ func TestFirewallDriver_StructpbBoundary_DiffSurvivesRoundTrip(t *testing.T) {
 
 // TestFirewallDriver_DropletIDs_FractionalFloat_Rejected verifies that
 // fractional float values are rejected rather than silently truncated.
-// YAML's `123.9` would otherwise become Droplet ID 123 — wrong droplet
-// attached. (Code-review round-2 follow-up: float64 truncation.)
+// YAML's `123.9` would otherwise become Droplet ID 123 — the wrong
+// Droplet attached. structpb represents all numerics as float64, so a
+// fractional input survives the gRPC boundary and the int conversion
+// must reject it explicitly.
 func TestFirewallDriver_DropletIDs_FractionalFloat_Rejected(t *testing.T) {
 	t.Run("fractional float rejected", func(t *testing.T) {
 		mock := &mockFirewallClient{fw: testFirewall()}

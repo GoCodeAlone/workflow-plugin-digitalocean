@@ -152,11 +152,10 @@ func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 }
 
 // Diff compares the desired spec against the live firewall recorded on
-// `current` to detect in-place reconfiguration. Pre-F7 the body was a stub
-// that always returned NeedsUpdate=false — meaning every droplet_ids/tags
-// toggle silently no-op'd at plan time. F7 round 2 extends it to compare the
-// four canonical fields (`droplet_ids`, `tags`, `inbound_rules`,
-// `outbound_rules`).
+// `current` to detect in-place reconfiguration. It compares the four
+// canonical fields (`droplet_ids`, `tags`, `inbound_rules`,
+// `outbound_rules`) so that toggling any of them between deploys produces
+// a Plan action rather than silently no-op'ing.
 //
 // `droplet_ids` and `tags` use SET semantics: reorder is not a change, since
 // DO normalizes membership server-side. Rules use ORDER-SENSITIVE deep-equal
@@ -166,9 +165,9 @@ func (d *FirewallDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 // Both sides of the rule comparison are normalized to the structpb-
 // compatible canonical map shape so the comparison is symmetric whether
 // `current.Outputs` is read in-process or after a wfctl→plugin gRPC round-
-// trip. (F7 round 3 — gRPC boundary fix.)
+// trip.
 //
-// Pre-F7 state without the recorded keys (legacy ResourceOutputs from older
+// Legacy state without the recorded keys (`ResourceOutput` written by older
 // plugin versions) is treated as having empty fields, which surfaces a Plan
 // action on first Diff post-upgrade — the safe over-detect direction.
 func (d *FirewallDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
@@ -411,7 +410,7 @@ func outboundRulesFromConfig(cfg map[string]any) []godo.OutboundRule {
 // with "proto: invalid type", and demotes all numerics to float64 on the
 // way out. Storing canonical-from-the-start ensures the comparison
 // performed in Diff is symmetric whether Outputs is consumed in-process
-// or after a structpb round-trip. (F7 round 3 — gRPC boundary fix.)
+// or after a structpb round-trip.
 func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 	return &interfaces.ResourceOutput{
 		Name:       fw.Name,
@@ -517,7 +516,9 @@ func outboundRulesCanonical(rules []godo.OutboundRule) []any {
 
 func (d *FirewallDriver) SensitiveKeys() []string { return nil }
 
-func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
+func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatUUID
+}
 
 // dropletIDsFromConfig extracts the canonical "droplet_ids" list. Accepts
 // the numeric variants the modular YAML loader can emit (int, int64,
@@ -562,7 +563,7 @@ func dropletIDsFromConfig(cfg map[string]any) ([]int, error) {
 // strings. Non-string entries and empty strings are dropped: the DO API
 // rejects empty tags, so a slice that contains only empty strings must fail
 // the targets-required validation rather than being silently sent to the
-// API. (Code-review Finding 2, F7 round 2.)
+// API.
 func tagsFromConfig(cfg map[string]any) []string {
 	raw, ok := cfg["tags"].([]any)
 	if !ok || len(raw) == 0 {
@@ -577,13 +578,20 @@ func tagsFromConfig(cfg map[string]any) []string {
 	return out
 }
 
-// validateFirewallTargets returns the spec-mandated error when the firewall
-// request has no DropletIDs and no Tags. The error string is verbatim from
-// plan P-2.F7 step 3 — including the em dash and the App Platform clause —
-// because operators search for it and reviewers grep for it.
+// NoTargetsErrFmt is the format string for the error returned by
+// validateFirewallTargets when a firewall spec has neither droplet_ids nor
+// tags. The string is exported and stable so tests can assert exact-match
+// equality without redefining the literal, and so plan-output greps and
+// runbooks can rely on a fixed phrase. The em dash (U+2014) and the App
+// Platform clause are part of the contract — DO firewalls do not protect
+// App Platform apps, and the surfaced error must say so.
+const NoTargetsErrFmt = `firewall %q has no targets (specify droplet_ids or tags) — App Platform services cannot be firewall-protected; use expose: internal or trusted_sources`
+
+// validateFirewallTargets returns NoTargetsErrFmt-formatted error when the
+// firewall request has no DropletIDs and no Tags.
 func validateFirewallTargets(name string, req *godo.FirewallRequest) error {
 	if len(req.DropletIDs) == 0 && len(req.Tags) == 0 {
-		return fmt.Errorf("firewall %q has no targets (specify droplet_ids or tags) — App Platform services cannot be firewall-protected; use expose: internal or trusted_sources", name)
+		return fmt.Errorf(NoTargetsErrFmt, name)
 	}
 	return nil
 }
