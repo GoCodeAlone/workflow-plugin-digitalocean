@@ -15,9 +15,14 @@ type mockFirewallClient struct {
 	fw      *godo.Firewall
 	err     error
 	listErr error
+	// lastReq captures the most recent FirewallRequest sent to Create or
+	// Update, allowing tests to assert that DropletIDs / Tags pass through
+	// to godo.
+	lastReq *godo.FirewallRequest
 }
 
-func (m *mockFirewallClient) Create(_ context.Context, _ *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
+func (m *mockFirewallClient) Create(_ context.Context, req *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
+	m.lastReq = req
 	return m.fw, nil, m.err
 }
 func (m *mockFirewallClient) Get(_ context.Context, _ string) (*godo.Firewall, *godo.Response, error) {
@@ -32,7 +37,8 @@ func (m *mockFirewallClient) List(_ context.Context, _ *godo.ListOptions) ([]god
 	}
 	return []godo.Firewall{*m.fw}, nil, nil
 }
-func (m *mockFirewallClient) Update(_ context.Context, _ string, _ *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
+func (m *mockFirewallClient) Update(_ context.Context, _ string, req *godo.FirewallRequest) (*godo.Firewall, *godo.Response, error) {
+	m.lastReq = req
 	return m.fw, nil, m.err
 }
 func (m *mockFirewallClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
@@ -54,6 +60,7 @@ func TestFirewallDriver_Create(t *testing.T) {
 	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
 		Name: "my-fw",
 		Config: map[string]any{
+			"droplet_ids": []any{123},
 			"inbound_rules": []any{
 				map[string]any{"protocol": "tcp", "ports": "80", "sources": []any{"0.0.0.0/0"}},
 			},
@@ -72,8 +79,10 @@ func TestFirewallDriver_Create_Error(t *testing.T) {
 	d := drivers.NewFirewallDriverWithClient(mock)
 
 	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
-		Name:   "my-fw",
-		Config: map[string]any{},
+		Name: "my-fw",
+		// droplet_ids satisfies the targets-required validation so the
+		// test exercises the API-error propagation path.
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -103,7 +112,7 @@ func TestFirewallDriver_Update_Success(t *testing.T) {
 		Name: "my-fw", ProviderID: "fw-123",
 	}, interfaces.ResourceSpec{
 		Name:   "my-fw",
-		Config: map[string]any{},
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -121,7 +130,7 @@ func TestFirewallDriver_Update_Error(t *testing.T) {
 		Name: "my-fw", ProviderID: "fw-123",
 	}, interfaces.ResourceSpec{
 		Name:   "my-fw",
-		Config: map[string]any{},
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -294,8 +303,10 @@ func TestFirewallDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	d := drivers.NewFirewallDriverWithClient(mock)
 
 	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
-		Name:   "my-fw",
-		Config: map[string]any{},
+		Name: "my-fw",
+		// droplet_ids satisfies the targets-required validation so this
+		// test exercises the empty-ID guard path, not the targets path.
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err == nil {
 		t.Fatal("expected error for empty ProviderID, got nil")
@@ -309,7 +320,7 @@ func TestFirewallDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 
 	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
 		Name:   "my-fw",
-		Config: map[string]any{},
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -320,4 +331,214 @@ func TestFirewallDriver_Create_ProviderIDIsAPIAssigned(t *testing.T) {
 	if out.ProviderID == "" {
 		t.Errorf("ProviderID must not be empty")
 	}
+}
+
+// ── F7: Firewall target enforcement ──────────────────────────────────────────
+
+// noTargetsErrFmt is the verbatim error string the spec requires when a
+// firewall declares no targets. Character-for-character, including the em
+// dash (U+2014) and the App Platform clause. Format-arg %q quotes the
+// firewall name. See plan P-2.F7 step 3.
+const noTargetsErrFmt = `firewall %q has no targets (specify droplet_ids or tags) — App Platform services cannot be firewall-protected; use expose: internal or trusted_sources`
+
+// TestFirewallDriver_Create_DropletIDs_PassThrough verifies droplet_ids reach
+// godo.FirewallRequest.DropletIDs.
+func TestFirewallDriver_Create_DropletIDs_PassThrough(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"droplet_ids": []any{123, 456},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastReq == nil {
+		t.Fatal("Create did not capture a FirewallRequest")
+	}
+	want := []int{123, 456}
+	if got := mock.lastReq.DropletIDs; !equalIntSlices(got, want) {
+		t.Errorf("DropletIDs = %v, want %v", got, want)
+	}
+}
+
+// TestFirewallDriver_Create_Tags_PassThrough verifies tags reach
+// godo.FirewallRequest.Tags.
+func TestFirewallDriver_Create_Tags_PassThrough(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"tags": []any{"bmw-prod"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastReq == nil {
+		t.Fatal("Create did not capture a FirewallRequest")
+	}
+	want := []string{"bmw-prod"}
+	if got := mock.lastReq.Tags; !equalStringSlices(got, want) {
+		t.Errorf("Tags = %v, want %v", got, want)
+	}
+}
+
+// TestFirewallDriver_Create_BothTargets verifies droplet_ids AND tags both
+// flow through when set together.
+func TestFirewallDriver_Create_BothTargets(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"droplet_ids": []any{123},
+			"tags":        []any{"bmw-prod", "edge"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastReq == nil {
+		t.Fatal("Create did not capture a FirewallRequest")
+	}
+	if got, want := mock.lastReq.DropletIDs, []int{123}; !equalIntSlices(got, want) {
+		t.Errorf("DropletIDs = %v, want %v", got, want)
+	}
+	if got, want := mock.lastReq.Tags, []string{"bmw-prod", "edge"}; !equalStringSlices(got, want) {
+		t.Errorf("Tags = %v, want %v", got, want)
+	}
+}
+
+// TestFirewallDriver_Update_Targets_PassThrough verifies droplet_ids and tags
+// flow through Update.
+func TestFirewallDriver_Update_Targets_PassThrough(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-fw", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"droplet_ids": []any{789},
+			"tags":        []any{"bmw-prod"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastReq == nil {
+		t.Fatal("Update did not capture a FirewallRequest")
+	}
+	if got, want := mock.lastReq.DropletIDs, []int{789}; !equalIntSlices(got, want) {
+		t.Errorf("DropletIDs = %v, want %v", got, want)
+	}
+	if got, want := mock.lastReq.Tags, []string{"bmw-prod"}; !equalStringSlices(got, want) {
+		t.Errorf("Tags = %v, want %v", got, want)
+	}
+}
+
+// TestFirewallDriver_Create_NoTargets_Errors verifies that a firewall spec
+// with neither droplet_ids nor tags fails Create with the exact spec error.
+func TestFirewallDriver_Create_NoTargets_Errors(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-fw",
+		// inbound_rules without targets is an App Platform footgun: there
+		// is nothing for the rule to apply to.
+		Config: map[string]any{
+			"inbound_rules": []any{
+				map[string]any{"protocol": "tcp", "ports": "80"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty targets, got nil")
+	}
+	want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+	if got := err.Error(); got != want {
+		t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
+	}
+	// Validation must short-circuit BEFORE the API call.
+	if mock.lastReq != nil {
+		t.Error("FirewallRequest reached godo client despite empty-targets validation")
+	}
+}
+
+// TestFirewallDriver_Update_NoTargets_Errors verifies the same exact-string
+// validation also fires on Update.
+func TestFirewallDriver_Update_NoTargets_Errors(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-fw", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name:   "my-fw",
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty targets, got nil")
+	}
+	want := fmt.Sprintf(noTargetsErrFmt, "my-fw")
+	if got := err.Error(); got != want {
+		t.Errorf("error mismatch:\n got: %q\nwant: %q", got, want)
+	}
+	if mock.lastReq != nil {
+		t.Error("FirewallRequest reached godo client despite empty-targets validation")
+	}
+}
+
+// TestFirewallDriver_Create_DropletIDs_AcceptsMixedNumeric verifies the
+// helper accepts the YAML-decoded numeric variants (int, int64, float64) the
+// modular YAML loader can produce.
+func TestFirewallDriver_Create_DropletIDs_AcceptsMixedNumeric(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-fw",
+		Config: map[string]any{
+			"droplet_ids": []any{int(1), int64(2), float64(3)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got, want := mock.lastReq.DropletIDs, []int{1, 2, 3}; !equalIntSlices(got, want) {
+		t.Errorf("DropletIDs = %v, want %v", got, want)
+	}
+}
+
+func equalIntSlices(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

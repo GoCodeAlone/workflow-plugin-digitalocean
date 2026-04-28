@@ -61,8 +61,10 @@ func TestFirewallDriver_Create_PersistsUUIDInState(t *testing.T) {
 	}
 	d := NewFirewallDriverWithClient(m)
 	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
-		Name:   "my-fw",
-		Config: map[string]any{},
+		Name: "my-fw",
+		// droplet_ids satisfies the targets-required validation; this test
+		// exercises UUID-persistence, not the targets path.
+		Config: map[string]any{"droplet_ids": []any{123}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -85,7 +87,7 @@ func TestFirewallDriver_Update_UsesExistingUUID(t *testing.T) {
 	d := NewFirewallDriverWithClient(m)
 	_, err := d.Update(context.Background(),
 		interfaces.ResourceRef{Name: "my-fw", ProviderID: uuid},
-		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{}},
+		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{"droplet_ids": []any{123}}},
 	)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -107,7 +109,7 @@ func TestFirewallDriver_Update_HealsStaleName(t *testing.T) {
 	d := NewFirewallDriverWithClient(m)
 	out, err := d.Update(context.Background(),
 		interfaces.ResourceRef{Name: "my-fw", ProviderID: "my-fw"}, // stale name
-		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{}},
+		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{"droplet_ids": []any{123}}},
 	)
 	if err != nil {
 		t.Fatalf("Update with stale name: %v", err)
@@ -128,7 +130,9 @@ func TestFirewallDriver_Update_HealFails_WhenListFails(t *testing.T) {
 	d := NewFirewallDriverWithClient(m)
 	_, err := d.Update(context.Background(),
 		interfaces.ResourceRef{Name: "my-fw", ProviderID: "my-fw"},
-		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{}},
+		// droplet_ids satisfies the targets-required validation; this test
+		// exercises the heal-list-failure path, not the targets path.
+		interfaces.ResourceSpec{Name: "my-fw", Config: map[string]any{"droplet_ids": []any{123}}},
 	)
 	if err == nil {
 		t.Fatal("expected error when heal lookup fails, got nil")

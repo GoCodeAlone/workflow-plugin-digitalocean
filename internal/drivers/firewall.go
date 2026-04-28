@@ -19,6 +19,16 @@ type FirewallClient interface {
 }
 
 // FirewallDriver manages DigitalOcean Firewalls (infra.firewall).
+//
+// Targets are required: every firewall must declare at least one of
+// `droplet_ids` (a list of Droplet integer IDs) or `tags` (a list of
+// Droplet/DOKS-pool tag strings, which auto-attach future resources). Both
+// Create and Update reject specs with neither field set.
+//
+// Note: DO firewalls do NOT attach to App Platform apps. For
+// App-Platform-only deployments, omit `infra.firewall` and instead use
+// `expose: internal` on the service plus `trusted_sources` on managed
+// databases.
 type FirewallDriver struct {
 	client FirewallClient
 }
@@ -35,6 +45,9 @@ func NewFirewallDriverWithClient(c FirewallClient) *FirewallDriver {
 
 func (d *FirewallDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	req := firewallRequest(spec)
+	if err := validateFirewallTargets(spec.Name, req); err != nil {
+		return nil, err
+	}
 	fw, _, err := d.client.Create(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("firewall create %q: %w", spec.Name, WrapGodoError(err))
@@ -103,11 +116,14 @@ func (d *FirewallDriver) resolveProviderID(ctx context.Context, ref interfaces.R
 }
 
 func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	req := firewallRequest(spec)
+	if err := validateFirewallTargets(spec.Name, req); err != nil {
+		return nil, err
+	}
 	providerID, err := d.resolveProviderID(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	req := firewallRequest(spec)
 	fw, _, err := d.client.Update(ctx, providerID, req)
 	if err != nil {
 		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, WrapGodoError(err))
@@ -157,10 +173,19 @@ func (d *FirewallDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ in
 // firewallRequest builds a godo FirewallRequest from a ResourceSpec.
 // Config keys:
 //
+//	droplet_ids    []int             — Droplet IDs to attach the firewall to.
+//	tags           []string          — Droplet tags (auto-attaches future Droplets / DOKS pools).
 //	inbound_rules  []map[string]any  — each: {protocol, ports, sources}
 //	outbound_rules []map[string]any  — each: {protocol, ports, destinations}
+//
+// At least one of `droplet_ids` or `tags` must be set; this is enforced by
+// validateFirewallTargets, which Create and Update both call.
 func firewallRequest(spec interfaces.ResourceSpec) *godo.FirewallRequest {
-	req := &godo.FirewallRequest{Name: spec.Name}
+	req := &godo.FirewallRequest{
+		Name:       spec.Name,
+		DropletIDs: dropletIDsFromConfig(spec.Config),
+		Tags:       tagsFromConfig(spec.Config),
+	}
 
 	if rules, ok := spec.Config["inbound_rules"].([]any); ok {
 		for _, r := range rules {
@@ -224,3 +249,53 @@ func fwOutput(fw *godo.Firewall) *interfaces.ResourceOutput {
 func (d *FirewallDriver) SensitiveKeys() []string { return nil }
 
 func (d *FirewallDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
+
+// dropletIDsFromConfig extracts the canonical "droplet_ids" list. Accepts the
+// numeric variants the modular YAML loader can emit (int, int64, float64).
+// Non-numeric entries are silently dropped, matching how other helpers in
+// this package degrade malformed input.
+func dropletIDsFromConfig(cfg map[string]any) []int {
+	raw, ok := cfg["droplet_ids"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(raw))
+	for _, v := range raw {
+		switch t := v.(type) {
+		case int:
+			out = append(out, t)
+		case int64:
+			out = append(out, int(t))
+		case float64:
+			out = append(out, int(t))
+		}
+	}
+	return out
+}
+
+// tagsFromConfig extracts the canonical "tags" list of Droplet/DOKS-pool tag
+// strings. Non-string entries are dropped.
+func tagsFromConfig(cfg map[string]any) []string {
+	raw, ok := cfg["tags"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// validateFirewallTargets returns the spec-mandated error when the firewall
+// request has no DropletIDs and no Tags. The error string is verbatim from
+// plan P-2.F7 step 3 — including the em dash and the App Platform clause —
+// because operators search for it and reviewers grep for it.
+func validateFirewallTargets(name string, req *godo.FirewallRequest) error {
+	if len(req.DropletIDs) == 0 && len(req.Tags) == 0 {
+		return fmt.Errorf("firewall %q has no targets (specify droplet_ids or tags) — App Platform services cannot be firewall-protected; use expose: internal or trusted_sources", name)
+	}
+	return nil
+}

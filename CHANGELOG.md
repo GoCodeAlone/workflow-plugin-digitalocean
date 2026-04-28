@@ -2,6 +2,28 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Firewall `droplet_ids` + `tags` target keys (P-2.F7)** — `infra.firewall`
+  specs now plumb the canonical `droplet_ids` (list of Droplet IDs) and
+  `tags` (list of Droplet/DOKS-pool tag strings) keys into
+  `godo.FirewallRequest.DropletIDs` / `Tags`. Tag-based attachment lets
+  future Droplets and DOKS pools auto-join the firewall when they receive
+  the matching tag.
+
+### Changed
+
+- **Firewall specs without targets now fail at plan time (P-2.F7)** —
+  `FirewallDriver.Create` and `FirewallDriver.Update` now reject specs that
+  declare neither `droplet_ids` nor `tags` with the error:
+  `firewall %q has no targets (specify droplet_ids or tags) — App Platform
+  services cannot be firewall-protected; use expose: internal or
+  trusted_sources`. DO firewalls do **not** attach to App Platform apps;
+  for App-Platform-only deployments, omit `infra.firewall` and use
+  `expose: internal` services plus `trusted_sources` on managed databases.
+
 ## [v0.7.9] - 2026-04-24
 
 ### Added
