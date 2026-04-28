@@ -124,16 +124,27 @@ func instanceSizeSlugFromConfig(cfg map[string]any) string {
 // Two canonical keys are accepted:
 //
 //   - "http_port_protocol" — explicit, mirrors the DO App Platform API field
-//     name. Takes precedence when both keys are set.
-//   - "protocol" — historic shorthand. Recognized aliases: "grpc" → HTTP2
+//     name. Takes precedence by KEY PRESENCE: if the key is set in cfg (even
+//     to an empty string), its value is honored and the shorthand is NOT
+//     consulted. This makes `http_port_protocol: ""` an explicit opt-out
+//     rather than a silent fallthrough.
+//   - "protocol" — historic shorthand. Consulted only when
+//     "http_port_protocol" is absent. Recognized aliases: "grpc" → HTTP2
 //     (gRPC requires HTTP/2 with prior knowledge per DO docs).
 //
 // DO recognizes HTTP and HTTP2; unknown values pass through for forward
 // compatibility with future godo releases.
 func httpPortProtocolFromConfig(cfg map[string]any) godo.ServingProtocol {
-	// Explicit canonical key wins over the shorthand.
-	raw := strFromConfig(cfg, "http_port_protocol", "")
-	if raw == "" {
+	// Key presence — not value emptiness — decides precedence, so that an
+	// explicit `http_port_protocol: ""` does NOT fall through to `protocol`.
+	var raw string
+	if v, ok := cfg["http_port_protocol"]; ok {
+		// If present but not a string (or explicitly empty), raw stays "" —
+		// which the switch below treats as "no protocol override".
+		if s, ok := v.(string); ok {
+			raw = s
+		}
+	} else {
 		raw = strFromConfig(cfg, "protocol", "")
 	}
 	switch strings.ToUpper(raw) {
