@@ -38,7 +38,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		DockerfilePath:      strFromConfig(cfg, "dockerfile_path", ""),
 		SourceDir:           strFromConfig(cfg, "source_dir", ""),
 		InstanceSizeSlug:    instanceSizeSlugFromConfig(cfg),
-		Protocol:            servingProtocolFromConfig(cfg),
+		Protocol:            httpPortProtocolFromConfig(cfg),
 		InternalPorts:       internalPortsFromConfig(cfg),
 		Routes:              routesFromConfig(cfg),
 		HealthCheck:         serviceHealthCheckFromConfig(cfg),
@@ -118,17 +118,32 @@ func instanceSizeSlugFromConfig(cfg map[string]any) string {
 	return ""
 }
 
-// servingProtocolFromConfig maps canonical "protocol" to a godo.ServingProtocol.
-// DO supports HTTP and HTTP2; unknown values are passed through for forward compatibility.
-func servingProtocolFromConfig(cfg map[string]any) godo.ServingProtocol {
-	proto := strings.ToUpper(strFromConfig(cfg, "protocol", ""))
-	switch proto {
-	case "HTTP2":
+// httpPortProtocolFromConfig maps the canonical port protocol to a godo.ServingProtocol
+// on godo.AppServiceSpec.Protocol (godo v1.178.0 apps.gen.go:568).
+//
+// Two canonical keys are accepted:
+//
+//   - "http_port_protocol" — explicit, mirrors the DO App Platform API field
+//     name. Takes precedence when both keys are set.
+//   - "protocol" — historic shorthand. Recognized aliases: "grpc" → HTTP2
+//     (gRPC requires HTTP/2 with prior knowledge per DO docs).
+//
+// DO recognizes HTTP and HTTP2; unknown values pass through for forward
+// compatibility with future godo releases.
+func httpPortProtocolFromConfig(cfg map[string]any) godo.ServingProtocol {
+	// Explicit canonical key wins over the shorthand.
+	raw := strFromConfig(cfg, "http_port_protocol", "")
+	if raw == "" {
+		raw = strFromConfig(cfg, "protocol", "")
+	}
+	switch strings.ToUpper(raw) {
+	case "HTTP2", "GRPC":
+		// gRPC over App Platform is served as HTTP/2 with prior knowledge.
 		return godo.SERVINGPROTOCOL_HTTP2
 	case "HTTP", "":
 		return "" // omit — DO defaults to HTTP
 	default:
-		return godo.ServingProtocol(proto)
+		return godo.ServingProtocol(strings.ToUpper(raw))
 	}
 }
 

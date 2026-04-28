@@ -155,6 +155,51 @@ func TestBuildAppSpec_Protocol_Default(t *testing.T) {
 	}
 }
 
+// TestBuildAppSpec_HTTPPortProtocol_HTTP2 exercises the canonical
+// `http_port_protocol: HTTP2` key — the official spelling that mirrors the
+// DO App Platform API field semantics. It must reach godo.AppServiceSpec.Protocol.
+func TestBuildAppSpec_HTTPPortProtocol_HTTP2(t *testing.T) {
+	cfg := map[string]any{
+		"image":              "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port_protocol": "HTTP2",
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if got := spec.Services[0].Protocol; got != godo.SERVINGPROTOCOL_HTTP2 {
+		t.Errorf("Protocol = %q, want HTTP2 (from http_port_protocol)", got)
+	}
+}
+
+// TestBuildAppSpec_Protocol_GRPC_AliasesHTTP2 exercises the shorthand
+// `protocol: grpc` alias. gRPC requires HTTP/2 transport (DO docs note HTTP2
+// "needs to be implemented in the service by serving HTTP/2 with prior
+// knowledge"), so the alias must resolve to godo.SERVINGPROTOCOL_HTTP2.
+func TestBuildAppSpec_Protocol_GRPC_AliasesHTTP2(t *testing.T) {
+	cfg := map[string]any{
+		"image":    "registry.digitalocean.com/myrepo/myapp:v1",
+		"protocol": "grpc",
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if got := spec.Services[0].Protocol; got != godo.SERVINGPROTOCOL_HTTP2 {
+		t.Errorf("Protocol = %q, want HTTP2 (gRPC alias)", got)
+	}
+}
+
+// TestBuildAppSpec_HTTPPortProtocol_OverridesProtocol verifies precedence:
+// when both `http_port_protocol` and `protocol` are set, the explicit
+// `http_port_protocol` wins. This protects callers who mix the two during
+// migration from the shorthand to the canonical key.
+func TestBuildAppSpec_HTTPPortProtocol_OverridesProtocol(t *testing.T) {
+	cfg := map[string]any{
+		"image":              "registry.digitalocean.com/myrepo/myapp:v1",
+		"http_port_protocol": "HTTP2",
+		"protocol":           "HTTP",
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if got := spec.Services[0].Protocol; got != godo.SERVINGPROTOCOL_HTTP2 {
+		t.Errorf("Protocol = %q, want HTTP2 (http_port_protocol takes precedence)", got)
+	}
+}
+
 // ── BuildCommand / RunCommand / DockerfilePath / SourceDir ───────────────────
 
 func TestBuildAppSpec_SourceFields(t *testing.T) {
