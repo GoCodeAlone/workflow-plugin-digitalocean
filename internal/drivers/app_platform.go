@@ -169,11 +169,51 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 	var changes []interfaces.FieldChange
 	if img, _ := desired.Config["image"].(string); img != "" {
 		curImg, _ := current.Outputs["image"].(string)
-		if img != curImg {
+		// Compare structurally: ParseImageRef into godo.ImageSourceSpec on
+		// both sides and compare RegistryType+Registry+Repository+Tag. Falls
+		// back to raw string equality when either side fails to parse, so
+		// unparseable hand-written state still surfaces a change rather than
+		// silently matching. Registry inclusion (round 4) catches GHCR /
+		// DockerHub registry-org changes; for DOCR the Registry comparison
+		// is benign because ParseImageRef discards the middle segment.
+		// Round-3 Finding A — fixes spurious image diffs caused by the
+		// lossy DOCR Registry round-trip.
+		if !imageRefsEqual(img, curImg) {
 			changes = append(changes, interfaces.FieldChange{Path: "image", Old: curImg, New: img})
 		}
 	}
+	// Compare canonical `expose` so in-place public↔internal toggles produce a
+	// Plan action rather than silently no-op'ing — quality-review F4 Finding 1.
+	// Desired side is the canonical string from cfg (default "public" when
+	// unset/empty). Current side is the value `appOutput` derived from the
+	// live AppSpec at last Read.
+	desiredExpose := canonicalExpose(desired.Config)
+	curExpose, _ := current.Outputs["expose"].(string)
+	if curExpose == "" {
+		// Pre-F4 state has no `expose` recorded; treat absence as public so a
+		// transition to `internal` is detected.
+		curExpose = "public"
+	}
+	if desiredExpose != curExpose {
+		changes = append(changes, interfaces.FieldChange{Path: "expose", Old: curExpose, New: desiredExpose})
+	}
 	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
+}
+
+// canonicalExpose returns the canonical `expose` value for a desired-spec
+// config: "public" (default when unset/empty), "internal", or whatever
+// non-empty string the user supplied. Validation of the enum is performed
+// later in `applyExposeInternal` during buildAppSpec.
+func canonicalExpose(cfg map[string]any) string {
+	v, ok := cfg["expose"].(string)
+	if !ok {
+		return "public"
+	}
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "public"
+	}
+	return v
 }
 
 func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
@@ -408,6 +448,17 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		ProviderID: app.ID,
 		Outputs: map[string]any{
 			"live_url": app.LiveURL,
+			// `expose` is derived from the first service component:
+			// HTTPPort==0 with InternalPorts populated → "internal";
+			// otherwise "public". Stored on Outputs so Diff can detect
+			// in-place public↔internal toggles — F4 Finding 1.
+			"expose": deriveExposeFromAppSpec(app.Spec),
+			// `image` is derived from the first service's ImageSourceSpec
+			// and formatted as a canonical user-facing ref. Stored on
+			// Outputs so Diff can structurally compare against the user's
+			// desired `cfg["image"]` and avoid emitting spurious image
+			// FieldChanges on no-op reconciles — F4 round-3 Finding A.
+			"image": deriveImageFromAppSpec(app.Spec),
 		},
 		Status: "running",
 	}
@@ -415,6 +466,132 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		out.Status = "pending"
 	}
 	return out
+}
+
+// deriveImageFromAppSpec returns a canonical user-facing image ref string for
+// the first service component of an AppSpec, suitable for use as
+// Outputs["image"] in Diff comparisons. Returns "" when the AppSpec has no
+// services or the first service lacks an Image. Round-3 Finding A.
+func deriveImageFromAppSpec(spec *godo.AppSpec) string {
+	if spec == nil || len(spec.Services) == 0 {
+		return ""
+	}
+	svc := spec.Services[0]
+	if svc == nil {
+		return ""
+	}
+	return formatImageSpec(svc.Image)
+}
+
+// formatImageSpec reverses ParseImageRef: it formats a godo.ImageSourceSpec
+// back into a canonical user-facing image ref string. The format is chosen so
+// that ParseImageRef(formatImageSpec(spec)) returns a struct with the same
+// RegistryType, Registry, Repository, and Tag — except for DOCR.
+//
+// DOCR exception: the DO API convention leaves Registry empty on the wire
+// (see ParseImageRef's DOCR case which discards the middle path segment).
+// formatImageSpec compensates by substituting Repository as the path-segment
+// placeholder when Registry=="", so the emitted ref is parseable and
+// structurally equivalent on round-trip — but it is NOT a byte-exact
+// preservation of whatever the user originally wrote. The user's
+// `registry.digitalocean.com/myrepo/myapp:v1` and our derived
+// `registry.digitalocean.com/myapp/myapp:v1` parse to the same {DOCR,
+// Registry:"", Repository:"myapp", Tag:"v1"} struct, which is what
+// imageRefsEqual compares. Outputs["image"] should therefore be treated as
+// a canonical identifier, not a verbatim copy of cfg["image"].
+//
+// Used by deriveImageFromAppSpec and as the basis for imageRefsEqual's
+// structural compare.
+func formatImageSpec(img *godo.ImageSourceSpec) string {
+	if img == nil || img.Repository == "" {
+		return ""
+	}
+	tag := img.Tag
+	if tag == "" {
+		tag = "latest"
+	}
+	switch img.RegistryType {
+	case godo.ImageSourceSpecRegistryType_DOCR:
+		// DOCR requires 3 path segments to parse (registry.digitalocean.com /
+		// <registry> / <repo>). When Registry is empty (the DO API
+		// convention), substitute Repository as the placeholder so the round
+		// trip yields a parseable ref with the same Repository+Tag — DOCR
+		// drops the middle segment during parse, so a structural compare
+		// (RegistryType+Registry+Repository+Tag, with Registry="" on both
+		// sides for DOCR) still matches the user's input.
+		reg := img.Registry
+		if reg == "" {
+			reg = img.Repository
+		}
+		return fmt.Sprintf("registry.digitalocean.com/%s/%s:%s", reg, img.Repository, tag)
+	case godo.ImageSourceSpecRegistryType_Ghcr:
+		if img.Registry == "" {
+			return fmt.Sprintf("ghcr.io/%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("ghcr.io/%s/%s:%s", img.Registry, img.Repository, tag)
+	case godo.ImageSourceSpecRegistryType_DockerHub:
+		if img.Registry == "" {
+			return fmt.Sprintf("docker.io/%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("docker.io/%s/%s:%s", img.Registry, img.Repository, tag)
+	default:
+		// Unknown registry type — emit a best-effort ref. ParseImageRef will
+		// likely fail on these, which means imageRefsEqual will fall back to
+		// raw string compare — still safer than emitting "".
+		if img.Registry == "" {
+			return fmt.Sprintf("%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("%s/%s:%s", img.Registry, img.Repository, tag)
+	}
+}
+
+// imageRefsEqual compares two image-ref strings structurally: parses both via
+// ParseImageRef and compares RegistryType+Registry+Repository+Tag. Falls back
+// to raw string equality when either side fails to parse. Two empty strings
+// are equal; an empty paired with a non-empty is unequal.
+//
+// Registry is compared in the structural form, not the raw string. This
+// matters for GHCR/DockerHub: `ghcr.io/orgA/app:v1` vs `ghcr.io/orgB/app:v1`
+// is a real change Plan must surface (round-4 finding). For DOCR the
+// comparison is still safe — ParseImageRef discards the middle segment for
+// DOCR, so both sides yield Registry="" regardless of the
+// formatImageSpec placeholder used during the round-trip.
+func imageRefsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	aSpec, aErr := ParseImageRef(a)
+	bSpec, bErr := ParseImageRef(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return aSpec.RegistryType == bSpec.RegistryType &&
+		aSpec.Registry == bSpec.Registry &&
+		aSpec.Repository == bSpec.Repository &&
+		aSpec.Tag == bSpec.Tag
+}
+
+// deriveExposeFromAppSpec inspects the first service component of an AppSpec
+// to determine whether the deployed app is public or internal. App Platform
+// allows multiple services per app; the canonical `expose` key applies to the
+// primary service (matching the pattern used in buildAppSpec where `svc` is
+// services[0]). Apps with no services default to "public" (cannot be
+// internal-only by definition).
+func deriveExposeFromAppSpec(spec *godo.AppSpec) string {
+	if spec == nil || len(spec.Services) == 0 {
+		return "public"
+	}
+	svc := spec.Services[0]
+	if svc == nil {
+		return "public"
+	}
+	if svc.HTTPPort == 0 && len(svc.InternalPorts) > 0 {
+		return "internal"
+	}
+	return "public"
 }
 
 // ParseImageRef parses a flat image reference string into a DO App Platform

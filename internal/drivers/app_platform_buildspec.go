@@ -24,7 +24,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		return nil, fmt.Errorf("app platform image config: %w", err)
 	}
 
-	httpPort, _ := intFromConfig(cfg, "http_port", 8080)
+	httpPort, httpPortSet := intFromConfig(cfg, "http_port", 8080)
 	instanceCount, _ := intFromConfig(cfg, "instance_count", 1)
 
 	svc := &godo.AppServiceSpec{
@@ -48,6 +48,13 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		Termination:         serviceTerminationFromConfig(cfg),
 		LogDestinations:     logDestinationsFromConfig(cfg),
 		Alerts:              componentAlertsFromConfig(cfg),
+	}
+
+	// Apply expose: internal semantics — see exposeFromConfig comment.
+	// Sibling services reach an internal component via `<name>.internal:<port>`
+	// (DO App Platform runtime contract).
+	if err := applyExposeInternal(svc, cfg, httpPort, httpPortSet); err != nil {
+		return nil, fmt.Errorf("app platform expose config: %w", err)
 	}
 
 	// Extract provider_specific.digitalocean overrides for top-level AppSpec fields.
@@ -176,6 +183,116 @@ func internalPortsFromConfig(cfg map[string]any) []int64 {
 		}
 	}
 	return out
+}
+
+// exposeFromConfig returns the canonical exposure mode for a container service:
+// "public" (default — service has an edge HTTP port and may carry routes) or
+// "internal" (no edge port; reachable only from sibling services via App
+// Platform's internal DNS at `<name>.internal:<port>`).
+//
+// Returns ("", nil) when the `expose` key is absent (treat as "public" by the
+// caller). Returns ("", error) when `expose` is present but not a string —
+// e.g. an accidental YAML bool `true`, a number, or a structured value.
+// Distinguishing key-absent from key-present-but-wrong-type is required so
+// non-string values fail loudly rather than silently defaulting to public —
+// quality-review F4 round-3 Finding B (security-relevant).
+func exposeFromConfig(cfg map[string]any) (string, error) {
+	v, exists := cfg["expose"]
+	if !exists {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("expose: must be a string (one of [public, internal]), got %T", v)
+	}
+	return strings.ToLower(strings.TrimSpace(s)), nil
+}
+
+// applyExposeInternal validates the canonical `expose` value and, when set to
+// "internal", mutates svc:
+//   - HTTPPort is zeroed so DO does not provision a public edge route.
+//   - http_port (if any) is folded into InternalPorts so siblings can dial it.
+//   - Routes is dropped — `internal` promises no public surface, even if the
+//     caller supplied a routes list.
+//
+// All errors below short-circuit the build at apply time, before any DO API
+// call, so misconfiguration never reaches the wire.
+//
+// Validation: `expose` must be one of {"", "public", "internal"}. Any other
+// value (typo'd "intenral", unsupported "private", etc.) returns an enum
+// error rather than silently defaulting to public — F4 Finding 3 / round 3.
+//
+// Reachability: when `expose: internal` is set with neither http_port nor
+// internal_ports, the result would be a service with no listening port —
+// silently unreachable. Reject this combination — F4 Finding 2.
+//
+// Port range: http_port and every internal_ports entry must be in the valid
+// TCP range [1, 65535]. http_port: 0 used to slip through the "is the key
+// set?" check and append 0 to InternalPorts → unreachable spec — F4
+// round-5 finding.
+//
+// Port-mismatch: when both http_port and internal_ports are set under
+// `expose: internal` with disjoint values, return an explicit error so the
+// caller picks one. (Original F4 behaviour.)
+func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort int, httpPortSet bool) error {
+	exp, err := exposeFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	switch exp {
+	case "", "public":
+		return nil
+	case "internal":
+		// fall through to the internal-mode mutation below
+	default:
+		return fmt.Errorf("expose: %q invalid; must be one of [public, internal]", exp)
+	}
+
+	// Internal-mode requires at least one port to be reachable from siblings.
+	if !httpPortSet && len(svc.InternalPorts) == 0 {
+		return fmt.Errorf("expose: internal requires http_port or internal_ports to be set")
+	}
+
+	// Reject out-of-range http_port (including 0, the previous silent-default
+	// landmine that produced unreachable services).
+	if httpPortSet && !validTCPPort(httpPort) {
+		return fmt.Errorf("http_port: %d invalid (must be between 1 and 65535)", httpPort)
+	}
+
+	// Reject any out-of-range internal_ports entry.
+	for _, p := range svc.InternalPorts {
+		if !validTCPPort(int(p)) {
+			return fmt.Errorf("internal_ports: %d invalid (must be between 1 and 65535)", p)
+		}
+	}
+
+	// Detect mismatched http_port vs internal_ports before mutating anything.
+	if httpPortSet {
+		hp := int64(httpPort)
+		hasMatch := false
+		for _, p := range svc.InternalPorts {
+			if p == hp {
+				hasMatch = true
+				break
+			}
+		}
+		if len(svc.InternalPorts) > 0 && !hasMatch {
+			return fmt.Errorf("internal_ports must include http_port when both are set; use one or the other")
+		}
+		if !hasMatch {
+			svc.InternalPorts = append(svc.InternalPorts, hp)
+		}
+	}
+	svc.HTTPPort = 0
+	svc.Routes = nil
+	return nil
+}
+
+// validTCPPort returns true when p is in the valid TCP port range [1, 65535].
+// Used by applyExposeInternal to reject http_port: 0 and any out-of-range
+// internal_ports entry — F4 round-5 finding.
+func validTCPPort(p int) bool {
+	return p >= 1 && p <= 65535
 }
 
 // routesFromConfig converts the canonical "routes" list to []*godo.AppRouteSpec.

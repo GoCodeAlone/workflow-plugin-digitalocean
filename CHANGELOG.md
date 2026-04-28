@@ -6,6 +6,53 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
+- **`expose: internal` on `infra.container_service`** (P-2.F4) — App Platform
+  services may now declare `expose: internal` to opt out of the public edge
+  route. When set, `buildAppSpec` zeroes `HTTPPort`, folds `http_port` into
+  `InternalPorts` (so siblings can dial it), and drops `Routes` entirely. The
+  service becomes reachable only from sibling components in the same app via
+  DO App Platform's internal DNS (`<service-name>.internal:<port>`). Default
+  remains `expose: public`.
+
+  Misconfiguration guards (all reject at apply time, before any DO API
+  call):
+  - `expose` must be a string. Non-string values (accidental YAML bool
+    `true`, numbers, maps, etc.) return `expose: must be a string (one of
+    [public, internal]), got <type>` rather than silently defaulting to
+    public.
+  - `expose` must be one of `[public, internal]`. Typos like `intenral` or
+    unsupported values like `private` return
+    `expose: %q invalid; must be one of [public, internal]`.
+  - `expose: internal` requires at least one of `http_port` or
+    `internal_ports` to be set. Setting `expose: internal` with no ports
+    would produce a service with no listening port — silently unreachable.
+    Returns `expose: internal requires http_port or internal_ports to be
+    set`.
+  - Under `expose: internal`, every port (`http_port` and each entry in
+    `internal_ports`) must be in the valid TCP range [1, 65535]. Returns
+    `http_port: %d invalid (must be between 1 and 65535)` or
+    `internal_ports: %d invalid (must be between 1 and 65535)`. This
+    closes the `http_port: 0` landmine where a previous "is the key set"
+    check would silently append 0 to InternalPorts → unreachable spec.
+  - `http_port` and `internal_ports` set with disjoint values returns
+    `internal_ports must include http_port when both are set; use one or
+    the other`.
+
+  Plan/Diff: `appOutput` now records `Outputs["expose"]` derived from the
+  live `AppSpec` (HTTPPort==0 with InternalPorts populated → "internal";
+  otherwise "public") AND `Outputs["image"]` formatted from the first
+  service's `ImageSourceSpec` via the new `formatImageSpec` reverse of
+  `ParseImageRef`. `Diff` compares `expose` against the canonical desired
+  value AND compares `image` structurally
+  (RegistryType+Registry+Repository+Tag, with parse-then-compare via
+  `imageRefsEqual`) — so in-place public↔internal toggles produce a Plan
+  action with a `FieldChange{Path: "expose"}`, GHCR/DockerHub
+  registry-org changes are detected, and unchanged image refs no longer
+  emit spurious `image` `FieldChange`s on every reconcile. Pre-F4 state
+  without recorded `expose` is treated as `public` for the comparison.
+
+  This unblocks core-dump P-1's NATS sidecar and any other backing-service
+  component that must not face the open internet.
 - **Firewall `droplet_ids` + `tags` target keys (P-2.F7)** — `infra.firewall`
   specs now plumb the canonical `droplet_ids` (list of Droplet IDs) and
   `tags` (list of Droplet/DOKS-pool tag strings) keys into

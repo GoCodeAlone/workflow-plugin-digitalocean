@@ -34,6 +34,14 @@
         "infra.api_gateway"
       ],
       "configSchema": {
+        "infra.container_service": {
+          "expose": {
+            "type": "string",
+            "enum": ["public", "internal"],
+            "default": "public",
+            "description": "Whether the service has a public edge route (public, default) or is reachable only from sibling components via DO App Platform internal DNS (<name>.internal:<port>) (internal)."
+          }
+        },
         "infra.firewall": {
           "description": "DigitalOcean cloud firewall. Attaches to Droplets by ID or by tag (which auto-attaches future Droplets / DOKS pools that receive the tag). Either `droplet_ids` or `tags` is REQUIRED; `wfctl infra apply` rejects firewalls with no targets before any DO API call. NOTE: DO firewalls do not attach to App Platform apps — for App-Platform-only deployments, use `expose: internal` services plus `trusted_sources` on managed databases.",
           "fields": {
