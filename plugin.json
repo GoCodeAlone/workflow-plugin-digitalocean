@@ -32,7 +32,46 @@
         "infra.droplet",
         "infra.iam_role",
         "infra.api_gateway"
-      ]
+      ],
+      "configSchema": {
+        "infra.firewall": {
+          "description": "DigitalOcean cloud firewall. Attaches to Droplets by ID or by tag (which auto-attaches future Droplets / DOKS pools that receive the tag). Either `droplet_ids` or `tags` is REQUIRED; `wfctl infra apply` rejects firewalls with no targets before any DO API call. NOTE: DO firewalls do not attach to App Platform apps — for App-Platform-only deployments, use `expose: internal` services plus `trusted_sources` on managed databases.",
+          "fields": {
+            "droplet_ids": {
+              "type": "array<int>",
+              "required": false,
+              "description": "Droplet IDs the firewall attaches to. At least one of `droplet_ids` or `tags` must be set."
+            },
+            "tags": {
+              "type": "array<string>",
+              "required": false,
+              "description": "Droplet/DOKS-pool tag strings. Resources receiving any listed tag auto-join the firewall. Example: [\"bmw-prod\"]."
+            },
+            "inbound_rules": {
+              "type": "array<object>",
+              "required": false,
+              "description": "Each rule: {protocol: tcp|udp|icmp, ports: \"<n>|<a-b>|all\", sources: [<CIDR>...]}."
+            },
+            "outbound_rules": {
+              "type": "array<object>",
+              "required": false,
+              "description": "Each rule: {protocol: tcp|udp|icmp, ports: \"<n>|<a-b>|all\", destinations: [<CIDR>...]}."
+            }
+          },
+          "examples": [
+            {
+              "name": "tag-based-firewall",
+              "comment": "Tag-based attachment so future Droplets / DOKS pools auto-join.",
+              "spec": {
+                "tags": ["bmw-prod"],
+                "inbound_rules": [
+                  {"protocol": "tcp", "ports": "443", "sources": ["0.0.0.0/0"]}
+                ]
+              }
+            }
+          ]
+        }
+      }
     }
   }
 }
