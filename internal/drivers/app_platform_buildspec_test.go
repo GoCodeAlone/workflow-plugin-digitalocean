@@ -205,10 +205,11 @@ func TestBuildAppSpec_HTTPPortProtocol_OverridesProtocol(t *testing.T) {
 // An explicit `http_port_protocol: ""` is the user opting out of any protocol
 // override; it must NOT silently fall back to a `protocol: grpc` shorthand.
 //
-// Without the key-presence check, `strFromConfig("http_port_protocol", "")`
-// would return the empty default and the function would proceed to read
-// `protocol`, surfacing HTTP2 — surprising and contrary to the documented
-// precedence. (Code-review Finding #3 / Copilot inline comment, F5 round 2.)
+// Without the key-presence check, the function would treat
+// `http_port_protocol: ""` as absent (because `strFromConfig`'s
+// default-on-empty logic conflates explicit-empty with omitted) and consult
+// `protocol` instead, surfacing HTTP2 — surprising and contrary to the
+// documented precedence.
 func TestBuildAppSpec_HTTPPortProtocol_ExplicitEmpty_DoesNotFallThrough(t *testing.T) {
 	cfg := map[string]any{
 		"image":              "registry.digitalocean.com/myrepo/myapp:v1",

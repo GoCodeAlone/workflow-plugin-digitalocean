@@ -121,13 +121,13 @@ func instanceSizeSlugFromConfig(cfg map[string]any) string {
 // httpPortProtocolFromConfig maps the canonical port protocol to a godo.ServingProtocol
 // on godo.AppServiceSpec.Protocol (godo v1.178.0 apps.gen.go:568).
 //
-// Two canonical keys are accepted:
+// Two config keys are accepted:
 //
-//   - "http_port_protocol" — explicit, mirrors the DO App Platform API field
-//     name. Takes precedence by KEY PRESENCE: if the key is set in cfg (even
-//     to an empty string), its value is honored and the shorthand is NOT
-//     consulted. This makes `http_port_protocol: ""` an explicit opt-out
-//     rather than a silent fallthrough.
+//   - "http_port_protocol" — the canonical key, mirrors the DO App Platform
+//     API field name. Takes precedence by KEY PRESENCE: if the key is set in
+//     cfg (even to an empty string), its value is honored and the shorthand
+//     is NOT consulted. This makes `http_port_protocol: ""` an explicit
+//     opt-out rather than a silent fallthrough.
 //   - "protocol" — historic shorthand. Consulted only when
 //     "http_port_protocol" is absent. Recognized aliases: "grpc" → HTTP2
 //     (gRPC requires HTTP/2 with prior knowledge per DO docs).
