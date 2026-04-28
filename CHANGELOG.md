@@ -119,6 +119,22 @@ fixtures from workflow v0.20.1.
   start ensures `Diff` reads symmetric values whether `current.Outputs`
   is consumed in-process or after a structpb round-trip.
 
+### Notes
+
+- **Plugin dispatch mode: legacy compat.** This release ships under
+  workflow's legacy plugin dispatch (untyped `map[string]any` arguments
+  transported via `structpb`). The F7 firewall Diff fix uses
+  canonical-shape Outputs (typed values converted to structpb-compatible
+  `[]any` of primitive/map shapes) as a stopgap to survive the gRPC
+  structpb boundary. Migration to workflow's strict typed-contract
+  dispatch (`v0.19.0-alpha.5+`) is scoped for v0.9.0. Once strict-mode
+  is enabled, the canonical-shape conversion becomes obsolete and
+  Outputs writers + Diff readers will use generated proto types
+  end-to-end.
+- **Filed follow-up:** issue #37 — use `ref.Name` consistently for
+  `FirewallDriver.Update` error formatting (Minor advisory from F7
+  review; non-blocking, scoped for v0.8.x).
+
 ## [v0.7.9] - 2026-04-24
 
 ### Added
