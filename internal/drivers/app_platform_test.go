@@ -419,6 +419,157 @@ func TestAppPlatformDriver_Diff_DetectsExposeChange_InternalToPublic(t *testing.
 	}
 }
 
+// TestAppPlatformDriver_AppOutput_ImageDerivedFromAppSpec covers code-reviewer
+// round-3 Finding A: `Diff` reads `current.Outputs["image"]` but pre-round-3
+// `appOutput` never populated it, so every reconcile of an unchanged service
+// emitted a spurious `image` FieldChange. Now `appOutput` derives the image
+// string from the live AppSpec so a no-op reconcile produces no Plan action.
+//
+// Round-trip rule: the derived string must parse back via ParseImageRef to a
+// godo.ImageSourceSpec that is structurally equal (RegistryType + Repository +
+// Tag) to the user's original `cfg["image"]`. DOCR's Registry field is
+// dropped during parse, so for DOCR with empty Registry we substitute the
+// Repository as the registry-path placeholder — Diff's structural compare
+// (see Diff_NoSpurious_ImageChange below) still finds the round-trip
+// equivalent.
+func TestAppPlatformDriver_AppOutput_ImageDerivedFromAppSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		image     *godo.ImageSourceSpec
+		wantNonEmpty bool
+		wantContains []string // substrings every well-formed output must include
+	}{
+		{
+			name: "docr_with_empty_registry",
+			image: &godo.ImageSourceSpec{
+				RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
+				Registry:     "",
+				Repository:   "myapp",
+				Tag:          "v1",
+			},
+			wantNonEmpty: true,
+			wantContains: []string{"registry.digitalocean.com/", "myapp", "v1"},
+		},
+		{
+			name: "docr_with_registry",
+			image: &godo.ImageSourceSpec{
+				RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
+				Registry:     "myrepo",
+				Repository:   "myapp",
+				Tag:          "v2",
+			},
+			wantNonEmpty: true,
+			wantContains: []string{"registry.digitalocean.com/myrepo/myapp:v2"},
+		},
+		{
+			name: "ghcr",
+			image: &godo.ImageSourceSpec{
+				RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+				Registry:     "myorg",
+				Repository:   "myapp",
+				Tag:          "latest",
+			},
+			wantNonEmpty: true,
+			wantContains: []string{"ghcr.io/myorg/myapp:latest"},
+		},
+		{
+			name: "docker_hub",
+			image: &godo.ImageSourceSpec{
+				RegistryType: godo.ImageSourceSpecRegistryType_DockerHub,
+				Registry:     "library",
+				Repository:   "nginx",
+				Tag:          "alpine",
+			},
+			wantNonEmpty: true,
+			wantContains: []string{"docker.io/library/nginx:alpine"},
+		},
+		{
+			name:         "nil_image",
+			image:        nil,
+			wantNonEmpty: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &godo.App{
+				ID:               "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+				Spec:             &godo.AppSpec{Name: "img-app", Services: []*godo.AppServiceSpec{{Name: "svc", Image: tc.image, HTTPPort: 8080}}},
+				ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+			}
+			mock := &mockAppClient{app: app}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			out, err := d.Read(context.Background(), interfaces.ResourceRef{ProviderID: app.ID, Name: app.Spec.Name})
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			got, _ := out.Outputs["image"].(string)
+			if !tc.wantNonEmpty {
+				if got != "" {
+					t.Errorf("Outputs[\"image\"] = %q, want empty for nil/missing image", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("Outputs[\"image\"] empty; want a populated canonical ref")
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("Outputs[\"image\"] = %q, want it to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestAppPlatformDriver_Diff_NoSpurious_ImageChange covers the practical
+// outcome of Finding A: a Read whose Outputs["image"] was derived from the
+// AppSpec via appOutput must NOT trigger a spurious FieldChange when the
+// user's desired cfg["image"] resolves to the same Repository+Tag. This is
+// the production failure mode Copilot flagged (every reconcile emitted a
+// noisy image change forever).
+func TestAppPlatformDriver_Diff_NoSpurious_ImageChange_DOCR(t *testing.T) {
+	const userImage = "registry.digitalocean.com/myrepo/myapp:v1"
+	app := &godo.App{
+		ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec: &godo.AppSpec{
+			Name: "round-trip-app",
+			Services: []*godo.AppServiceSpec{{
+				Name: "svc",
+				// godo.ImageSourceSpec mirrors what ParseImageRef(userImage)
+				// produces — DOCR drops Registry on parse.
+				Image:    &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DOCR, Registry: "", Repository: "myapp", Tag: "v1"},
+				HTTPPort: 8080,
+			}},
+		},
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{ProviderID: app.ID, Name: app.Spec.Name})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"image": userImage, "http_port": 8080},
+	}, out)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	for _, c := range result.Changes {
+		if c.Path == "image" {
+			t.Errorf("spurious image FieldChange emitted on no-op reconcile: %+v (Outputs[image]=%q vs cfg[image]=%q)",
+				c, out.Outputs["image"], userImage)
+		}
+	}
+	if result.NeedsUpdate {
+		// Allow other fields to drive an update only if they materially differ;
+		// this assertion is a guard against false-positive image changes only.
+		// If a future change adds another silent diff, this t.Error will pin it.
+		for _, c := range result.Changes {
+			t.Errorf("unexpected FieldChange on no-op reconcile: %+v", c)
+		}
+	}
+}
+
 // TestAppPlatformDriver_AppOutput_ExposeDerivedFromAppSpec verifies that the
 // live-state derivation from godo.AppSpec is correct: HTTPPort==0 with
 // InternalPorts populated → "internal"; everything else → "public". Without

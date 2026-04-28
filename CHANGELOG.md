@@ -15,10 +15,13 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   remains `expose: public`.
 
   Misconfiguration guards (all reject at plan time before any DO API call):
+  - `expose` must be a string. Non-string values (accidental YAML bool
+    `true`, numbers, maps, etc.) return `expose: must be a string (one of
+    [public, internal]), got <type>` rather than silently defaulting to
+    public.
   - `expose` must be one of `[public, internal]`. Typos like `intenral` or
-    unsupported values like `private` return the error
-    `expose: %q invalid; must be one of [public, internal]` rather than
-    silently defaulting to public.
+    unsupported values like `private` return
+    `expose: %q invalid; must be one of [public, internal]`.
   - `expose: internal` requires at least one of `http_port` or
     `internal_ports` to be set. Setting `expose: internal` with no ports
     would produce a service with no listening port — silently unreachable.
@@ -30,11 +33,15 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
   Plan/Diff: `appOutput` now records `Outputs["expose"]` derived from the
   live `AppSpec` (HTTPPort==0 with InternalPorts populated → "internal";
-  otherwise "public"). `Diff` compares the canonical `expose` field so
-  in-place public↔internal toggles produce a Plan action with a
-  `FieldChange{Path: "expose"}`, rather than silently no-op'ing as the
-  pre-F4 image-only Diff would have done. Pre-F4 state without recorded
-  expose is treated as `public` for the comparison.
+  otherwise "public") AND `Outputs["image"]` formatted from the first
+  service's `ImageSourceSpec` via the new `formatImageSpec` reverse of
+  `ParseImageRef`. `Diff` compares `expose` against the canonical desired
+  value AND compares `image` structurally (RegistryType+Repository+Tag,
+  with parse-then-compare via `imageRefsEqual`) — so in-place
+  public↔internal toggles produce a Plan action with a
+  `FieldChange{Path: "expose"}`, and unchanged image refs no longer emit
+  spurious `image` `FieldChange`s on every reconcile. Pre-F4 state
+  without recorded `expose` is treated as `public` for the comparison.
 
   This unblocks core-dump P-1's NATS sidecar and any other backing-service
   component that must not face the open internet.

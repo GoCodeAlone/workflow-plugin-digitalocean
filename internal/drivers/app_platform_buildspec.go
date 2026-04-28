@@ -162,14 +162,24 @@ func internalPortsFromConfig(cfg map[string]any) []int64 {
 // exposeFromConfig returns the canonical exposure mode for a container service:
 // "public" (default — service has an edge HTTP port and may carry routes) or
 // "internal" (no edge port; reachable only from sibling services via App
-// Platform's internal DNS at `<name>.internal:<port>`). An empty string means
-// the field was omitted; treat as "public".
-func exposeFromConfig(cfg map[string]any) string {
-	v, ok := cfg["expose"].(string)
-	if !ok {
-		return ""
+// Platform's internal DNS at `<name>.internal:<port>`).
+//
+// Returns ("", nil) when the `expose` key is absent (treat as "public" by the
+// caller). Returns ("", error) when `expose` is present but not a string —
+// e.g. an accidental YAML bool `true`, a number, or a structured value.
+// Distinguishing key-absent from key-present-but-wrong-type is required so
+// non-string values fail loudly rather than silently defaulting to public —
+// quality-review F4 round-3 Finding B (security-relevant).
+func exposeFromConfig(cfg map[string]any) (string, error) {
+	v, exists := cfg["expose"]
+	if !exists {
+		return "", nil
 	}
-	return strings.ToLower(strings.TrimSpace(v))
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("expose: must be a string (one of [public, internal]), got %T", v)
+	}
+	return strings.ToLower(strings.TrimSpace(s)), nil
 }
 
 // applyExposeInternal validates the canonical `expose` value and, when set to
@@ -192,7 +202,10 @@ func exposeFromConfig(cfg map[string]any) string {
 // `expose: internal` with disjoint values, return an explicit error so the
 // caller picks one. (Original F4 behaviour.)
 func applyExposeInternal(svc *godo.AppServiceSpec, cfg map[string]any, httpPort int, httpPortSet bool) error {
-	exp := exposeFromConfig(cfg)
+	exp, err := exposeFromConfig(cfg)
+	if err != nil {
+		return err
+	}
 	switch exp {
 	case "", "public":
 		return nil

@@ -169,7 +169,13 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 	var changes []interfaces.FieldChange
 	if img, _ := desired.Config["image"].(string); img != "" {
 		curImg, _ := current.Outputs["image"].(string)
-		if img != curImg {
+		// Compare structurally: ParseImageRef into godo.ImageSourceSpec on
+		// both sides and compare RegistryType+Repository+Tag. Falls back to
+		// raw string equality when either side fails to parse, so unparseable
+		// hand-written state still surfaces a change rather than silently
+		// matching. Round-3 Finding A — fixes spurious image diffs caused by
+		// the lossy DOCR Registry round-trip.
+		if !imageRefsEqual(img, curImg) {
 			changes = append(changes, interfaces.FieldChange{Path: "image", Old: curImg, New: img})
 		}
 	}
@@ -444,6 +450,12 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			// otherwise "public". Stored on Outputs so Diff can detect
 			// in-place public↔internal toggles — F4 Finding 1.
 			"expose": deriveExposeFromAppSpec(app.Spec),
+			// `image` is derived from the first service's ImageSourceSpec
+			// and formatted as a canonical user-facing ref. Stored on
+			// Outputs so Diff can structurally compare against the user's
+			// desired `cfg["image"]` and avoid emitting spurious image
+			// FieldChanges on no-op reconciles — F4 round-3 Finding A.
+			"image": deriveImageFromAppSpec(app.Spec),
 		},
 		Status: "running",
 	}
@@ -451,6 +463,90 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		out.Status = "pending"
 	}
 	return out
+}
+
+// deriveImageFromAppSpec returns a canonical user-facing image ref string for
+// the first service component of an AppSpec, suitable for use as
+// Outputs["image"] in Diff comparisons. Returns "" when the AppSpec has no
+// services or the first service lacks an Image. Round-3 Finding A.
+func deriveImageFromAppSpec(spec *godo.AppSpec) string {
+	if spec == nil || len(spec.Services) == 0 {
+		return ""
+	}
+	svc := spec.Services[0]
+	if svc == nil {
+		return ""
+	}
+	return formatImageSpec(svc.Image)
+}
+
+// formatImageSpec reverses ParseImageRef: it formats a godo.ImageSourceSpec
+// back into a canonical user-facing image ref string. The format is chosen so
+// that ParseImageRef(formatImageSpec(spec)) returns a struct with the same
+// RegistryType, Repository, and Tag — even though Registry may be lossy for
+// DOCR (DO API leaves it empty on the wire). Used by deriveImageFromAppSpec
+// and as the basis for imageRefsEqual's structural compare.
+func formatImageSpec(img *godo.ImageSourceSpec) string {
+	if img == nil || img.Repository == "" {
+		return ""
+	}
+	tag := img.Tag
+	if tag == "" {
+		tag = "latest"
+	}
+	switch img.RegistryType {
+	case godo.ImageSourceSpecRegistryType_DOCR:
+		// DOCR requires 3 path segments to parse (registry.digitalocean.com /
+		// <registry> / <repo>). When Registry is empty (the DO API
+		// convention), substitute Repository as the placeholder so the round
+		// trip yields a parseable ref with the same Repository+Tag — DOCR
+		// drops the middle segment during parse, so a structural compare
+		// (RegistryType+Repository+Tag) still matches the user's input.
+		reg := img.Registry
+		if reg == "" {
+			reg = img.Repository
+		}
+		return fmt.Sprintf("registry.digitalocean.com/%s/%s:%s", reg, img.Repository, tag)
+	case godo.ImageSourceSpecRegistryType_Ghcr:
+		if img.Registry == "" {
+			return fmt.Sprintf("ghcr.io/%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("ghcr.io/%s/%s:%s", img.Registry, img.Repository, tag)
+	case godo.ImageSourceSpecRegistryType_DockerHub:
+		if img.Registry == "" {
+			return fmt.Sprintf("docker.io/%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("docker.io/%s/%s:%s", img.Registry, img.Repository, tag)
+	default:
+		// Unknown registry type — emit a best-effort ref. ParseImageRef will
+		// likely fail on these, which means imageRefsEqual will fall back to
+		// raw string compare — still safer than emitting "".
+		if img.Registry == "" {
+			return fmt.Sprintf("%s:%s", img.Repository, tag)
+		}
+		return fmt.Sprintf("%s/%s:%s", img.Registry, img.Repository, tag)
+	}
+}
+
+// imageRefsEqual compares two image-ref strings structurally: parses both via
+// ParseImageRef and compares RegistryType+Repository+Tag. Falls back to raw
+// string equality when either side fails to parse. Two empty strings are
+// equal; an empty paired with a non-empty is unequal. Round-3 Finding A.
+func imageRefsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	aSpec, aErr := ParseImageRef(a)
+	bSpec, bErr := ParseImageRef(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return aSpec.RegistryType == bSpec.RegistryType &&
+		aSpec.Repository == bSpec.Repository &&
+		aSpec.Tag == bSpec.Tag
 }
 
 // deriveExposeFromAppSpec inspects the first service component of an AppSpec

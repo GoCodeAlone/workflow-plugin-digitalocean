@@ -317,6 +317,48 @@ func TestBuildAppSpec_Expose_Internal_NoPorts_Fails(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_Expose_NonStringValue_Fails(t *testing.T) {
+	// Round-3 Finding B (security-relevant): if `expose` is not a string —
+	// e.g. accidental YAML bool `true` or a number — the type-assertion
+	// should reject it loudly rather than silently treat it as absent (which
+	// would default to public). Sibling to Finding 3 (typo'd string values).
+	for _, tc := range []struct {
+		name string
+		val  any
+	}{
+		{"bool_true", true},
+		{"bool_false", false},
+		{"int", 1},
+		{"map", map[string]any{"public": true}},
+		{"slice", []any{"public"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := map[string]any{
+				"image":     "registry.digitalocean.com/myrepo/myapp:v1",
+				"http_port": 8080,
+				"expose":    tc.val,
+			}
+			mock := &mockAppClient{app: testApp()}
+			d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+			_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+				Name:   "test-app",
+				Config: cfg,
+			})
+			if err == nil {
+				t.Fatalf("expected error for non-string expose value (%T), got nil", tc.val)
+			}
+			if !strings.Contains(err.Error(), "expose:") {
+				t.Errorf("error %q should mention the `expose:` config key", err.Error())
+			}
+			// Error should hint that the value must be a string and what was
+			// actually received, so the user can locate the misformatted YAML.
+			if !strings.Contains(err.Error(), "must be a string") {
+				t.Errorf("error %q should explain `must be a string`", err.Error())
+			}
+		})
+	}
+}
+
 func TestBuildAppSpec_Expose_Invalid_Fails(t *testing.T) {
 	// Typo'd values like "intenral" or "private" must not silently fall
 	// through to public. Reject with an enum-listing error; quality-review
