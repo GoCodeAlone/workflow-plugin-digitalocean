@@ -38,7 +38,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		DockerfilePath:      strFromConfig(cfg, "dockerfile_path", ""),
 		SourceDir:           strFromConfig(cfg, "source_dir", ""),
 		InstanceSizeSlug:    instanceSizeSlugFromConfig(cfg),
-		Protocol:            servingProtocolFromConfig(cfg),
+		Protocol:            httpPortProtocolFromConfig(cfg),
 		InternalPorts:       internalPortsFromConfig(cfg),
 		Routes:              routesFromConfig(cfg),
 		HealthCheck:         serviceHealthCheckFromConfig(cfg),
@@ -125,17 +125,43 @@ func instanceSizeSlugFromConfig(cfg map[string]any) string {
 	return ""
 }
 
-// servingProtocolFromConfig maps canonical "protocol" to a godo.ServingProtocol.
-// DO supports HTTP and HTTP2; unknown values are passed through for forward compatibility.
-func servingProtocolFromConfig(cfg map[string]any) godo.ServingProtocol {
-	proto := strings.ToUpper(strFromConfig(cfg, "protocol", ""))
-	switch proto {
-	case "HTTP2":
+// httpPortProtocolFromConfig maps the canonical port protocol to a godo.ServingProtocol
+// on godo.AppServiceSpec.Protocol (godo v1.178.0 apps.gen.go:568).
+//
+// Two config keys are accepted:
+//
+//   - "http_port_protocol" — the canonical key, mirrors the DO App Platform
+//     API field name. Takes precedence by KEY PRESENCE: if the key is set in
+//     cfg (even to an empty string), its value is honored and the shorthand
+//     is NOT consulted. This makes `http_port_protocol: ""` an explicit
+//     opt-out rather than a silent fallthrough.
+//   - "protocol" — historic shorthand. Consulted only when
+//     "http_port_protocol" is absent. Recognized aliases: "grpc" → HTTP2
+//     (gRPC requires HTTP/2 with prior knowledge per DO docs).
+//
+// DO recognizes HTTP and HTTP2; unknown values pass through for forward
+// compatibility with future godo releases.
+func httpPortProtocolFromConfig(cfg map[string]any) godo.ServingProtocol {
+	// Key presence — not value emptiness — decides precedence, so that an
+	// explicit `http_port_protocol: ""` does NOT fall through to `protocol`.
+	var raw string
+	if v, ok := cfg["http_port_protocol"]; ok {
+		// If present but not a string (or explicitly empty), raw stays "" —
+		// which the switch below treats as "no protocol override".
+		if s, ok := v.(string); ok {
+			raw = s
+		}
+	} else {
+		raw = strFromConfig(cfg, "protocol", "")
+	}
+	switch strings.ToUpper(raw) {
+	case "HTTP2", "GRPC":
+		// gRPC over App Platform is served as HTTP/2 with prior knowledge.
 		return godo.SERVINGPROTOCOL_HTTP2
 	case "HTTP", "":
 		return "" // omit — DO defaults to HTTP
 	default:
-		return godo.ServingProtocol(proto)
+		return godo.ServingProtocol(strings.ToUpper(raw))
 	}
 }
 

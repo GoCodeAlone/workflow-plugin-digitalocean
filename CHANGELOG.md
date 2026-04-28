@@ -43,15 +43,73 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   otherwise "public") AND `Outputs["image"]` formatted from the first
   service's `ImageSourceSpec` via the new `formatImageSpec` reverse of
   `ParseImageRef`. `Diff` compares `expose` against the canonical desired
-  value AND compares `image` structurally (RegistryType+Repository+Tag,
-  with parse-then-compare via `imageRefsEqual`) — so in-place
-  public↔internal toggles produce a Plan action with a
-  `FieldChange{Path: "expose"}`, and unchanged image refs no longer emit
-  spurious `image` `FieldChange`s on every reconcile. Pre-F4 state
+  value AND compares `image` structurally
+  (RegistryType+Registry+Repository+Tag, with parse-then-compare via
+  `imageRefsEqual`) — so in-place public↔internal toggles produce a Plan
+  action with a `FieldChange{Path: "expose"}`, GHCR/DockerHub
+  registry-org changes are detected, and unchanged image refs no longer
+  emit spurious `image` `FieldChange`s on every reconcile. Pre-F4 state
   without recorded `expose` is treated as `public` for the comparison.
 
   This unblocks core-dump P-1's NATS sidecar and any other backing-service
   component that must not face the open internet.
+- **Firewall `droplet_ids` + `tags` target keys (P-2.F7)** — `infra.firewall`
+  specs now plumb the canonical `droplet_ids` (list of Droplet IDs) and
+  `tags` (list of Droplet/DOKS-pool tag strings) keys into
+  `godo.FirewallRequest.DropletIDs` / `Tags`. Tag-based attachment lets
+  future Droplets and DOKS pools auto-join the firewall when they receive
+  the matching tag.
+- **`http_port_protocol` canonical key + `protocol: grpc` alias (P-2.F5)** —
+  App Platform services now honor an explicit `http_port_protocol` config key
+  that maps to `godo.AppServiceSpec.Protocol` (godo v1.178.0 `apps.gen.go:568`).
+  The historic `protocol` shorthand still works and gains a `grpc` alias that
+  resolves to `HTTP2` (gRPC requires HTTP/2 with prior knowledge per DO docs).
+  When both keys are set, `http_port_protocol` takes precedence.
+
+### Changed
+
+- **Firewall specs without targets now fail at apply time (P-2.F7)** —
+  `FirewallDriver.Create` and `FirewallDriver.Update` reject specs that
+  declare neither `droplet_ids` nor `tags` BEFORE any DO API call, with
+  the error:
+  `firewall %q has no targets (specify droplet_ids or tags) — App Platform
+  services cannot be firewall-protected; use expose: internal or
+  trusted_sources`. The validation runs at the start of every Apply
+  reconcile (Create + Update). DO firewalls do **not** attach to App
+  Platform apps; for App-Platform-only deployments, omit `infra.firewall`
+  and use `expose: internal` services plus `trusted_sources` on managed
+  databases.
+
+### Fixed
+
+- **`FirewallDriver.Diff` detects in-place target/rule changes (P-2.F7)** —
+  pre-F7 `Diff` was a stub that returned `NeedsUpdate=false` for every
+  non-nil current state, silently suppressing in-place toggles of
+  `droplet_ids`, `tags`, `inbound_rules`, or `outbound_rules` from `wfctl
+  infra plan` output. F7 round 2 extends `Diff` to compare those four
+  canonical fields against state recorded by `fwOutput`, surfacing a Plan
+  action when any diverges. Set semantics for `droplet_ids` and `tags`
+  (reorder is not a change); order-sensitive deep-equal for rules. Pre-F7
+  state without recorded fields is treated as having empty fields, so the
+  first plan post-upgrade safely over-detects and re-asserts current
+  configuration.
+- **Empty / non-positive target entries now fail at apply time (P-2.F7)** —
+  `tagsFromConfig` filters empty strings and `dropletIDsFromConfig` filters
+  IDs ≤ 0. Without these filters, a spec like `tags: [""]` or
+  `droplet_ids: [0]` would slip past `validateFirewallTargets` (slice is
+  non-empty after parsing) and fail only at the DO API call.
+- **Fractional `droplet_ids` rejected, not truncated (P-2.F7)** —
+  `dropletIDsFromConfig` now returns an error when a numeric value is not
+  integer-valued. Pre-fix, a YAML `droplet_ids: [123.9]` silently truncated
+  to `123`, attaching the wrong Droplet.
+- **Outputs are gRPC structpb-compatible (P-2.F7)** — `fwOutput` stores
+  `droplet_ids` / `tags` / `inbound_rules` / `outbound_rules` in the
+  canonical `[]any` shape (numerics as `float64`, rules as
+  `[]any`-of-`map[string]any`). The wfctl→plugin gRPC dispatch path
+  encodes Outputs through `structpb.NewStruct`, which rejects native typed
+  slices (`[]int`, `[]string`, struct slices). Storing canonical-from-the-
+  start ensures `Diff` reads symmetric values whether `current.Outputs`
+  is consumed in-process or after a structpb round-trip.
 
 ## [v0.7.9] - 2026-04-24
 

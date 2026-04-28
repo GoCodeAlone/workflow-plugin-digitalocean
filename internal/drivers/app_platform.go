@@ -170,11 +170,14 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 	if img, _ := desired.Config["image"].(string); img != "" {
 		curImg, _ := current.Outputs["image"].(string)
 		// Compare structurally: ParseImageRef into godo.ImageSourceSpec on
-		// both sides and compare RegistryType+Repository+Tag. Falls back to
-		// raw string equality when either side fails to parse, so unparseable
-		// hand-written state still surfaces a change rather than silently
-		// matching. Round-3 Finding A — fixes spurious image diffs caused by
-		// the lossy DOCR Registry round-trip.
+		// both sides and compare RegistryType+Registry+Repository+Tag. Falls
+		// back to raw string equality when either side fails to parse, so
+		// unparseable hand-written state still surfaces a change rather than
+		// silently matching. Registry inclusion (round 4) catches GHCR /
+		// DockerHub registry-org changes; for DOCR the Registry comparison
+		// is benign because ParseImageRef discards the middle segment.
+		// Round-3 Finding A — fixes spurious image diffs caused by the
+		// lossy DOCR Registry round-trip.
 		if !imageRefsEqual(img, curImg) {
 			changes = append(changes, interfaces.FieldChange{Path: "image", Old: curImg, New: img})
 		}
@@ -483,9 +486,22 @@ func deriveImageFromAppSpec(spec *godo.AppSpec) string {
 // formatImageSpec reverses ParseImageRef: it formats a godo.ImageSourceSpec
 // back into a canonical user-facing image ref string. The format is chosen so
 // that ParseImageRef(formatImageSpec(spec)) returns a struct with the same
-// RegistryType, Repository, and Tag — even though Registry may be lossy for
-// DOCR (DO API leaves it empty on the wire). Used by deriveImageFromAppSpec
-// and as the basis for imageRefsEqual's structural compare.
+// RegistryType, Registry, Repository, and Tag — except for DOCR.
+//
+// DOCR exception: the DO API convention leaves Registry empty on the wire
+// (see ParseImageRef's DOCR case which discards the middle path segment).
+// formatImageSpec compensates by substituting Repository as the path-segment
+// placeholder when Registry=="", so the emitted ref is parseable and
+// structurally equivalent on round-trip — but it is NOT a byte-exact
+// preservation of whatever the user originally wrote. The user's
+// `registry.digitalocean.com/myrepo/myapp:v1` and our derived
+// `registry.digitalocean.com/myapp/myapp:v1` parse to the same {DOCR,
+// Registry:"", Repository:"myapp", Tag:"v1"} struct, which is what
+// imageRefsEqual compares. Outputs["image"] should therefore be treated as
+// a canonical identifier, not a verbatim copy of cfg["image"].
+//
+// Used by deriveImageFromAppSpec and as the basis for imageRefsEqual's
+// structural compare.
 func formatImageSpec(img *godo.ImageSourceSpec) string {
 	if img == nil || img.Repository == "" {
 		return ""
@@ -501,7 +517,8 @@ func formatImageSpec(img *godo.ImageSourceSpec) string {
 		// convention), substitute Repository as the placeholder so the round
 		// trip yields a parseable ref with the same Repository+Tag — DOCR
 		// drops the middle segment during parse, so a structural compare
-		// (RegistryType+Repository+Tag) still matches the user's input.
+		// (RegistryType+Registry+Repository+Tag, with Registry="" on both
+		// sides for DOCR) still matches the user's input.
 		reg := img.Registry
 		if reg == "" {
 			reg = img.Repository
