@@ -1,0 +1,11 @@
+{
+  "version": "1",
+  "contracts": [
+    {
+      "kind": "module",
+      "type": "iac.provider",
+      "mode": "strict",
+      "config": "workflow.plugins.digitalocean.IacProviderConfig"
+    }
+  ]
+}
