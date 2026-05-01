@@ -18,3 +18,17 @@ jobs:
         run: git config --global url."https://x-access-token:${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
       - run: go test -race ./...
       - run: go vet ./...
+
+  wfctl-strict-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail fast if plugin.json is missing
+        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Configure Git for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Validate strict plugin contracts
+        run: go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.20.1 plugin validate --file plugin.json --strict-contracts
