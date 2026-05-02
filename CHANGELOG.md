@@ -6,6 +6,35 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
+- **`DOProvider.DetectDrift` real implementation** — Replaces the stub that
+  returned `Drifted: false` for every resource. Now classifies each resource
+  using the canonical `interfaces.DriftClass` enum (workflow v0.20.5):
+
+  - `DriftClassGhost` (`Drifted: true`): state has the resource, but cloud
+    `Read` returns `interfaces.ErrResourceNotFound`. Caller should prune state
+    via `wfctl infra apply --refresh`.
+  - `DriftClassConfig` (`Drifted: true`): `Read` succeeds and `Diff` reports
+    `NeedsUpdate || NeedsReplace`. Caller should reconcile via plan/apply.
+    Drifted field paths are recorded in `DriftResult.Fields`; `Expected` and
+    `Actual` maps contain the `New`/`Old` values from `DiffResult.Changes`.
+  - `DriftClassInSync` (`Drifted: false`): state and cloud agree.
+  - `DriftClassUnknown` (`Drifted: true`): driver registry lookup failed for
+    the ref type (unsupported resource type). Operator must investigate.
+
+  Production-safety invariant: transient API errors (rate-limit, auth,
+  network) propagate and do NOT trigger state-prune semantics; only genuine
+  `interfaces.ErrResourceNotFound` (HTTP 404) gates the ghost path.
+
+  go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
+
+- **`drivers.ErrResourceNotFound` aliased to `interfaces.ErrResourceNotFound`**
+  — The local sentinel in `app_platform.go` was previously a distinct
+  `errors.New(...)` value; cross-package `errors.Is(err, interfaces.ErrResourceNotFound)`
+  would silently miss it. Now aliased so all driver list-scan not-found returns
+  satisfy the canonical sentinel for the ghost-detection path.
+
+### Added
+
 - **Deferred `trusted_sources` update for `infra.database`** — When a
   `trusted_sources` entry of `type: app` references an app that does not yet
   exist (first-deploy ordering), `DatabaseDriver.Create` and `.Update` no

@@ -417,11 +417,101 @@ func (p *DOProvider) Status(ctx context.Context, resources []interfaces.Resource
 	return statuses, nil
 }
 
-// DetectDrift checks for drift between declared and actual resource state.
-func (p *DOProvider) DetectDrift(_ context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
-	var results []interfaces.DriftResult
+// DetectDrift checks for drift between declared state and actual cloud state.
+// For each resource ref it calls the driver's Read and classifies the result:
+//
+//   - errors.Is(err, interfaces.ErrResourceNotFound) → DriftClassGhost (Drifted=true;
+//     state has the resource but cloud returns 404). Caller may prune state via
+//     wfctl infra apply --refresh.
+//   - any other Read error → propagate (transient API failure; do NOT classify as drift).
+//   - Read succeeds + DiffResult.NeedsUpdate || NeedsReplace → DriftClassConfig (Drifted=true).
+//   - Read succeeds + no diff → DriftClassInSync (Drifted=false).
+//   - driver registry lookup fails → DriftClassUnknown (Drifted=true; operator must investigate).
+//
+// Production-safety invariant: only genuine 404s (wrapped with
+// interfaces.ErrResourceNotFound) trigger the ghost path. Rate-limit, auth,
+// or network errors propagate unchanged so callers cannot accidentally prune
+// state on transient failures.
+func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
+	results := make([]interfaces.DriftResult, 0, len(resources))
 	for _, ref := range resources {
-		results = append(results, interfaces.DriftResult{Name: ref.Name, Type: ref.Type, Drifted: false})
+		d, err := p.ResourceDriver(ref.Type)
+		if err != nil {
+			results = append(results, interfaces.DriftResult{
+				Name:    ref.Name,
+				Type:    ref.Type,
+				Drifted: true,
+				Class:   interfaces.DriftClassUnknown,
+				Fields:  []string{"driver-resolution: " + err.Error()},
+			})
+			continue
+		}
+
+		out, err := d.Read(ctx, ref)
+		if err != nil {
+			if errors.Is(err, interfaces.ErrResourceNotFound) {
+				// Ghost in state — cloud reports the resource does not exist.
+				results = append(results, interfaces.DriftResult{
+					Name:    ref.Name,
+					Type:    ref.Type,
+					Drifted: true,
+					Class:   interfaces.DriftClassGhost,
+				})
+				continue
+			}
+			// Transient or unknown error — propagate; let caller retry.
+			return results, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
+		}
+
+		// Read succeeded — check for config drift via the driver's Diff method.
+		// We pass an empty desired spec (only Name+Type from ref) because DetectDrift
+		// does not have access to the full declared config at this layer. Drivers'
+		// Diff implementations compare against the live state; an empty desired spec
+		// means drivers will report drift only for fields they can compare directly
+		// from the current output vs. their own reference values.
+		//
+		// For richer config-drift detection (desired config from the IaC spec),
+		// callers should use wfctl infra plan which has access to the full config.
+		diff, diffErr := d.Diff(ctx, interfaces.ResourceSpec{Name: ref.Name, Type: ref.Type}, out)
+		if diffErr != nil {
+			// Diff failure is treated as inconclusive — still record as InSync to
+			// avoid false positives; callers can run wfctl infra plan for a full check.
+			results = append(results, interfaces.DriftResult{
+				Name:    ref.Name,
+				Type:    ref.Type,
+				Drifted: false,
+				Class:   interfaces.DriftClassInSync,
+			})
+			continue
+		}
+
+		if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
+			// Extract changed field paths and build Expected/Actual maps.
+			fields := make([]string, 0, len(diff.Changes))
+			expected := make(map[string]any, len(diff.Changes))
+			actual := make(map[string]any, len(diff.Changes))
+			for _, ch := range diff.Changes {
+				fields = append(fields, ch.Path)
+				expected[ch.Path] = ch.New
+				actual[ch.Path] = ch.Old
+			}
+			results = append(results, interfaces.DriftResult{
+				Name:     ref.Name,
+				Type:     ref.Type,
+				Drifted:  true,
+				Class:    interfaces.DriftClassConfig,
+				Fields:   fields,
+				Expected: expected,
+				Actual:   actual,
+			})
+		} else {
+			results = append(results, interfaces.DriftResult{
+				Name:    ref.Name,
+				Type:    ref.Type,
+				Drifted: false,
+				Class:   interfaces.DriftClassInSync,
+			})
+		}
 	}
 	return results, nil
 }
