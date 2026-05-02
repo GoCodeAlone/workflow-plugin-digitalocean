@@ -1506,7 +1506,7 @@ func TestTroubleshoot_AttachesBuildLogsForBuildErroredDeployment(t *testing.T) {
 
 // TestTroubleshoot_GracefulOnGetLogsError verifies that when GetLogs returns
 // an error, the Diagnostic is still produced (no panic, no error return), and
-// the Detail does not contain a log block.
+// the Detail contains a visible failure note so operators know why logs are absent.
 func TestTroubleshoot_GracefulOnGetLogsError(t *testing.T) {
 	dep := &godo.Deployment{
 		ID:    "dep-getlogs-err",
@@ -1532,15 +1532,15 @@ func TestTroubleshoot_GracefulOnGetLogsError(t *testing.T) {
 	if len(diags) == 0 {
 		t.Fatal("expected Diagnostic to be produced even when GetLogs fails")
 	}
-	// Diagnostic must not contain a log block.
-	if strings.Contains(diags[0].Detail, "Deploy logs") {
-		t.Errorf("Detail should not contain log block when GetLogs fails; got: %q", diags[0].Detail)
+	// Detail must contain a visible failure note (not silently empty).
+	if !strings.Contains(diags[0].Detail, "log fetch unavailable") {
+		t.Errorf("Detail should contain 'log fetch unavailable' failure note; got: %q", diags[0].Detail)
 	}
 }
 
 // TestTroubleshoot_GracefulOnHTTPFetchError verifies that when GetLogs returns
 // a URL but the HTTP server returns 500, the Diagnostic is still produced
-// without a log block (no panic).
+// and Detail contains a visible failure note so operators know why logs are absent.
 func TestTroubleshoot_GracefulOnHTTPFetchError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1571,8 +1571,9 @@ func TestTroubleshoot_GracefulOnHTTPFetchError(t *testing.T) {
 	if len(diags) == 0 {
 		t.Fatal("expected Diagnostic to be produced even when HTTP fetch fails")
 	}
-	if strings.Contains(diags[0].Detail, "Deploy logs") {
-		t.Errorf("Detail should not contain log block when HTTP fetch fails; got: %q", diags[0].Detail)
+	// Detail must contain a visible failure note (not silently empty).
+	if !strings.Contains(diags[0].Detail, "log fetch failed") {
+		t.Errorf("Detail should contain 'log fetch failed' failure note; got: %q", diags[0].Detail)
 	}
 }
 

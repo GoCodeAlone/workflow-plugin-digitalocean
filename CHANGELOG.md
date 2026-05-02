@@ -4,6 +4,12 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Troubleshoot deploy/build log fetch** — Fixed two issues that prevented log blocks from appearing in operator-facing Diagnostic output:
+  - `deploymentComponents` now reads component names from `dep.Services / .StaticSites / .Workers / .Jobs / .Functions` (deployment-level arrays populated by both ListDeployments and GetDeployment) before falling back to `dep.Spec.*` and finally `[""]` aggregate. Previously only Spec was inspected, which is nil from ListDeployments, so the empty-aggregate fallback was always hit and DO API returned no logs.
+  - GetLogs API errors, HTTP-fetch errors, empty HistoricURLs, and empty-body responses now append a brief failure note to `Diagnostic.Detail` (in addition to the existing stderr log, which is captured at hashicorp/go-plugin TRACE level and not surfaced to operators). Operators now see the failure mode in the same Troubleshoot block as the rest of the diagnostic output.
+
 ### Added
 
 - **Troubleshoot fetches DO deploy/build logs** (PR-E2) — `AppPlatformDriver.Troubleshoot`
