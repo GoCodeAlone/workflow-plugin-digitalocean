@@ -2,6 +2,7 @@ package internal
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -271,24 +272,18 @@ func TestPlugin_CreateTypedModule_ValidConfig(t *testing.T) {
 	if inst == nil {
 		t.Fatal("expected non-nil ModuleInstance")
 	}
+	if _, ok := inst.(*doModuleInstance); !ok {
+		t.Fatalf("CreateTypedModule returned %T, want *doModuleInstance to preserve context-aware service invocation", inst)
+	}
+	if _, ok := inst.(sdk.ServiceContextInvoker); !ok {
+		t.Fatalf("CreateTypedModule returned %T without sdk.ServiceContextInvoker", inst)
+	}
 }
 
 // isErrTypedContractNotHandled checks whether the error (possibly wrapped) is
 // or wraps sdk.ErrTypedContractNotHandled.
 func isErrTypedContractNotHandled(err error) bool {
-	target := sdk.ErrTypedContractNotHandled
-	for err != nil {
-		if err == target {
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+	return errors.Is(err, sdk.ErrTypedContractNotHandled)
 }
 
 // TestIacConfigToMap verifies that all IacProviderConfig fields are mapped to

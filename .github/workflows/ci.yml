@@ -45,4 +45,6 @@ jobs:
             git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
       - name: Validate strict plugin contracts
-        run: go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.20.1 plugin validate --file plugin.json --strict-contracts
+        run: |
+          WFCTL_VERSION="$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}')"
+          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file plugin.json --strict-contracts
