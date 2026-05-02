@@ -1,234 +1,177 @@
-# `infra.container_service` kind discriminator — design
+# NATS-as-Worker via nested `workers:[]` (revised after adversarial review)
 
-**Status:** Approved 2026-05-02 (user direction: "If you're having to specify http port, sounds like you're creating a web app rather than a worker (non-public service). Make sure we're creating the correct shape definition for each service being deployed... Investigate accordingly and fix as necessary. Proceed autonomously, brainstorm if you need to.").
+**Status:** Approved 2026-05-02 (revised after adversarial-design-review surfaced that the original `kind: worker` discriminator design didn't fix the user's actual connectivity problem). User direction: "If you're having to specify http port, sounds like you're creating a web app rather than a worker (non-public service). Make sure we're creating the correct shape definition for each service being deployed... Investigate accordingly and fix as necessary. Proceed autonomously, brainstorm if you need to."
 
 ## Goal
 
-Allow `infra.container_service` configs to deploy as DigitalOcean App Platform Worker components (no HTTPPort, no HTTP probes) when the workload is non-HTTP (NATS, message queues, background processors). Currently the plugin always emits an `AppServiceSpec`, forcing every workload into the HTTP-Service shape with a default `HTTPPort: 8080` that DO's readiness probe targets — failing immediately for non-HTTP workloads.
+Get NATS deploying as a DO App Platform Worker (non-HTTP, no fake HTTPPort, no HTTP readiness probe) AND keep the game server (`coredump-staging`) able to reach NATS via the existing `nats://coredump-nats-staging.internal:4222` URL the server expects.
 
 ## Background
 
-`internal/drivers/app_platform_buildspec.go::buildAppSpec` constructs a top-level `*godo.AppServiceSpec` plus appended sidecars (also Services). The resulting `AppSpec` has `Services=[svc]`. `Workers/Jobs/StaticSites=nil` for the top-level component — those nested arrays only populate from `cfg["workers"]/["jobs"]/["static_sites"]` sub-keys.
+`core-dump-nats` is currently declared as a top-level `infra.container_service` resource in `core-dump/infra.yaml`. The plugin always emits an `AppServiceSpec` with `HTTPPort: 8080` default, which DO probes for HTTP readiness. NATS speaks NATS-protocol on 4222, not HTTP on 8080 → readiness probe fails → deployment ERROR.
 
-DO App Platform supports five component types (per godo `apps.gen.go`):
-- **Service** — long-running HTTP server. Requires `HTTPPort`. DO probes HTTP path/port for readiness + liveness.
-- **Worker** — long-running non-HTTP process. No `HTTPPort`. DO supervises only via process exit status (no probe spec on `AppWorkerSpec`).
-- **Job** — runs to completion (one-shot or scheduled). Has `Kind` for `pre_deploy/post_deploy/failed_deploy/scheduled`.
-- **StaticSite** — static file server. Out of scope here.
-- **Functions** — serverless. Out of scope here.
+This design's first iteration proposed a `kind: worker` discriminator on the plugin's `infra.container_service` config. Adversarial review (cycle 1) surfaced three Critical findings:
+1. `deriveImageFromAppSpec`, `Scale()`, and `Diff()` all hard-code Service-shape assumptions
+2. The kind-discriminator approach would create core-dump-nats as a *separate* DO App from coredump-staging — DO's `.internal` DNS works only WITHIN an App, so `nats://coredump-nats-staging.internal:4222` would still fail to resolve
+3. User intent is "fix the NATS+server connection," not "make the probe pass on a worker that can't be reached"
 
-Real-world symptom (core-dump deploy run [25263238663](https://github.com/GoCodeAlone/core-dump/actions/runs/25263238663/job/74073925869)): NATS container starts cleanly (`[INF] Listening for client connections on 0.0.0.0:4222 — Server is ready`), but `Readiness probe failed: dial tcp 100.127.22.161:8080: connect: connection refused` for 13 attempts → deployment ERROR. NATS speaks NATS-protocol on 4222, not HTTP on 8080.
+The plugin already supports the correct architectural shape: `buildAppSpec` (`internal/drivers/app_platform_buildspec.go:88`) calls `workersFromConfig(cfg)` for every container_service, populating `Spec.Workers` from a nested `workers:` array. **Zero plugin changes needed** — the fix is purely a `core-dump/infra.yaml` restructure.
 
-## Approaches considered
+## Approach
 
-### (A) Single resource type with `kind:` discriminator (recommended)
-
-`infra.container_service` gains a `kind:` config field. Values: `service` (default = current behavior, full BC), `worker`. When `kind: worker`, `buildAppSpec` dispatches to a worker-shape builder that emits `Spec.Workers=[w]` instead of `Spec.Services=[svc]`. HTTP-only fields are rejected with explicit build-time errors.
-
-**Trade-off:** smallest API surface; one resource = one component; matches K8s/Helm `kind:` convention. The type name `container_service` becomes mildly misleading when `kind: worker` is set, but operators are familiar with discriminator patterns.
-
-### (B) Separate resource type `infra.container_worker`
-
-New driver registration. Per-type schema validation. Pros: type name accurate, no forbidden-field tables. Cons: schema duplication for shared fields (Image, Envs, Autoscaling, Termination), 2× align/security-check rule surface, more registry entries to maintain.
-
-### (C) Status quo — force nested workers via parent service
-
-Operators wrap NATS as a `worker:` array entry inside another `infra.container_service`. The parent must still be a Service with a fake HTTPPort. Inverts ownership; worst mental model.
-
-**Pick:** (A). Discriminator is industry-standard, BC-clean, simplest.
-
-## Design
-
-### Section 1 — Config field
-
-Add `kind:` to `infra.container_service` config:
+Move NATS from a top-level resource into a nested `workers:` array under `core-dump-app.config`. The result is a single DO App with `Spec.Services=[server], Spec.Workers=[nats]` — both components live in the same App's internal mesh, so `.internal:4222` DNS resolves correctly.
 
 ```yaml
-- name: my-nats
-  type: infra.container_service
-  config:
-    kind: worker             # NEW; default "service" preserves current behavior
-    provider: do-provider
-    env_vars:
-      NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
-  environments:
-    staging:
-      config:
-        name: my-nats-staging
-        image: "registry.digitalocean.com/my-registry/nats:${IMAGE_SHA}"
-        instance_count: 1
-        region: nyc3
+# BEFORE (two separate Apps)
+modules:
+  - name: core-dump-nats
+    type: infra.container_service
+    config:
+      provider: do-provider
+      env_vars:
+        NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
+    environments:
+      staging:
+        config:
+          name: coredump-nats-staging
+          image: "registry.digitalocean.com/coredump-registry/core-dump-nats:${IMAGE_SHA}"
+          instance_count: 1
+          region: nyc3
+      prod:
+        config:
+          name: coredump-nats-prod
+          ...
+
+  - name: core-dump-app
+    type: infra.container_service
+    config:
+      http_port: 8080
+      provider: do-provider
+      env_vars:
+        ...
+        NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
+    environments:
+      staging:
+        config:
+          name: coredump-staging
+          image: "registry.digitalocean.com/coredump-registry/core-dump-server:${IMAGE_SHA}"
+          ...
+          env_vars:
+            NATS_URL: "nats://coredump-nats-staging.internal:4222"
+            ...
 ```
-
-Allowed values: `service` (default), `worker`. `kind: job` is deferred to a follow-up issue (YAGNI for the immediate NATS unblock).
-
-### Section 2 — buildAppSpec dispatch
-
-```go
-func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec, error) {
-    kind := strFromConfig(cfg, "kind", "service")
-    switch kind {
-    case "service", "":
-        return buildServiceAppSpec(name, cfg, region)  // refactored existing path
-    case "worker":
-        return buildWorkerAppSpec(name, cfg, region)   // new
-    default:
-        return nil, fmt.Errorf("infra.container_service kind %q not supported (allowed: service, worker)", kind)
-    }
-}
-```
-
-`buildServiceAppSpec` is the existing buildAppSpec body, renamed. `buildWorkerAppSpec` is new.
-
-### Section 3 — buildWorkerAppSpec behavior
-
-```go
-func buildWorkerAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec, error) {
-    if err := rejectServiceOnlyFieldsForWorker(cfg); err != nil {
-        return nil, err
-    }
-    imgSpec, err := imageSpecFromConfig(cfg)
-    if err != nil { return nil, fmt.Errorf("worker image config: %w", err) }
-    instanceCount, _ := intFromConfig(cfg, "instance_count", 1)
-
-    w := &godo.AppWorkerSpec{
-        Name:             name,
-        Image:            imgSpec,
-        InstanceCount:    int64(instanceCount),
-        Envs:             envVarsFromConfig(cfg),
-        BuildCommand:     strFromConfig(cfg, "build_command", ""),
-        RunCommand:       strFromConfig(cfg, "run_command", ""),
-        DockerfilePath:   strFromConfig(cfg, "dockerfile_path", ""),
-        SourceDir:        strFromConfig(cfg, "source_dir", ""),
-        InstanceSizeSlug: instanceSizeSlugFromConfig(cfg),
-        Autoscaling:      autoscalingFromConfig(cfg),
-        Termination:      workerTerminationFromConfig(cfg),
-        LogDestinations:  logDestinationsFromConfig(cfg),
-        Alerts:           componentAlertsFromConfig(cfg),
-    }
-
-    spec := &godo.AppSpec{
-        Name:    name,
-        Region:  region,
-        Workers: []*godo.AppWorkerSpec{w},
-        Jobs:    jobsFromConfig(cfg),       // nested jobs still allowed
-        Domains: domainsFromConfig(cfg),    // app-level config
-        Vpc:     vpcFromConfig(cfg),
-        Alerts:  appAlertsFromConfig(cfg),
-        // (no top-level Services; no Ingress, Egress, Maintenance, etc. that are HTTP-only)
-    }
-    return spec, nil
-}
-```
-
-`workerTerminationFromConfig` is new (Workers' termination uses only `grace_period_seconds`, no `drain_seconds`).
-
-### Section 4 — Forbidden-fields rejection
-
-`rejectServiceOnlyFieldsForWorker` returns an error if any of these are set with `kind: worker`:
-
-- `http_port`
-- `routes`
-- `health_check`
-- `liveness_check`
-- `cors`
-- `ingress`
-- `expose` (the public/internal flag is also Service-only)
-- `protocol`
-- `internal_ports`
-- `sidecars`
-- `static_sites` (top-level wouldn't make sense alongside a worker)
-
-Error format: `kind=worker does not support field %q; remove it or change kind to service`. One field at a time (fail fast on the first encountered) keeps the error message focused.
-
-Why ERROR not WARN: silent drops let misconfigurations linger and create deployment surprises later. The user's mental model when setting `kind: worker` is "no HTTP" — any HTTP field is a contradiction.
-
-### Section 5 — align rule
-
-New rule `R-A10`: when `kind: worker` is set, flag any of the forbidden fields with `WARN` (not `--strict`-level FAIL). The build-time error in Section 4 is the strict gate; the align rule helps operators catch issues at plan-time before they reach Apply.
-
-Existing rules (R-A1 through R-A9) are unaffected since they don't make Service-vs-Worker assumptions.
-
-### Section 6 — Health check + Troubleshoot for Workers
-
-Workers don't have HTTP probes; DO supervises via process exit status. The existing `appHealthResult` (v0.8.3) returns Healthy=true when `app.ActiveDeployment.Phase == DeploymentPhase_Active`. For a Worker app, ActiveDeployment is populated normally when the worker process is running — no special handling needed.
-
-Troubleshoot's existing `attachDeployLogs` already enumerates `dep.Workers` (post-v0.8.4) for component names — already correct.
-
-**Verification needed during implementation:** confirm via test that `appHealthResult` returns Healthy=true for an app whose ActiveDeployment has `Phase: Active` and `Spec.Services=nil, Spec.Workers=[w]`. (Existing tests use Service-only fixtures.)
-
-### Section 7 — Validation against core-dump-nats
-
-After PR-G1 ships + plugin v0.8.6 released + core-dump bumps lockfile + adds `kind: worker` to `core-dump-nats` config:
 
 ```yaml
-- name: core-dump-nats
-  type: infra.container_service
-  config:
-    kind: worker
-    provider: do-provider
-    env_vars:
-      NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
-  environments:
-    staging:
-      config:
-        name: coredump-nats-staging
-        image: "..."
-        instance_count: 1
-        region: nyc3
+# AFTER (one App, server + worker components)
+modules:
+  - name: core-dump-app
+    type: infra.container_service
+    config:
+      http_port: 8080
+      provider: do-provider
+      env_vars:
+        ...
+        NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
+    environments:
+      staging:
+        config:
+          name: coredump-staging
+          image: "registry.digitalocean.com/coredump-registry/core-dump-server:${IMAGE_SHA}"
+          ...
+          env_vars:
+            NATS_URL: "nats://coredump-nats-staging.internal:4222"
+            ...
+          workers:
+            - name: coredump-nats-staging
+              image: "registry.digitalocean.com/coredump-registry/core-dump-nats:${IMAGE_SHA}"
+              instance_count: 1
+              env_vars:
+                NATS_AUTH_TOKEN: "${NATS_AUTH_TOKEN}"
+      prod:
+        config:
+          name: coredump-prod
+          ...
+          workers:
+            - name: coredump-nats-prod
+              ...
+  # core-dump-nats top-level module REMOVED
 ```
 
-Expected deploy outcome: NATS deploys as Worker; no HTTP readiness probe; DO marks the deployment Active when the process is running. Server-side `coredump-staging` connects via `nats://coredump-nats-staging.internal:4222` (the existing internal-DNS pattern continues to work for cross-component traffic within an App Platform app, even when one component is a Worker).
+## Why this works (and why the kind-discriminator design didn't)
 
-**Note:** `coredump-nats` and `coredump-staging` are currently separate Apps (each has its own `infra.container_service` resource → its own AppSpec → its own DO App). DO's `<service>.internal:<port>` DNS works **within** an App, not across Apps. If cross-App `.internal` DNS is not supported, the design needs to either (a) merge them into one App via the existing nested-arrays pattern, or (b) use a public route — but this is an existing concern not introduced by the kind discriminator. Worth verifying during validation.
+DO App Platform's component mesh: every component inside a single App can dial sibling components via `<component-name>.internal:<port>`. This DNS is **intra-App only**. Two separate Apps don't share the mesh — there is no cross-App `.internal` DNS.
+
+The existing `core-dump-nats` resource is a separate App. The server's `NATS_URL` of `coredump-nats-staging.internal:4222` was never going to resolve, regardless of how the NATS workload was shaped (Service or Worker). The probe failure was the visible symptom; the connectivity gap was the deeper problem.
+
+By collapsing NATS into the parent App as a Worker component, both problems vanish at once: NATS deploys without HTTPPort/probe, and the server's hardcoded URL resolves correctly via the App's internal mesh.
+
+## Plugin behavior verification (no code change required)
+
+`workersFromConfig` (`internal/drivers/app_platform_buildspec.go:608-625`) and `buildWorkerSpec` (lines 628-668) already construct `AppWorkerSpec` correctly when fed a nested `workers:` array. Fields supported: `name`, `image`, `run_command`, `build_command`, `dockerfile_path`, `source_dir`, `instance_size_slug`, `instance_count`, `env_vars`, `autoscaling`, `size`, `termination` (`grace_period_seconds` only).
+
+NATS doesn't need any of the worker-only escape hatches (no autoscaling needed for a single-instance broker, no termination tuning); the plain config above suffices.
+
+## State-drift impact
+
+The state store currently has two App entries: one for `coredump-staging` (server) and one for `coredump-nats-staging` (NATS). After this PR merges + deploy.yml runs:
+
+1. `wfctl infra plan` will diff config against state. The `core-dump-nats` module is gone from config → plan emits a `delete` action for the standalone `coredump-nats-staging` App.
+2. The `core-dump-app` config now declares `workers: [coredump-nats-staging]` → plan emits an `update` action for `coredump-staging` adding the Worker component.
+3. Apply executes: deletes the standalone NATS App, updates the server App to include the Worker.
+
+The standalone NATS App's deletion will cause a brief NATS unavailability window during the deploy. Acceptable for staging. For prod, this is a coordinated cutover the operator should be aware of (acceptance criterion below).
+
+If state drift surfaces (the standalone NATS App entry is somehow stale or missing from cloud), `wfctl infra apply --refresh --auto-approve` (shipped in v0.20.5) prunes ghosts before applying.
 
 ## Out of scope
 
-- `kind: job` — deferred to follow-up. NATS unblock doesn't need it.
-- `kind: static_site` / `kind: function` — out of scope; static sites are content-deploy not container-service shaped.
-- Restructuring core-dump's two-app architecture into one App with multiple components — separate refactor decision.
-- Migration of existing nested `workers:` array config to top-level `kind: worker` — both patterns continue to be supported.
-- Cross-resource component composition (one App with one Service + N Workers via separate resources) — would require resource-set semantics that don't fit the one-resource-one-Cloud-resource IaC contract.
+- Plugin-side `kind: worker` discriminator on `infra.container_service` — deferred. The nested-workers pattern is sufficient for the common case (worker co-located with a service). A standalone-worker resource type would be useful for future workloads (e.g., background processors that don't need a sibling service), but YAGNI until that need is concrete.
+- Plugin's `Diff()` / `Scale()` / `deriveImageFromAppSpec` / `deriveExposeFromAppSpec` Worker handling — these have latent bugs (per adversarial review findings) but they don't manifest under the nested-workers shape because `Spec.Services` is non-empty (the server provides the Service). Filing as follow-up plugin issue.
+- Multi-component scale: the current `Scale()` only iterates `Spec.Services` and updates Service.InstanceCount. NATS is a Worker so its `instance_count: 1` is set at apply-time only — `wfctl infra scale` won't change NATS replica count. For NATS this is correct (you don't scale a single-broker stage instance); for prod a separate decision applies.
+- Migrating any other resource — only `core-dump-nats` is being collapsed.
 
 ## Cross-repo coordination
 
-- PR-G1 in workflow-plugin-digitalocean: add kind discriminator + worker dispatch + tests + R-A10 align rule + CHANGELOG. Tag plugin v0.8.6.
-- PR-G2 in core-dump: bump lockfile to v0.8.6 + add `kind: worker` to core-dump-nats config.
-- Validate core-dump deploy → NATS as Worker → no HTTP probe failure → server reaches /healthz.
+- One PR in core-dump: infra.yaml restructure. NO plugin or workflow changes.
+- Post-merge: deploy.yml fires, plan diffs (delete NATS App + update server App), apply executes, server reaches /healthz once NATS Worker is running and the server can dial `coredump-nats-staging.internal:4222`.
 
 ## Acceptance criteria
 
-- `wfctl infra plan` against a config with `kind: worker` succeeds and emits a plan whose Apply would create an App with `Spec.Workers=[w], Spec.Services=nil`.
-- `wfctl infra align --strict` flags forbidden fields with `kind: worker` (WARN-level for align; ERROR-level at apply-time).
-- Apply succeeds end-to-end against DO API with no HTTPPort field set in the worker.
-- Existing `kind: service` (default) configs deploy unchanged. Full BC.
-- core-dump-nats deploys as Worker; deployment reaches Active phase without HTTP probe failure.
+- `wfctl infra plan` against the revised infra.yaml emits exactly two staging actions: delete `coredump-nats-staging` (standalone App) + update `coredump-staging` (add Worker).
+- Apply executes both successfully. State store ends with one App entry for `coredump-staging` (containing the NATS Worker as a sub-component) and no entry for the standalone NATS App.
+- The deployed `coredump-staging` App has `Spec.Services=[server-service-named-coredump-staging], Spec.Workers=[worker-named-coredump-nats-staging]` (verifiable via `doctl apps spec get` post-deploy or via the new wfctl drift output).
+- The server starts cleanly and connects to NATS via `nats://coredump-nats-staging.internal:4222`.
+- `/healthz` on `coredump-staging` returns 200.
+- No HTTP readiness probe configured for the NATS Worker (DO supervises Workers via process exit status only).
 
 ## Assumptions
 
-1. DO App Platform `Worker` components do NOT require any probe spec; DO supervises via process exit status. (Verified against `godo.AppWorkerSpec` struct — no HealthCheck or LivenessCheck field exists.)
-2. The existing `workersFromConfig` + `buildWorkerSpec` (lines 608-668 of `app_platform_buildspec.go`) helpers don't have hidden Service-context dependencies. Reusing them as a base for `buildWorkerAppSpec`'s field mapping. (Verified by reading the source — they take a `map[string]any` and return a `*godo.AppWorkerSpec` with no other side effects.)
-3. `appHealthResult` (v0.8.3) handles Worker-only apps correctly. ActiveDeployment.Phase logic doesn't key on Service component existence. **Needs implementation-time test to confirm.**
-4. `wfctl infra align` rules don't make Service-vs-Worker assumptions. Adding R-A10 doesn't break existing rules. (Verified via grep — existing rules look at presence/absence of fields, not at component shape.)
-5. DO `<component>.internal:<port>` DNS works for Worker components within an App. (Standard App Platform behavior; if not, separate fix needed for core-dump's two-app split — not in scope for this design.)
-6. Workers don't use Sidecars (DO model: each component is independent; sidecars are a Service-spec-only sub-array). Confirmed via godo struct.
+1. DO App Platform's intra-App `<component>.internal:<port>` DNS resolves between Service and Worker components in the same App. (Standard App Platform behavior; documented in DO's app-spec reference. If it doesn't work, separate fallback to public route + DNS would be needed.)
+2. NATS, run as a Worker with `instance_count: 1`, will keep its process alive indefinitely. DO's Worker supervision restarts on exit; NATS is a stable long-running process in production. (Verified by NATS's documented operational profile.)
+3. The brief NATS-unavailability window during the App-delete + App-update phase is acceptable for staging (no users). For prod cutover, operators schedule the deploy during a maintenance window.
+4. The `core-dump-nats-staging` standalone App's deletion via wfctl Apply doesn't leave dangling DO state (e.g., a deployment in flight, a managed cert tied only to it). If found, manual cleanup via DO console pre-deploy.
+5. The plugin's existing `workersFromConfig` correctly emits `Spec.Workers` even when the parent service has env_vars + sidecars + other Service-only fields set. (Verified by reading the source — `Workers: workersFromConfig(cfg)` is set independently of Services on the AppSpec.)
 
 ## Rollback
 
-Affects runtime (plugin loading paths, build configuration). Rollback procedure:
+Affects runtime (App Platform deployment shape change). Rollback procedure:
 
-1. Revert core-dump's `kind: worker` setting on `core-dump-nats` config (returns to default `kind: service` behavior).
-2. Bump core-dump's `.wfctl-lock.yaml` workflow-plugin-digitalocean entry from `v0.8.6` back to `v0.8.5`.
-3. Re-deploy. Pre-PR-G1 behavior restored — NATS deploys as Service with HTTPPort 8080 (and continues to fail readiness probe, but is back to the known-failure mode the user has visibility into via Troubleshoot).
-4. (Optional) Open follow-up issue on workflow-plugin-digitalocean to investigate the rollback cause.
+1. Revert the core-dump infra.yaml change (re-add `core-dump-nats` as a top-level module, remove the nested `workers:` from `core-dump-app`).
+2. Re-deploy. Plan will emit: create `coredump-nats-staging` (standalone App, Service-shape, will fail probe again) + update `coredump-staging` (remove Worker).
+3. NATS goes back to deploying as a separate App with the readiness-probe failure.
+4. Investigate why this fix didn't work; the rollback destination is the known-failure mode.
 
-The plugin code change itself is BC at v0.8.6 — existing `kind: service` configs unaffected. So rollback only requires reverting the core-dump-side change unless a regression in `kind: service` behavior surfaces (unlikely given the BC discipline).
+The change is BC at the plugin level (no plugin code changed). Rollback is purely a core-dump-side revert.
+
+## Follow-ups (filed separately, not blocking)
+
+- **Plugin issue**: Add `kind: worker` discriminator on `infra.container_service` for future standalone-Worker use cases. Per adversarial review's Important findings, also fix `Diff()` to detect kind changes, `Scale()` to iterate Workers, `deriveImageFromAppSpec` to fall back to Workers[0].Image, and `deriveExposeFromAppSpec` to handle Worker apps. Bundle these together as a v0.9.0 minor release when the use case becomes concrete.
+- **Plugin issue**: Document the nested-workers pattern explicitly in plugin README — operators need to know that "worker co-located with service" is the canonical pattern, not "worker as separate container_service."
 
 ## System Impact
 
-- **State store:** No change. Worker apps stored same as Service apps under the same resource type entry.
-- **Plugin contract:** Backwards-compatible. Default `kind: service` preserves all existing behavior. New `kind: worker` is opt-in.
-- **CLI:** No new commands. Existing `wfctl infra plan/apply/drift/refresh` work unchanged.
-- **Validation rules:** New R-A10 (additive, WARN-level for `kind: worker` + Service-only fields).
-- **Production safety:** New build-time errors prevent silent misconfigurations. Existing dry-run/auto-approve semantics unchanged.
-- **Other System Impact Matrix categories** (auth, anti-cheat, malware, sandbox, network, filesystem, process/OS, social, NPC, factions, economy, IoT, media, legal, forensics, VERA, achievements, client desktop, terminal, world history, content, telemetry): None — purely a wfctl/plugin/IaC config-shape change.
+- **State store**: One App entry deleted (`coredump-nats-staging`), one App entry updated (`coredump-staging` gains Worker sub-component). Net state shrinkage of one resource.
+- **Plugin contract**: No change — the existing `workersFromConfig` path is exercised. Nothing new to test on the plugin side.
+- **CLI**: No new commands. Existing `wfctl infra plan/apply/drift/refresh` work unchanged.
+- **Production safety**: NATS unavailability window during the App-delete + App-update phase. Mitigated for staging (no users). For prod cutover, operators schedule a maintenance window.
+- **All other System Impact Matrix categories** (auth, anti-cheat, malware, sandbox, network, filesystem, process/OS, social, NPC, factions, economy, IoT, media, legal, forensics, VERA, achievements, client desktop, terminal, world history, content, telemetry): None — purely an infra config restructure.
