@@ -3,12 +3,15 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -456,7 +459,10 @@ func (d *AppPlatformDriver) attachDeployLogs(ctx context.Context, appID string, 
 		}
 		tail, err := fetchLogTail(ctx, logs.HistoricURLs, troubleshootLogTailLines)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "troubleshoot: log HTTP fetch app=%s dep=%s component=%q: %v\n", appID, dep.ID, comp, err)
+			// Don't print err verbatim — net/http error strings embed the
+			// presigned URL, leaking AWS-style signed credentials to the
+			// operator's terminal log. Surface only the redacted shape.
+			fmt.Fprintf(os.Stderr, "troubleshoot: log HTTP fetch app=%s dep=%s component=%q: %s (presigned URL not logged)\n", appID, dep.ID, comp, redactURLError(err))
 			continue
 		}
 		if tail == "" {
@@ -466,8 +472,28 @@ func (d *AppPlatformDriver) attachDeployLogs(ctx context.Context, appID string, 
 		if label == "" {
 			label = "<all>"
 		}
-		diag.Detail += fmt.Sprintf("\n\n---\nDeploy logs — component %q (last %d lines):\n%s\n---", label, troubleshootLogTailLines, tail)
+		header := "Deploy logs"
+		if logType == godo.AppLogTypeBuild {
+			header = "Build logs"
+		}
+		diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q (last %d lines):\n%s\n---", header, label, troubleshootLogTailLines, tail)
 	}
+}
+
+// redactURLError returns an error string with any embedded URL replaced by
+// "<redacted-url>". DO's GetLogs returns presigned HistoricURLs that embed
+// signed credentials; net/http errors typically include the full request URL,
+// so verbatim logging would leak short-lived creds to the operator's log.
+func redactURLError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// url.Error.Error() = "Op URL: Err". Hide the URL.
+		return fmt.Sprintf("%s <redacted-url>: %v", ue.Op, ue.Err)
+	}
+	return err.Error()
 }
 
 // chooseLogType returns AppLogTypeBuild when the deployment's Progress
@@ -528,7 +554,12 @@ func deploymentComponents(dep *godo.Deployment) []string {
 // fetchLogTail fetches log content from the most recent historic URL (index 0)
 // and returns the last tailLines lines. HistoricURLs is ordered newest-first
 // per the DO API. A 10 MB cap prevents pathological responses from exhausting
-// memory.
+// memory. The local 30s client timeout is a defense in depth: callers
+// typically pass a ctx with a deadline, but if a future caller passes
+// context.Background, http.DefaultClient (no timeout) would let the fetch
+// hang indefinitely on a slow presigned URL.
+var fetchLogClient = &http.Client{Timeout: 30 * time.Second}
+
 func fetchLogTail(ctx context.Context, urls []string, tailLines int) (string, error) {
 	if len(urls) == 0 {
 		return "", nil
@@ -537,7 +568,7 @@ func fetchLogTail(ctx context.Context, urls []string, tailLines int) (string, er
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchLogClient.Do(req)
 	if err != nil {
 		return "", err
 	}
