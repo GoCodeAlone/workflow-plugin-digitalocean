@@ -224,6 +224,17 @@ type upsertSupporter interface {
 	SupportsUpsert() bool
 }
 
+// deferredUpdater is an optional interface for ResourceDrivers that accumulate
+// resource-level updates that cannot be applied until all plan creates complete.
+// The canonical case is DatabaseDriver deferring type=app trusted_sources entries
+// that reference apps created later in the same plan. Apply calls
+// FlushDeferredUpdates once after the main action loop; errors are appended to
+// ApplyResult.Errors so the failure is visible to the operator.
+type deferredUpdater interface {
+	HasDeferredUpdates() bool
+	FlushDeferredUpdates(ctx context.Context) error
+}
+
 // Apply executes the plan.
 func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
 	result := &interfaces.ApplyResult{PlanID: plan.ID}
@@ -326,6 +337,35 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 			})
 		}
 	}
+
+	// Second pass: flush deferred updates accumulated by drivers during the main
+	// action loop. These arise when a resource's config (e.g. DB trusted_sources
+	// with type=app) references another resource provisioned later in the same
+	// plan. By this point all plan creates have completed and the referenced
+	// resources exist. Each driver type is flushed at most once.
+	seen := make(map[string]struct{}, len(plan.Actions))
+	for _, action := range plan.Actions {
+		if _, done := seen[action.Resource.Type]; done {
+			continue
+		}
+		seen[action.Resource.Type] = struct{}{}
+		d, dErr := p.ResourceDriver(action.Resource.Type)
+		if dErr != nil {
+			continue
+		}
+		du, ok := d.(deferredUpdater)
+		if !ok || !du.HasDeferredUpdates() {
+			continue
+		}
+		if flushErr := du.FlushDeferredUpdates(ctx); flushErr != nil {
+			result.Errors = append(result.Errors, interfaces.ActionError{
+				Resource: action.Resource.Name,
+				Action:   "deferred_update",
+				Error:    flushErr.Error(),
+			})
+		}
+	}
+
 	return result, nil
 }
 

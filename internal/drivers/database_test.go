@@ -540,14 +540,20 @@ func TestDatabaseDriver_Update_WithTrustedSources_AppNameResolved(t *testing.T) 
 	}
 }
 
-func TestDatabaseDriver_Create_AppNameNotFound_ReturnsError(t *testing.T) {
-	// When the app name cannot be found in the Apps list, Create must return an
-	// error that wraps ErrResourceNotFound and names the missing app.
+func TestDatabaseDriver_Create_AppNameNotFound_Defers(t *testing.T) {
+	// When the app name cannot be found in the Apps list at create time, Create
+	// must SUCCEED (no error), create the DB without the app-based firewall rule,
+	// and queue a deferred update for the post-apply pass. This replaces the
+	// old fail-on-not-found behaviour: the root cause is apply-ordering (DB is
+	// created before the app in the same plan); erroring here prevents the DB
+	// from being created at all, which is worse.
+	//
+	// See drivers.ErrAppNotFound and DatabaseDriver.FlushDeferredUpdates.
 	dbMock := &mockDatabaseClient{db: testDatabase()}
 	appMock := &mockAppClient{listApps: []*godo.App{}} // empty list — name not found
 	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
 
-	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
 		Name: "my-db",
 		Config: map[string]any{
 			"engine": "pg",
@@ -556,14 +562,21 @@ func TestDatabaseDriver_Create_AppNameNotFound_ReturnsError(t *testing.T) {
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error when app name not found, got nil")
+	if err != nil {
+		t.Fatalf("Create should succeed (deferred) when app name not found; got: %v", err)
 	}
-	if !errors.Is(err, drivers.ErrResourceNotFound) {
-		t.Errorf("expected error to wrap drivers.ErrResourceNotFound; got: %v", err)
+	if out == nil || out.ProviderID != "db-123" {
+		t.Fatalf("Create should return db output; got %+v", out)
 	}
-	if !strings.Contains(err.Error(), "nonexistent-app") {
-		t.Errorf("expected error to mention missing app name %q; got: %v", "nonexistent-app", err)
+	// DB should be created without any app-based rules.
+	if dbMock.lastCreateReq == nil {
+		t.Fatal("no create request captured")
+	}
+	if len(dbMock.lastCreateReq.Rules) != 0 {
+		t.Errorf("expected 0 rules in create request (app rule deferred); got %d", len(dbMock.lastCreateReq.Rules))
+	}
+	if !d.HasDeferredUpdates() {
+		t.Error("HasDeferredUpdates() should be true after deferred create")
 	}
 }
 

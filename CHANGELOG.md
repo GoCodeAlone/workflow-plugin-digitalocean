@@ -4,6 +4,35 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Deferred `trusted_sources` update for `infra.database`** — When a
+  `trusted_sources` entry of `type: app` references an app that does not yet
+  exist (first-deploy ordering), `DatabaseDriver.Create` and `.Update` no
+  longer fail with a resource-not-found error. Instead, the driver:
+
+  1. Creates/updates the DB with the resolvable subset of rules (e.g. `ip_addr`)
+     applied immediately.
+  2. Queues a deferred firewall update for the post-apply second pass.
+  3. After all plan `create` actions complete, `DOProvider.Apply` calls
+     `FlushDeferredUpdates` on any driver with pending updates, which
+     re-resolves all `type=app` names (apps now exist) and calls
+     `UpdateFirewallRules` with the full intended rule set.
+
+  Failure during `FlushDeferredUpdates` (e.g. `UpdateFirewallRules` API error)
+  is **fatal** — the error surfaces in `ApplyResult.Errors` so the operator
+  knows the intended security posture was not fully applied. Failed entries are
+  **retained in the pending queue**, so a subsequent `wfctl apply` automatically
+  re-attempts the flush without requiring operator intervention (e.g. touching a
+  config field to force a Diff update).
+
+  Only "app not yet created" (name absent from `Apps.List`) triggers deferral.
+  API-level failures (rate-limit, transient, auth errors) are propagated
+  immediately and never silently deferred.
+
+  Fixes GoCodeAlone/core-dump#154 (R4 first-deploy ordering finding).
+  See `docs/plans/2026-05-02-staging-deploy-blockers-design.md` (Blocker 2).
+
 ### Fixed
 
 - **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
