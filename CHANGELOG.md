@@ -4,6 +4,20 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
+  plan actions to `d.Delete(ctx, ref)` using `action.Current` for the
+  `ResourceRef` (which carries the `ProviderID`; `action.Resource` is empty for
+  deletes). Previously, `"delete"` fell through to the `default` case and
+  returned `unknown action "delete"`, blocking any plan that removed a resource
+  from config. Reproducer: BMW deploy failed with `delete/bmw-staging-firewall:
+  unknown action "delete"` after the firewall was removed from infra.yaml.
+- **Apply nil-output guard** — After a successful `"delete"` action, `out`
+  is `nil` (deleted resources have no post-apply state). Added a nil check
+  before `result.Resources = append(result.Resources, *out)` to prevent a
+  nil-pointer panic on mixed delete+create plans.
+
 ## [v0.8.0] - 2026-04-28
 
 P-2 staging IaC alignment. Three independent canonical-config additions

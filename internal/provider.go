@@ -290,6 +290,21 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 				break
 			}
 			out, err = d.Create(ctx, action.Resource)
+		case "delete":
+			// Delete uses Current (not Resource) because the desired state is
+			// "absent" — Resource is empty for delete actions. Current carries
+			// the ProviderID needed by the cloud API.
+			if action.Current == nil {
+				err = fmt.Errorf("delete action for %q missing current resource state", action.Resource.Name)
+				break
+			}
+			ref := interfaces.ResourceRef{
+				Name:       action.Current.Name,
+				Type:       action.Current.Type,
+				ProviderID: action.Current.ProviderID,
+			}
+			err = d.Delete(ctx, ref)
+			// out remains nil — deleted resources have no post-apply output.
 		default:
 			err = fmt.Errorf("unknown action %q", action.Action)
 		}
@@ -299,7 +314,9 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 			})
 			continue
 		}
-		result.Resources = append(result.Resources, *out)
+		if out != nil {
+			result.Resources = append(result.Resources, *out)
+		}
 	}
 	return result, nil
 }
