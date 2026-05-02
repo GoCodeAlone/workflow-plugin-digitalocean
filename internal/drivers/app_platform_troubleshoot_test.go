@@ -44,6 +44,9 @@ func (s *stubAppClient) ListDeployments(_ context.Context, _ string, _ *godo.Lis
 func (s *stubAppClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, errors.New("not implemented in stub")
 }
+func (s *stubAppClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 
 // ── Troubleshoot tests ─────────────────────────────────────────────────────
 

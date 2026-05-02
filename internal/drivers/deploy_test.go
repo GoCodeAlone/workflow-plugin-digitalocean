@@ -101,6 +101,9 @@ func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Respon
 	delete(m.apps, appID)
 	return nil, nil
 }
+func (m *deployMockClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 
 // seedApp inserts a pre-existing app into the mock's store.
 func seedApp(m *deployMockClient, id, name, image string) *godo.App {

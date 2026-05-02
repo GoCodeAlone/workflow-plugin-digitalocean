@@ -113,6 +113,9 @@ func (f *fakeAppsClient) Delete(_ context.Context, id string) (*godo.Response, e
 	delete(f.getByID, id)
 	return fakeResp(http.StatusNoContent), nil
 }
+func (f *fakeAppsClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 
 // fakeResp creates a minimal *godo.Response with the given status.
 func fakeResp(status int) *godo.Response {

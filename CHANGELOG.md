@@ -6,7 +6,49 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
-- **DetectDrift**: real implementation classifying resources as `Ghost` (cloud
+- **Troubleshoot fetches DO deploy/build logs** (PR-E2) — `AppPlatformDriver.Troubleshoot`
+  now calls `godo.AppsService.GetLogs` for each component in any deployment
+  whose phase is `Error`, `Canceled`, or `Superseded`. The DO API returns
+  presigned historic URLs; the plugin HTTP-fetches the most recent URL and
+  appends the last 200 lines per component to `Diagnostic.Detail` as a
+  delimited block:
+
+  ```
+  ---
+  Deploy logs — component "web" (last 200 lines):
+  <log content>
+  ---
+  ```
+
+  For build-phase failures (a `SummaryStep` named `"build"` with status
+  `Error`), `AppLogTypeBuild` is requested; all other failures use
+  `AppLogTypeDeploy`. Multi-component apps produce one block per component
+  (Services, Jobs, Workers, Functions enumerated from `dep.Spec`); if `Spec`
+  is nil or all arrays are empty, a single aggregate fetch is performed
+  (component `""` = DO API aggregate).
+
+  Graceful degradation: `GetLogs` error or HTTP-fetch non-200 are logged to
+  stderr; the `Diagnostic` is still produced without the log block. A 10 MB
+  cap prevents pathological log responses.
+
+- **`appHealthResult` ListDeployments fallback** (PR-E2) — When all three
+  deployment slots (`Active`, `InProgress`, `Pending`) are nil, `HealthCheck`
+  now falls back to `ListDeployments(Page:1, PerPage:1)` and surfaces the
+  latest deployment's short ID + phase: `"latest deployment f8b6200c: ERROR"`.
+  This catches the fast-fail case where DO removes a failed deployment from
+  all three slots before the operator's poll loop catches up (reproducer: build
+  error in ≤1 second). If `ListDeployments` errors or returns empty, falls
+  through to the previous `"no deployment found"` message.
+
+- **`appHealthResult` phase-transition handling** (PR #49) — When
+  `ActiveDeployment.Phase` is non-Active (transitioning toward Active or
+  failed), the function now returns the appropriate in-progress/failed message
+  rather than falling through to `"no deployment found"`. Fixes the polling
+  loop timeout described in GoCodeAlone/workflow-plugin-digitalocean#48.
+
+### Fixed
+
+- **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
   reports 404), `InSync` (cloud Read succeeds), or `Unknown` (driver lookup
   fails). Required for `wfctl infra apply --refresh` ghost-prune (workflow
   v0.20.5+).
