@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -16,6 +17,7 @@ import (
 	externalPb "github.com/GoCodeAlone/workflow/plugin/external/proto"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 	"google.golang.org/protobuf/types/known/anypb"
+	"gopkg.in/yaml.v3"
 )
 
 // compile-time interface checks
@@ -55,8 +57,8 @@ func TestPlugin_ContractRegistry(t *testing.T) {
 	if d.Kind != externalPb.ContractKind_CONTRACT_KIND_MODULE {
 		t.Errorf("Kind = %v, want CONTRACT_KIND_MODULE", d.Kind)
 	}
-	if d.ModuleType != "iac.provider" {
-		t.Errorf("ModuleType = %q, want %q", d.ModuleType, "iac.provider")
+	if d.ModuleType != iacProviderModuleType {
+		t.Errorf("ModuleType = %q, want %q", d.ModuleType, iacProviderModuleType)
 	}
 	if d.Mode != externalPb.ContractMode_CONTRACT_MODE_STRICT_PROTO {
 		t.Errorf("Mode = %v, want CONTRACT_MODE_STRICT_PROTO", d.Mode)
@@ -156,16 +158,19 @@ func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
 		t.Fatalf("gRPC contract registry length = %d, want 1", len(registry.GetContracts()))
 	}
 	contract := registry.Contracts[0]
-	if contract.ModuleType != "iac.provider" {
-		t.Fatalf("gRPC contract module type = %q, want iac.provider", contract.ModuleType)
+	if contract.ModuleType != iacProviderModuleType {
+		t.Fatalf("gRPC contract module type = %q, want %s", contract.ModuleType, iacProviderModuleType)
 	}
 	if contract.ConfigMessage != string((&dopb.IacProviderConfig{}).ProtoReflect().Descriptor().FullName()) {
 		t.Fatalf("gRPC contract config = %q", contract.ConfigMessage)
 	}
 
-	factory := adapter.ModuleFactories()["iac.provider"]
+	factory := adapter.ModuleFactories()[iacProviderModuleType]
 	if factory == nil {
-		t.Fatal("missing iac.provider module factory from gRPC adapter")
+		t.Fatalf("missing %s module factory from gRPC adapter", iacProviderModuleType)
+	}
+	if _, err := NewDOPlugin().(*doPlugin).CreateModule(iacProviderModuleType, "legacy-nil", nil); err == nil {
+		t.Fatal("legacy nil-config module creation unexpectedly succeeded; gRPC success would no longer prove typed_config was used")
 	}
 	module := factory("strict-do", map[string]any{
 		"token":             "fake-token-for-test",
@@ -175,6 +180,87 @@ func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
 	})
 	if err := wfexternal.AsModuleError(module); err != nil {
 		t.Fatalf("strict gRPC module creation failed: %v", err)
+	}
+}
+
+func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	var manifest struct {
+		Name      string `json:"name"`
+		Version   string `json:"version"`
+		Downloads []struct {
+			OS   string `json:"os"`
+			Arch string `json:"arch"`
+			URL  string `json:"url"`
+		} `json:"downloads"`
+	}
+	manifestData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+
+	var releaseCfg struct {
+		Builds []struct {
+			ID     string   `yaml:"id"`
+			Goos   []string `yaml:"goos"`
+			Goarch []string `yaml:"goarch"`
+		} `yaml:"builds"`
+		Archives []struct {
+			ID           string   `yaml:"id"`
+			Builds       []string `yaml:"builds"`
+			NameTemplate string   `yaml:"name_template"`
+		} `yaml:"archives"`
+	}
+	releaseData, err := os.ReadFile(filepath.Join(repoRoot, ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	if err := yaml.Unmarshal(releaseData, &releaseCfg); err != nil {
+		t.Fatalf("parse .goreleaser.yaml: %v", err)
+	}
+	if len(releaseCfg.Builds) != 1 {
+		t.Fatalf("expected 1 GoReleaser build, got %d", len(releaseCfg.Builds))
+	}
+	if len(releaseCfg.Archives) != 1 {
+		t.Fatalf("expected 1 GoReleaser archive, got %d", len(releaseCfg.Archives))
+	}
+	build := releaseCfg.Builds[0]
+	archive := releaseCfg.Archives[0]
+	if archive.NameTemplate != "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}" {
+		t.Fatalf("unsupported archive name_template %q; update download manifest generation/test", archive.NameTemplate)
+	}
+	if len(archive.Builds) != 1 || archive.Builds[0] != build.ID {
+		t.Fatalf("archive builds = %v, want [%s]", archive.Builds, build.ID)
+	}
+
+	want := make(map[string]string)
+	for _, goos := range build.Goos {
+		for _, goarch := range build.Goarch {
+			key := goos + "/" + goarch
+			want[key] = fmt.Sprintf(
+				"https://github.com/GoCodeAlone/%s/releases/download/v%s/%s-%s-%s.tar.gz",
+				manifest.Name,
+				manifest.Version,
+				manifest.Name,
+				goos,
+				goarch,
+			)
+		}
+	}
+	got := make(map[string]string, len(manifest.Downloads))
+	for _, dl := range manifest.Downloads {
+		got[dl.OS+"/"+dl.Arch] = dl.URL
+	}
+	if len(got) != len(want) {
+		t.Fatalf("download count = %d, want %d (%v)", len(got), len(want), want)
+	}
+	for key, wantURL := range want {
+		if gotURL := got[key]; gotURL != wantURL {
+			t.Errorf("download %s = %q, want %q", key, gotURL, wantURL)
+		}
 	}
 }
 
@@ -191,8 +277,8 @@ func testRepoRoot(t *testing.T) string {
 func TestPlugin_TypedModuleTypes(t *testing.T) {
 	p := NewDOPlugin().(*doPlugin)
 	types := p.TypedModuleTypes()
-	if len(types) != 1 || types[0] != "iac.provider" {
-		t.Errorf("TypedModuleTypes = %v, want [\"iac.provider\"]", types)
+	if len(types) != 1 || types[0] != iacProviderModuleType {
+		t.Errorf("TypedModuleTypes = %v, want [%q]", types, iacProviderModuleType)
 	}
 }
 
@@ -201,7 +287,7 @@ func TestPlugin_TypedModuleTypes(t *testing.T) {
 // the gRPC server falls back to the legacy ModuleProvider path.
 func TestPlugin_CreateTypedModule_NilConfigFallsBack(t *testing.T) {
 	p := NewDOPlugin().(*doPlugin)
-	_, err := p.CreateTypedModule("iac.provider", "mymodule", nil)
+	_, err := p.CreateTypedModule(iacProviderModuleType, "mymodule", nil)
 	if err == nil {
 		t.Fatal("expected ErrTypedContractNotHandled, got nil")
 	}
@@ -237,7 +323,7 @@ func TestPlugin_CreateTypedModule_TypeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anypb.New: %v", err)
 	}
-	_, err = p.CreateTypedModule("iac.provider", "m", packed)
+	_, err = p.CreateTypedModule(iacProviderModuleType, "m", packed)
 	if err == nil {
 		t.Fatal("expected type mismatch error, got nil")
 	}
@@ -251,7 +337,7 @@ func TestPlugin_CreateTypedModule_MissingToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anypb.New: %v", err)
 	}
-	_, err = p.CreateTypedModule("iac.provider", "m", packed)
+	_, err = p.CreateTypedModule(iacProviderModuleType, "m", packed)
 	if err == nil {
 		t.Fatal("expected error for missing token, got nil")
 	}
@@ -265,7 +351,7 @@ func TestPlugin_CreateTypedModule_ValidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anypb.New: %v", err)
 	}
-	inst, err := p.CreateTypedModule("iac.provider", "m", packed)
+	inst, err := p.CreateTypedModule(iacProviderModuleType, "m", packed)
 	if err != nil {
 		t.Fatalf("CreateTypedModule returned error: %v", err)
 	}

@@ -17,6 +17,8 @@ import (
 // "-X github.com/GoCodeAlone/workflow-plugin-digitalocean/internal.Version=X.Y.Z"
 var Version = "dev"
 
+const iacProviderModuleType = "iac.provider"
+
 // doPlugin implements sdk.PluginProvider, sdk.ModuleProvider, sdk.TypedModuleProvider,
 // and sdk.ContractProvider.
 type doPlugin struct{}
@@ -48,7 +50,7 @@ func (p *doPlugin) Manifest() sdk.PluginManifest {
 
 // ModuleTypes returns the module types this plugin exposes.
 func (p *doPlugin) ModuleTypes() []string {
-	return []string{"iac.provider"}
+	return []string{iacProviderModuleType}
 }
 
 // CreateModule creates and initialises a module instance of the given type.
@@ -56,8 +58,8 @@ func (p *doPlugin) ModuleTypes() []string {
 // This legacy map-based path is preserved for backward compatibility with hosts
 // that do not send typed_config in CreateModuleRequest.
 func (p *doPlugin) CreateModule(typeName, _ string, config map[string]any) (sdk.ModuleInstance, error) {
-	if typeName != "iac.provider" {
-		return nil, fmt.Errorf("digitalocean plugin: unknown module type %q (supported: iac.provider)", typeName)
+	if typeName != iacProviderModuleType {
+		return nil, fmt.Errorf("digitalocean plugin: unknown module type %q (supported: %s)", typeName, iacProviderModuleType)
 	}
 	provider := NewDOProvider()
 	if err := provider.Initialize(context.Background(), config); err != nil {
@@ -71,14 +73,14 @@ func (p *doPlugin) CreateModule(typeName, _ string, config map[string]any) (sdk.
 // TypedModuleTypes returns the module types this plugin provides via strict
 // proto contracts.
 func (p *doPlugin) TypedModuleTypes() []string {
-	return []string{"iac.provider"}
+	return []string{iacProviderModuleType}
 }
 
 // CreateTypedModule creates a module instance from a proto-typed config payload.
 // It returns sdk.ErrTypedContractNotHandled when config is nil so that the host
 // can fall back to the legacy CreateModule path for backward compatibility.
 func (p *doPlugin) CreateTypedModule(typeName, _ string, config *anypb.Any) (sdk.ModuleInstance, error) {
-	if typeName != "iac.provider" {
+	if typeName != iacProviderModuleType {
 		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
 	}
 	// nil typed_config means the host is using the legacy struct path; signal
@@ -135,7 +137,7 @@ func (p *doPlugin) ContractRegistry() *externalPb.ContractRegistry {
 		Contracts: []*externalPb.ContractDescriptor{
 			{
 				Kind:          externalPb.ContractKind_CONTRACT_KIND_MODULE,
-				ModuleType:    "iac.provider",
+				ModuleType:    iacProviderModuleType,
 				Mode:          externalPb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
 				ConfigMessage: string(prototype.ProtoReflect().Descriptor().FullName()),
 			},
