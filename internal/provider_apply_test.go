@@ -180,3 +180,45 @@ func TestDOProvider_Apply_DeleteAndCreate_NilOutGuard(t *testing.T) {
 		t.Errorf("Resources[0].Name = %q, want new-firewall", result.Resources[0].Name)
 	}
 }
+
+// TestDOProvider_Apply_DeleteAction_ResourceTypePopulated locks in the invariant
+// that for delete actions, action.Resource.Type IS populated (required for driver
+// lookup) while action.Resource.Config is nil (desired state is "absent").
+// This protects against a future regression where wfctl omits Resource.Type on
+// delete actions, causing the driver lookup to fail with "unsupported resource type".
+func TestDOProvider_Apply_DeleteAction_ResourceTypePopulated(t *testing.T) {
+	fake := &deleteFakeDriver{}
+	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.firewall": fake}}
+
+	plan := &interfaces.IaCPlan{
+		ID: "plan-delete-type-check",
+		Actions: []interfaces.PlanAction{{
+			Action: "delete",
+			Resource: interfaces.ResourceSpec{
+				Name:   "bmw-staging-firewall",
+				Type:   "infra.firewall",
+				Config: nil, // explicitly nil — desired state is "absent"
+			},
+			Current: &interfaces.ResourceState{
+				Name:       "bmw-staging-firewall",
+				Type:       "infra.firewall",
+				ProviderID: "do-firewall-abc123",
+			},
+		}},
+	}
+
+	result, err := p.Apply(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply errors for delete with nil Config: %v", result.Errors)
+	}
+	if fake.deleteCalls != 1 {
+		t.Fatalf("Delete called %d times, want 1", fake.deleteCalls)
+	}
+	// The ref used for Delete must be built from Current, not Resource.
+	if fake.deletedRef.ProviderID != "do-firewall-abc123" {
+		t.Errorf("Delete ref.ProviderID = %q, want do-firewall-abc123", fake.deletedRef.ProviderID)
+	}
+}

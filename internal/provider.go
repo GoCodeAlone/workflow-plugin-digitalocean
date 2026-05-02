@@ -291,9 +291,9 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 			}
 			out, err = d.Create(ctx, action.Resource)
 		case "delete":
-			// Delete uses Current (not Resource) because the desired state is
-			// "absent" — Resource is empty for delete actions. Current carries
-			// the ProviderID needed by the cloud API.
+			// Delete uses Current for the ref (ProviderID). Resource.Config is
+			// empty for deletes — the desired state is "absent" — but
+			// Resource.Type and Name are still set (required for driver lookup above).
 			if action.Current == nil {
 				err = fmt.Errorf("delete action for %q missing current resource state", action.Resource.Name)
 				break
@@ -316,6 +316,14 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 		}
 		if out != nil {
 			result.Resources = append(result.Resources, *out)
+		} else if action.Action != "delete" {
+			// A nil output without an error from create/update/replace is a driver
+			// bug — surface it explicitly so callers aren't silently missing state
+			// entries. "delete" legitimately returns nil out, so it's excluded.
+			result.Errors = append(result.Errors, interfaces.ActionError{
+				Resource: action.Resource.Name, Action: action.Action,
+				Error: "driver returned nil output without error",
+			})
 		}
 	}
 	return result, nil
