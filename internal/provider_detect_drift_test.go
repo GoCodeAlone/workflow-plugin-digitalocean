@@ -193,6 +193,87 @@ func TestDetectDrift_UnknownTypeReturnsUnknown(t *testing.T) {
 	}
 }
 
+// TestDetectDrift_DiffErrorReturnsUnknown verifies that when Read succeeds but
+// Diff returns an error, the result is classified as DriftClassUnknown with
+// Drifted=true and the error message surfaced in Fields. This ensures broken
+// or incomplete driver Diff implementations are visible to the operator rather
+// than silently masquerading as InSync.
+func TestDetectDrift_DiffErrorReturnsUnknown(t *testing.T) {
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "test-vpc", Type: "infra.vpc", Status: "active"},
+		diffErr:    errors.New("diff failed"),
+	})
+	refs := []interfaces.ResourceRef{{Name: "test-vpc", Type: "infra.vpc"}}
+
+	results, err := p.DetectDrift(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if !r.Drifted {
+		t.Errorf("expected Drifted=true for diff-error path")
+	}
+	if r.Class != interfaces.DriftClassUnknown {
+		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassUnknown, r.Class)
+	}
+	if len(r.Fields) == 0 {
+		t.Errorf("expected Fields to contain the diff error, got empty")
+	}
+	if r.Fields[0] == "" || !containsSubstring(r.Fields[0], "diff failed") {
+		t.Errorf("expected Fields[0] to contain %q, got %q", "diff failed", r.Fields[0])
+	}
+}
+
+// TestDetectDrift_TransientErrorDiscardsPriorResults verifies that when a
+// transient (non-404) Read error occurs mid-loop, DetectDrift returns nil results
+// and the propagated error. Callers must not act on a partial drift picture.
+func TestDetectDrift_TransientErrorDiscardsPriorResults(t *testing.T) {
+	transient := errors.New("DO API rate limit exceeded")
+	// First ref: Read OK, Diff reports no drift → would append an InSync result.
+	// Second ref: Read returns transient error → must discard the first result.
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.vpc": &fakeDriverForDrift{
+				readOutput: &interfaces.ResourceOutput{Name: "ok-vpc", Type: "infra.vpc", Status: "active"},
+				diffResult: &interfaces.DiffResult{NeedsUpdate: false},
+			},
+			"infra.droplet": &fakeDriverForDrift{
+				readErr: transient,
+			},
+		},
+	}
+	refs := []interfaces.ResourceRef{
+		{Name: "ok-vpc", Type: "infra.vpc"},
+		{Name: "bad-droplet", Type: "infra.droplet"},
+	}
+
+	results, err := p.DetectDrift(context.Background(), refs)
+	if err == nil {
+		t.Fatal("expected transient error to propagate, got nil")
+	}
+	if !errors.Is(err, transient) {
+		t.Errorf("expected error chain to include transient error, got: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil results on transient error, got %v", results)
+	}
+}
+
+// containsSubstring is a simple helper to avoid importing strings in tests.
+func containsSubstring(s, sub string) bool {
+	return len(s) >= len(sub) && func() bool {
+		for i := 0; i <= len(s)-len(sub); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	}()
+}
+
 // TestErrResourceNotFound_AliasedToInterfacesSentinel verifies that the local
 // drivers.ErrResourceNotFound sentinel is the same as interfaces.ErrResourceNotFound,
 // so cross-package errors.Is checks work for the ghost-detection path.

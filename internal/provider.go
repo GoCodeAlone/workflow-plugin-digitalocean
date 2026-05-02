@@ -459,8 +459,11 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 				})
 				continue
 			}
-			// Transient or unknown error — propagate; let caller retry.
-			return results, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
+			// Transient or unknown error — discard accumulated results and propagate.
+			// Returning partial results is a footgun: callers that use both results
+			// and err act on an incomplete drift picture, which may cause incorrect
+			// state-prune decisions.
+			return nil, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
 		}
 
 		// Read succeeded — check for config drift via the driver's Diff method.
@@ -474,13 +477,17 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 		// callers should use wfctl infra plan which has access to the full config.
 		diff, diffErr := d.Diff(ctx, interfaces.ResourceSpec{Name: ref.Name, Type: ref.Type}, out)
 		if diffErr != nil {
-			// Diff failure is treated as inconclusive — still record as InSync to
-			// avoid false positives; callers can run wfctl infra plan for a full check.
+			// Diff failure is classified as Unknown (operator-investigation-required)
+			// rather than InSync. Silently suppressing a broken-driver signal would
+			// make `wfctl infra drift` show green-all-clear when the Diff impl is
+			// incomplete or erroring. DriftClassUnknown does NOT gate prune semantics
+			// (only DriftClassGhost does), so this is safe in the two-pass apply path.
 			results = append(results, interfaces.DriftResult{
 				Name:    ref.Name,
 				Type:    ref.Type,
-				Drifted: false,
-				Class:   interfaces.DriftClassInSync,
+				Drifted: true,
+				Class:   interfaces.DriftClassUnknown,
+				Fields:  []string{"diff: " + diffErr.Error()},
 			})
 			continue
 		}

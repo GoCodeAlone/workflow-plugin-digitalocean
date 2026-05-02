@@ -27,13 +27,18 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
   go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
 
+  Note: `DriftClassConfig` requires drivers whose `Diff` implementation can
+  compare live state against the declared spec without a separately-supplied
+  desired config. Drivers that cannot do this will fall back to
+  `DriftClassUnknown` (if `Diff` errors) or `DriftClassInSync` (if `Diff`
+  returns nil drift). Use `wfctl infra plan` for richer config-drift detection
+  that has access to the full declared IaC spec.
+
 - **`drivers.ErrResourceNotFound` aliased to `interfaces.ErrResourceNotFound`**
   — The local sentinel in `app_platform.go` was previously a distinct
   `errors.New(...)` value; cross-package `errors.Is(err, interfaces.ErrResourceNotFound)`
   would silently miss it. Now aliased so all driver list-scan not-found returns
   satisfy the canonical sentinel for the ghost-detection path.
-
-### Added
 
 - **Deferred `trusted_sources` update for `infra.database`** — When a
   `trusted_sources` entry of `type: app` references an app that does not yet
