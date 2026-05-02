@@ -912,6 +912,93 @@ func TestAppPlatformDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
 	}
 }
 
+// ── Active-slot phase-transition tests (issue #48) ───────────────────────────
+//
+// When DO promotes a deployment from InProgressDeployment to ActiveDeployment,
+// there is a window where InProgressDeployment is nil but
+// ActiveDeployment.Phase is still transitioning (e.g. Deploying, PendingDeploy)
+// before reaching Active. The previous appHealthResult returned "no deployment
+// found" in that window, locking polling callers into a false-negative loop.
+
+// TestAppHealthResult_ActiveSlotDeployingPhase covers the core bug: ActiveDeployment
+// with Deploying phase and no InProgressDeployment must return in-progress, not
+// "no deployment found".
+func TestAppHealthResult_ActiveSlotDeployingPhase(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		// ActiveDeployment present but Phase still Deploying; InProgress slot nil.
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Deploying), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false while ActiveDeployment.Phase=Deploying")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+	// Must NOT fall through to the "no deployment found" terminal branch.
+	if strings.Contains(result.Message, "no deployment") {
+		t.Errorf("must not return 'no deployment found' during active-slot transition, got: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_ActiveSlotErrorPhase covers terminal failure when the
+// ActiveDeployment slot is populated with a failed phase.
+func TestAppHealthResult_ActiveSlotErrorPhase(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Error), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false for ActiveDeployment.Phase=Error")
+	}
+	if !strings.Contains(result.Message, "failed") {
+		t.Errorf("message should contain 'failed', got: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_ActiveSlotActivePhaseStillHealthy is a regression guard:
+// ActiveDeployment.Phase=Active must remain the healthy path after the new
+// checks are inserted.
+func TestAppHealthResult_ActiveSlotActivePhaseStillHealthy(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Active), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected Healthy=true for ActiveDeployment.Phase=Active, got message: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_PriorityActiveActiveSlotOverInProgress verifies that when
+// ActiveDeployment.Phase=Active and InProgressDeployment.Phase=Deploying both
+// exist simultaneously (a valid DO transient state during rolling updates),
+// Healthy=true is returned — Active wins.
+func TestAppHealthResult_PriorityActiveActiveSlotOverInProgress(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(
+			phasePtr(godo.DeploymentPhase_Active),
+			phasePtr(godo.DeploymentPhase_Deploying),
+			nil,
+		),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected Healthy=true when Active(Active)+InProgress(Deploying); got message: %q", result.Message)
+	}
+}
+
 // ── ParseImageRef unit tests ──────────────────────────────────────────────────
 
 func TestParseImageRef_DOCR(t *testing.T) {

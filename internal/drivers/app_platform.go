@@ -231,18 +231,51 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 // appHealthResult evaluates all three DO deployment slots in priority order and
 // returns an accurate HealthResult:
 //
-//   - ActiveDeployment ACTIVE         → Healthy=true
-//   - InProgressDeployment (building) → Healthy=false, "deployment in progress: <phase>"
-//   - InProgressDeployment (failed)   → Healthy=false, "deployment failed: <phase>"
-//   - PendingDeployment               → Healthy=false, "deployment queued"
-//   - none of the above               → Healthy=false, "no deployment found"
+//   - ActiveDeployment ACTIVE                    → Healthy=true
+//   - ActiveDeployment transitioning (non-Active) → Healthy=false, "deployment in progress (active slot): <phase>" or "deployment failed (active slot): <phase>"
+//   - InProgressDeployment (building)            → Healthy=false, "deployment in progress: <phase>"
+//   - InProgressDeployment (failed)              → Healthy=false, "deployment failed: <phase>"
+//   - PendingDeployment                          → Healthy=false, "deployment queued"
+//   - none of the above                          → Healthy=false, "no deployment found"
 func appHealthResult(app *godo.App) *interfaces.HealthResult {
 	// 1. Active and healthy.
 	if app.ActiveDeployment != nil && app.ActiveDeployment.Phase == godo.DeploymentPhase_Active {
 		return &interfaces.HealthResult{Healthy: true}
 	}
 
-	// 2. Deployment currently in progress — inspect its phase.
+	// 2a. ActiveDeployment populated but Phase not yet Active — covers the
+	// post-promotion-pre-active window where DO has moved the deployment out of
+	// the InProgressDeployment slot but its Phase is still transitioning toward
+	// Active. Without this check, the polling loop falls through to "no
+	// deployment found" and loops until timeout (issue #48).
+	if dep := app.ActiveDeployment; dep != nil {
+		switch dep.Phase {
+		case godo.DeploymentPhase_PendingBuild,
+			godo.DeploymentPhase_Building,
+			godo.DeploymentPhase_PendingDeploy,
+			godo.DeploymentPhase_Deploying:
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("deployment in progress (active slot): %s", dep.Phase),
+			}
+		case godo.DeploymentPhase_Error,
+			godo.DeploymentPhase_Canceled,
+			godo.DeploymentPhase_Superseded:
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("deployment failed (active slot): %s", dep.Phase),
+			}
+		default:
+			// Forward-compat: a future godo release may add new phases.
+			// Report "unknown" rather than "failed" to avoid mislabeling.
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("unknown phase (active slot): %s", dep.Phase),
+			}
+		}
+	}
+
+	// 2b. Deployment currently in progress in the InProgress slot — inspect its phase.
 	if dep := app.InProgressDeployment; dep != nil {
 		switch dep.Phase {
 		case godo.DeploymentPhase_PendingBuild,
