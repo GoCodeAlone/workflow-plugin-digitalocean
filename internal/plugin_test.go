@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,8 +34,26 @@ var (
 func TestPlugin_Manifest(t *testing.T) {
 	p := NewDOPlugin()
 	m := p.Manifest()
-	if m.Name != "workflow-plugin-digitalocean" {
-		t.Errorf("Name = %q, want %q", m.Name, "workflow-plugin-digitalocean")
+	var manifest struct {
+		Name        string `json:"name"`
+		Author      string `json:"author"`
+		Description string `json:"description"`
+	}
+	data, err := os.ReadFile(filepath.Join(testRepoRoot(t), "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+	if m.Name != manifest.Name {
+		t.Errorf("Name = %q, want %q", m.Name, manifest.Name)
+	}
+	if m.Author != manifest.Author {
+		t.Errorf("Author = %q, want %q", m.Author, manifest.Author)
+	}
+	if m.Description != manifest.Description {
+		t.Errorf("Description = %q, want %q", m.Description, manifest.Description)
 	}
 	if m.Version == "" {
 		t.Error("expected non-empty Version")
@@ -126,6 +146,7 @@ func TestPlugin_StaticContractManifestMatchesRuntimeRegistry(t *testing.T) {
 
 func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
 	repoRoot := testRepoRoot(t)
+	t.Setenv("WORKFLOW_PLUGIN_DIGITALOCEAN_DISABLE_LEGACY_MODULE", "1")
 	const pluginName = "workflow-plugin-digitalocean"
 	pluginsDir := filepath.Join(t.TempDir(), "plugins")
 	pluginDir := filepath.Join(pluginsDir, pluginName)
@@ -184,8 +205,10 @@ func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
 	if factory == nil {
 		t.Fatalf("missing %s module factory from gRPC adapter", iacProviderModuleType)
 	}
-	if _, err := NewDOPlugin().(*doPlugin).CreateModule(iacProviderModuleType, "legacy-nil", nil); err == nil {
-		t.Fatal("legacy nil-config module creation unexpectedly succeeded; gRPC success would no longer prove typed_config was used")
+	if _, err := NewDOPlugin().(*doPlugin).CreateModule(iacProviderModuleType, "legacy-disabled", map[string]any{
+		"token": "fake-token-for-test",
+	}); err == nil {
+		t.Fatal("legacy module creation unexpectedly succeeded while disabled; gRPC success would no longer prove typed_config was used")
 	}
 	module := factory("strict-do", map[string]any{
 		"token":             "fake-token-for-test",
@@ -227,6 +250,7 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 			ID           string   `yaml:"id"`
 			Builds       []string `yaml:"builds"`
 			NameTemplate string   `yaml:"name_template"`
+			Files        []string `yaml:"files"`
 		} `yaml:"archives"`
 	}
 	releaseData, err := os.ReadFile(filepath.Join(repoRoot, ".goreleaser.yaml"))
@@ -249,6 +273,12 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	}
 	if len(archive.Builds) != 1 || archive.Builds[0] != build.ID {
 		t.Fatalf("archive builds = %v, want [%s]", archive.Builds, build.ID)
+	}
+	if !containsString(archive.Files, "plugin.json") {
+		t.Fatalf("archive files = %v, want plugin.json", archive.Files)
+	}
+	if !containsString(archive.Files, "plugin.contracts.json") {
+		t.Fatalf("archive files = %v, want plugin.contracts.json", archive.Files)
 	}
 
 	want := make(map[string]string)
@@ -275,6 +305,74 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	for key, wantURL := range want {
 		if gotURL := got[key]; gotURL != wantURL {
 			t.Errorf("download %s = %q, want %q", key, gotURL, wantURL)
+		}
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "plugin.tar.gz")
+	if err := writeTestArchive(repoRoot, archivePath, archive.Files); err != nil {
+		t.Fatalf("write test archive: %v", err)
+	}
+	if !tarGzContains(archivePath, "plugin.contracts.json") {
+		t.Fatal("test release archive missing plugin.contracts.json")
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func writeTestArchive(repoRoot, archivePath string, files []string) error {
+	out, err := os.Create(archivePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	gz := gzip.NewWriter(out)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(repoRoot, name))
+		if err != nil {
+			return err
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tarGzContains(archivePath, want string) bool {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return false
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return false
+		}
+		if err != nil {
+			return false
+		}
+		if header.Name == want {
+			return true
 		}
 	}
 }

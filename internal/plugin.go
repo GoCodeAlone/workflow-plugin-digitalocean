@@ -4,6 +4,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 
 	dopb "github.com/GoCodeAlone/workflow-plugin-digitalocean/proto"
 	externalPb "github.com/GoCodeAlone/workflow/plugin/external/proto"
@@ -42,7 +43,7 @@ func (p *doPlugin) Manifest() sdk.PluginManifest {
 		Name:        "workflow-plugin-digitalocean",
 		Version:     Version,
 		Author:      "GoCodeAlone",
-		Description: "DigitalOcean IaC provider: App Platform, DOKS, databases, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, and Droplets",
+		Description: "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, IAM (declared), and API gateway",
 	}
 }
 
@@ -60,6 +61,9 @@ func (p *doPlugin) ModuleTypes() []string {
 func (p *doPlugin) CreateModule(typeName, _ string, config map[string]any) (sdk.ModuleInstance, error) {
 	if typeName != iacProviderModuleType {
 		return nil, fmt.Errorf("digitalocean plugin: unknown module type %q (supported: %s)", typeName, iacProviderModuleType)
+	}
+	if os.Getenv("WORKFLOW_PLUGIN_DIGITALOCEAN_DISABLE_LEGACY_MODULE") == "1" {
+		return nil, fmt.Errorf("digitalocean plugin: legacy module path disabled")
 	}
 	provider := NewDOProvider()
 	if err := provider.Initialize(context.Background(), config); err != nil {
