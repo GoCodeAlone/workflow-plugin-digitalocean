@@ -4,12 +4,6 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Troubleshoot deploy/build log fetch** — Fixed two issues that prevented log blocks from appearing in operator-facing Diagnostic output:
-  - `deploymentComponents` now reads component names from `dep.Services / .StaticSites / .Workers / .Jobs / .Functions` (deployment-level arrays populated by both ListDeployments and GetDeployment) before falling back to `dep.Spec.*` and finally `[""]` aggregate. Previously only Spec was inspected, which is nil from ListDeployments, so the empty-aggregate fallback was always hit and DO API returned no logs.
-  - GetLogs API errors, HTTP-fetch errors, empty HistoricURLs, and empty-body responses now append a brief failure note to `Diagnostic.Detail` (in addition to the existing stderr log, which is captured at hashicorp/go-plugin TRACE level and not surfaced to operators). Operators now see the failure mode in the same Troubleshoot block as the rest of the diagnostic output.
-
 ### Added
 
 - **Troubleshoot fetches DO deploy/build logs** (PR-E2) — `AppPlatformDriver.Troubleshoot`
@@ -72,6 +66,12 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
 
 ### Fixed
+
+- **gRPC Diagnostic.Detail field omitted from plugin response** — `internal/module_instance.go::invokeDriverTroubleshoot` serialised `Diagnostic` to `map[string]any` but omitted the `detail` field. wfctl's `remoteResourceDriver.Troubleshoot` reads `m["detail"]` → empty string → `emitDiagnostics` never printed the Detail body. All work done in `attachDeployLogs` (v0.8.3 + v0.8.4) to populate `Diagnostic.Detail` with log content / failure notes was silently dropped at the gRPC boundary. Added `"detail": d.Detail` to the serialisation map. This is the structpb-boundary class of bug previously documented in workspace memory.
+
+- **Troubleshoot deploy/build log fetch** — Fixed two issues that prevented log blocks from appearing in operator-facing Diagnostic output:
+  - `deploymentComponents` now reads component names from `dep.Services / .StaticSites / .Workers / .Jobs / .Functions` (deployment-level arrays populated by both ListDeployments and GetDeployment) before falling back to `dep.Spec.*` and finally `[""]` aggregate. Previously only Spec was inspected, which is nil from ListDeployments, so the empty-aggregate fallback was always hit and DO API returned no logs.
+  - GetLogs API errors, HTTP-fetch errors, empty HistoricURLs, and empty-body responses now append a brief failure note to `Diagnostic.Detail` (in addition to the existing stderr log, which is captured at hashicorp/go-plugin TRACE level and not surfaced to operators). Operators now see the failure mode in the same Troubleshoot block as the rest of the diagnostic output.
 
 - **DetectDrift Config-drift detection**: out of scope for this release. The
   IaCProvider interface signature receives only refs, not the parsed declared
