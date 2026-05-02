@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -33,6 +34,17 @@ type mockAppClient struct {
 	createDeploymentCalled bool
 	lastCreateReq          *godo.AppCreateRequest
 	lastUpdateReq          *godo.AppUpdateRequest
+	getLogsResult          *godo.AppLogs      // returned by GetLogs
+	getLogsErr             error              // error returned by GetLogs
+	getLogsRequests        []getLogsCall      // recorded GetLogs calls
+}
+
+// getLogsCall records a single GetLogs invocation for assertion in tests.
+type getLogsCall struct {
+	appID        string
+	deploymentID string
+	component    string
+	logType      godo.AppLogType
 }
 
 func (m *mockAppClient) Create(_ context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
@@ -58,6 +70,15 @@ func (m *mockAppClient) ListDeployments(_ context.Context, _ string, _ *godo.Lis
 }
 func (m *mockAppClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, m.err
+}
+func (m *mockAppClient) GetLogs(_ context.Context, appID, deploymentID, component string, logType godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	m.getLogsRequests = append(m.getLogsRequests, getLogsCall{
+		appID:        appID,
+		deploymentID: deploymentID,
+		component:    component,
+		logType:      logType,
+	})
+	return m.getLogsResult, nil, m.getLogsErr
 }
 
 func testApp() *godo.App {
@@ -912,6 +933,93 @@ func TestAppPlatformDriver_HealthCheck_InProgress_UnknownPhase(t *testing.T) {
 	}
 }
 
+// ── Active-slot phase-transition tests (issue #48) ───────────────────────────
+//
+// When DO promotes a deployment from InProgressDeployment to ActiveDeployment,
+// there is a window where InProgressDeployment is nil but
+// ActiveDeployment.Phase is still transitioning (e.g. Deploying, PendingDeploy)
+// before reaching Active. The previous appHealthResult returned "no deployment
+// found" in that window, locking polling callers into a false-negative loop.
+
+// TestAppHealthResult_ActiveSlotDeployingPhase covers the core bug: ActiveDeployment
+// with Deploying phase and no InProgressDeployment must return in-progress, not
+// "no deployment found".
+func TestAppHealthResult_ActiveSlotDeployingPhase(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		// ActiveDeployment present but Phase still Deploying; InProgress slot nil.
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Deploying), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false while ActiveDeployment.Phase=Deploying")
+	}
+	if !strings.Contains(result.Message, "in progress") {
+		t.Errorf("message should contain 'in progress', got: %q", result.Message)
+	}
+	// Must NOT fall through to the "no deployment found" terminal branch.
+	if strings.Contains(result.Message, "no deployment") {
+		t.Errorf("must not return 'no deployment found' during active-slot transition, got: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_ActiveSlotErrorPhase covers terminal failure when the
+// ActiveDeployment slot is populated with a failed phase.
+func TestAppHealthResult_ActiveSlotErrorPhase(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Error), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false for ActiveDeployment.Phase=Error")
+	}
+	if !strings.Contains(result.Message, "failed") {
+		t.Errorf("message should contain 'failed', got: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_ActiveSlotActivePhaseStillHealthy is a regression guard:
+// ActiveDeployment.Phase=Active must remain the healthy path after the new
+// checks are inserted.
+func TestAppHealthResult_ActiveSlotActivePhaseStillHealthy(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(phasePtr(godo.DeploymentPhase_Active), nil, nil),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected Healthy=true for ActiveDeployment.Phase=Active, got message: %q", result.Message)
+	}
+}
+
+// TestAppHealthResult_PriorityActiveActiveSlotOverInProgress verifies that when
+// ActiveDeployment.Phase=Active and InProgressDeployment.Phase=Deploying both
+// exist simultaneously (a valid DO transient state during rolling updates),
+// Healthy=true is returned — Active wins.
+func TestAppHealthResult_PriorityActiveActiveSlotOverInProgress(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(
+			phasePtr(godo.DeploymentPhase_Active),
+			phasePtr(godo.DeploymentPhase_Deploying),
+			nil,
+		),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "phased-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected Healthy=true when Active(Active)+InProgress(Deploying); got message: %q", result.Message)
+	}
+}
+
 // ── ParseImageRef unit tests ──────────────────────────────────────────────────
 
 func TestParseImageRef_DOCR(t *testing.T) {
@@ -1280,5 +1388,364 @@ func TestTroubleshoot_APIError(t *testing.T) {
 	_, err := d.Troubleshoot(context.Background(), ref, "")
 	if err != nil {
 		t.Fatalf("ListDeployments error should not propagate; got: %v", err)
+	}
+}
+
+// ── Troubleshoot GetLogs tests ────────────────────────────────────────────────
+
+// TestTroubleshoot_AttachesDeployLogsForFailedDeployment verifies that for an
+// Error-phase deployment, Troubleshoot calls GetLogs and the returned log
+// content (served by an httptest server) appears in Diagnostic.Detail with the
+// component name and delimiters.
+func TestTroubleshoot_AttachesDeployLogsForFailedDeployment(t *testing.T) {
+	const logContent = "error: image pull failed\nexit status 1"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, logContent)
+	}))
+	defer srv.Close()
+
+	dep := &godo.Deployment{
+		ID:    "dep-err-001",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "image pull failed",
+		Spec: &godo.AppSpec{
+			Name: "my-app",
+			Services: []*godo.AppServiceSpec{
+				{Name: "web"},
+			},
+		},
+	}
+	mock := &mockAppClient{
+		app: &godo.App{
+			ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec: &godo.AppSpec{Name: "my-app"},
+			InProgressDeployment: dep,
+		},
+		getLogsResult: &godo.AppLogs{
+			HistoricURLs: []string{srv.URL},
+		},
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
+
+	diags, err := d.Troubleshoot(context.Background(), ref, "deployment failed")
+	if err != nil {
+		t.Fatalf("Troubleshoot: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected at least 1 diagnostic")
+	}
+	detail := diags[0].Detail
+	if !strings.Contains(detail, logContent) {
+		t.Errorf("Diagnostic.Detail missing log content\nDetail: %q\nWanted: %q", detail, logContent)
+	}
+	if !strings.Contains(detail, `"web"`) {
+		t.Errorf("Diagnostic.Detail missing component name %q\nDetail: %q", "web", detail)
+	}
+	if !strings.Contains(detail, "---") {
+		t.Errorf("Diagnostic.Detail missing delimiter\nDetail: %q", detail)
+	}
+	if !strings.Contains(detail, "Deploy logs") {
+		t.Errorf("Diagnostic.Detail missing 'Deploy logs' header\nDetail: %q", detail)
+	}
+}
+
+// TestTroubleshoot_AttachesBuildLogsForBuildErroredDeployment verifies that
+// when a SummaryStep named "build" has status Error, Troubleshoot requests
+// AppLogTypeBuild (not Deploy) from the mock.
+func TestTroubleshoot_AttachesBuildLogsForBuildErroredDeployment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "build error: compilation failed")
+	}))
+	defer srv.Close()
+
+	dep := &godo.Deployment{
+		ID:    "dep-build-err",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "build failed",
+		Progress: &godo.DeploymentProgress{
+			SummarySteps: []*godo.DeploymentProgressStep{
+				{
+					Name:   "build",
+					Status: godo.DeploymentProgressStepStatus_Error,
+					Reason: &godo.DeploymentProgressStepReason{Message: "compilation failed"},
+				},
+			},
+		},
+		Spec: &godo.AppSpec{
+			Name:     "my-app",
+			Services: []*godo.AppServiceSpec{{Name: "api"}},
+		},
+	}
+	mock := &mockAppClient{
+		app: &godo.App{
+			ID:                   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec:                 &godo.AppSpec{Name: "my-app"},
+			InProgressDeployment: dep,
+		},
+		getLogsResult: &godo.AppLogs{
+			HistoricURLs: []string{srv.URL},
+		},
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
+
+	_, err := d.Troubleshoot(context.Background(), ref, "build failed")
+	if err != nil {
+		t.Fatalf("Troubleshoot: %v", err)
+	}
+	if len(mock.getLogsRequests) == 0 {
+		t.Fatal("expected GetLogs to be called")
+	}
+	if mock.getLogsRequests[0].logType != godo.AppLogTypeBuild {
+		t.Errorf("GetLogs logType = %q, want %q", mock.getLogsRequests[0].logType, godo.AppLogTypeBuild)
+	}
+}
+
+// TestTroubleshoot_GracefulOnGetLogsError verifies that when GetLogs returns
+// an error, the Diagnostic is still produced (no panic, no error return), and
+// the Detail contains a visible failure note so operators know why logs are absent.
+func TestTroubleshoot_GracefulOnGetLogsError(t *testing.T) {
+	dep := &godo.Deployment{
+		ID:    "dep-getlogs-err",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "image pull failed",
+		Spec:  &godo.AppSpec{Name: "my-app", Services: []*godo.AppServiceSpec{{Name: "web"}}},
+	}
+	mock := &mockAppClient{
+		app: &godo.App{
+			ID:                   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec:                 &godo.AppSpec{Name: "my-app"},
+			InProgressDeployment: dep,
+		},
+		getLogsErr: errors.New("rate limited"),
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
+
+	diags, err := d.Troubleshoot(context.Background(), ref, "deployment failed")
+	if err != nil {
+		t.Fatalf("Troubleshoot should not error on GetLogs failure; got: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected Diagnostic to be produced even when GetLogs fails")
+	}
+	// Detail must contain a visible failure note (not silently empty).
+	if !strings.Contains(diags[0].Detail, "log fetch unavailable") {
+		t.Errorf("Detail should contain 'log fetch unavailable' failure note; got: %q", diags[0].Detail)
+	}
+}
+
+// TestTroubleshoot_GracefulOnHTTPFetchError verifies that when GetLogs returns
+// a URL but the HTTP server returns 500, the Diagnostic is still produced
+// and Detail contains a visible failure note so operators know why logs are absent.
+func TestTroubleshoot_GracefulOnHTTPFetchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dep := &godo.Deployment{
+		ID:    "dep-http-err",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "image pull failed",
+		Spec:  &godo.AppSpec{Name: "my-app", Services: []*godo.AppServiceSpec{{Name: "web"}}},
+	}
+	mock := &mockAppClient{
+		app: &godo.App{
+			ID:                   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec:                 &godo.AppSpec{Name: "my-app"},
+			InProgressDeployment: dep,
+		},
+		getLogsResult: &godo.AppLogs{HistoricURLs: []string{srv.URL}},
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
+
+	diags, err := d.Troubleshoot(context.Background(), ref, "deployment failed")
+	if err != nil {
+		t.Fatalf("Troubleshoot should not error on HTTP fetch failure; got: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected Diagnostic to be produced even when HTTP fetch fails")
+	}
+	// Detail must contain a visible failure note (not silently empty).
+	if !strings.Contains(diags[0].Detail, "log fetch failed") {
+		t.Errorf("Detail should contain 'log fetch failed' failure note; got: %q", diags[0].Detail)
+	}
+}
+
+// TestTroubleshoot_PerComponentLogs verifies that for a multi-component
+// deployment (2 services + 1 worker), each component produces a separate
+// labeled log block in Diagnostic.Detail.
+func TestTroubleshoot_PerComponentLogs(t *testing.T) {
+	// Each component gets its own httptest log content.
+	logBySrv := map[string]string{} // url → content
+	makeServer := func(content string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, content)
+		}))
+		logBySrv[srv.URL] = content
+		return srv
+	}
+	srvWeb := makeServer("web: error pulling image")
+	srvApi := makeServer("api: OOM killed")
+	srvWorker := makeServer("worker: panic at startup")
+	defer srvWeb.Close()
+	defer srvApi.Close()
+	defer srvWorker.Close()
+
+	dep := &godo.Deployment{
+		ID:    "dep-multi-comp",
+		Phase: godo.DeploymentPhase_Error,
+		Cause: "multiple components failed",
+		Spec: &godo.AppSpec{
+			Name:     "my-app",
+			Services: []*godo.AppServiceSpec{{Name: "web"}, {Name: "api"}},
+			Workers:  []*godo.AppWorkerSpec{{Name: "worker"}},
+		},
+	}
+
+	callCount := 0
+	servers := []string{srvWeb.URL, srvApi.URL, srvWorker.URL}
+	mock := &mockAppClient{
+		app: &godo.App{
+			ID:                   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec:                 &godo.AppSpec{Name: "my-app"},
+			InProgressDeployment: dep,
+		},
+	}
+	// Override GetLogs to return different URLs per call.
+	// We use a custom mock that cycles through server URLs.
+	mockFn := &cyclingLogsMock{
+		mockAppClient: mock,
+		serverURLs:    servers,
+		callCount:     &callCount,
+	}
+	d := drivers.NewAppPlatformDriverWithClient(mockFn, "nyc3")
+	ref := interfaces.ResourceRef{Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"}
+
+	diags, err := d.Troubleshoot(context.Background(), ref, "deployment failed")
+	if err != nil {
+		t.Fatalf("Troubleshoot: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected at least 1 diagnostic")
+	}
+	detail := diags[0].Detail
+	for _, comp := range []string{`"web"`, `"api"`, `"worker"`} {
+		if !strings.Contains(detail, comp) {
+			t.Errorf("Detail missing component %s\nDetail: %q", comp, detail)
+		}
+	}
+	for _, logLine := range []string{"web: error pulling image", "api: OOM killed", "worker: panic at startup"} {
+		if !strings.Contains(detail, logLine) {
+			t.Errorf("Detail missing log line %q\nDetail: %q", logLine, detail)
+		}
+	}
+	// Should have 3 delimited blocks.
+	blockCount := strings.Count(detail, "---")
+	if blockCount < 6 { // each block uses 2 "---" delimiters
+		t.Errorf("expected at least 6 '---' delimiters for 3 log blocks, got %d\nDetail: %q", blockCount, detail)
+	}
+}
+
+// cyclingLogsMock extends mockAppClient with per-call URL cycling for GetLogs.
+type cyclingLogsMock struct {
+	*mockAppClient
+	serverURLs []string
+	callCount  *int
+}
+
+func (m *cyclingLogsMock) GetLogs(_ context.Context, appID, deploymentID, component string, logType godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	m.mockAppClient.getLogsRequests = append(m.mockAppClient.getLogsRequests, getLogsCall{
+		appID: appID, deploymentID: deploymentID, component: component, logType: logType,
+	})
+	idx := *m.callCount
+	*m.callCount++
+	if idx >= len(m.serverURLs) {
+		return nil, nil, errors.New("no more server URLs")
+	}
+	return &godo.AppLogs{HistoricURLs: []string{m.serverURLs[idx]}}, nil, nil
+}
+
+// ── appHealthResult ListDeployments fallback tests ────────────────────────────
+
+// TestAppHealthResult_AllSlotsNilFallsBackToListDeployments verifies that when
+// all 3 deployment slots are nil but ListDeployments returns 1 deployment,
+// HealthResult.Message contains the short deployment ID and its phase.
+func TestAppHealthResult_AllSlotsNilFallsBackToListDeployments(t *testing.T) {
+	const depID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app: appWithPhases(nil, nil, nil),
+		deployments: []*godo.Deployment{
+			{ID: depID, Phase: godo.DeploymentPhase_Error},
+		},
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "phased-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false")
+	}
+	// Must contain the short ID (first 8 chars) and the phase.
+	shortID := depID[:8]
+	if !strings.Contains(result.Message, shortID) {
+		t.Errorf("Message = %q, want it to contain short ID %q", result.Message, shortID)
+	}
+	if !strings.Contains(result.Message, string(godo.DeploymentPhase_Error)) {
+		t.Errorf("Message = %q, want it to contain phase %q", result.Message, godo.DeploymentPhase_Error)
+	}
+}
+
+// TestAppHealthResult_AllSlotsNilEmptyHistory verifies that when all 3 slots
+// are nil and ListDeployments returns empty, the message is "no deployment found".
+func TestAppHealthResult_AllSlotsNilEmptyHistory(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app:         appWithPhases(nil, nil, nil),
+		deployments: []*godo.Deployment{},
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "phased-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false")
+	}
+	if !strings.Contains(result.Message, "no deployment found") {
+		t.Errorf("Message = %q, want 'no deployment found'", result.Message)
+	}
+}
+
+// TestAppHealthResult_AllSlotsNilListDeploymentsError verifies that when all
+// 3 slots are nil and ListDeployments returns an error, the code falls through
+// to "no deployment found" without panicking or returning an error.
+func TestAppHealthResult_AllSlotsNilListDeploymentsError(t *testing.T) {
+	d := drivers.NewAppPlatformDriverWithClient(&mockAppClient{
+		app:                appWithPhases(nil, nil, nil),
+		listDeploymentsErr: errors.New("api error"),
+	}, "nyc3")
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "phased-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Healthy {
+		t.Error("expected Healthy=false")
+	}
+	if !strings.Contains(result.Message, "no deployment found") {
+		t.Errorf("Message = %q, want 'no deployment found'", result.Message)
 	}
 }

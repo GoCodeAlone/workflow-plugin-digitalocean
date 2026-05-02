@@ -4,6 +4,129 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Troubleshoot deploy/build log fetch** — Fixed two issues that prevented log blocks from appearing in operator-facing Diagnostic output:
+  - `deploymentComponents` now reads component names from `dep.Services / .StaticSites / .Workers / .Jobs / .Functions` (deployment-level arrays populated by both ListDeployments and GetDeployment) before falling back to `dep.Spec.*` and finally `[""]` aggregate. Previously only Spec was inspected, which is nil from ListDeployments, so the empty-aggregate fallback was always hit and DO API returned no logs.
+  - GetLogs API errors, HTTP-fetch errors, empty HistoricURLs, and empty-body responses now append a brief failure note to `Diagnostic.Detail` (in addition to the existing stderr log, which is captured at hashicorp/go-plugin TRACE level and not surfaced to operators). Operators now see the failure mode in the same Troubleshoot block as the rest of the diagnostic output.
+
+### Added
+
+- **Troubleshoot fetches DO deploy/build logs** (PR-E2) — `AppPlatformDriver.Troubleshoot`
+  now calls `godo.AppsService.GetLogs` for each component in any deployment
+  whose phase is `Error`, `Canceled`, or `Superseded`. The DO API returns
+  presigned historic URLs; the plugin HTTP-fetches the most recent URL and
+  appends the last 200 lines per component to `Diagnostic.Detail` as a
+  delimited block:
+
+  ```
+  ---
+  Deploy logs — component "web" (last 200 lines):
+  <log content>
+  ---
+  ```
+
+  For build-phase failures (a `SummaryStep` named `"build"` with status
+  `Error`), `AppLogTypeBuild` is requested; all other failures use
+  `AppLogTypeDeploy`. Multi-component apps produce one block per component
+  (Services, Jobs, Workers, Functions enumerated from `dep.Spec`); if `Spec`
+  is nil or all arrays are empty, a single aggregate fetch is performed
+  (component `""` = DO API aggregate).
+
+  Graceful degradation: `GetLogs` error or HTTP-fetch non-200 are logged to
+  stderr; the `Diagnostic` is still produced without the log block. A 10 MB
+  cap prevents pathological log responses.
+
+- **`appHealthResult` ListDeployments fallback** (PR-E2) — When all three
+  deployment slots (`Active`, `InProgress`, `Pending`) are nil, `HealthCheck`
+  now falls back to `ListDeployments(Page:1, PerPage:1)` and surfaces the
+  latest deployment's short ID + phase: `"latest deployment f8b6200c: ERROR"`.
+  This catches the fast-fail case where DO removes a failed deployment from
+  all three slots before the operator's poll loop catches up (reproducer: build
+  error in ≤1 second). If `ListDeployments` errors or returns empty, falls
+  through to the previous `"no deployment found"` message.
+
+- **`appHealthResult` phase-transition handling** (PR #49) — When
+  `ActiveDeployment.Phase` is non-Active (transitioning toward Active or
+  failed), the function now returns the appropriate in-progress/failed message
+  rather than falling through to `"no deployment found"`. Fixes the polling
+  loop timeout described in GoCodeAlone/workflow-plugin-digitalocean#48.
+
+- **`DOProvider.DetectDrift`** — real implementation classifying resources as
+  `DriftClassGhost` (cloud reports 404), `DriftClassInSync` (cloud Read
+  succeeds), or `DriftClassUnknown` (driver lookup fails). Required for
+  `wfctl infra apply --refresh` ghost-prune (workflow v0.20.5+).
+
+  - `DriftClassGhost` (`Drifted: true`): state has the resource, but cloud
+    `Read` returns `interfaces.ErrResourceNotFound`. Caller should prune state
+    via `wfctl infra apply --refresh`.
+  - `DriftClassInSync` (`Drifted: false`): cloud Read succeeds — state and
+    cloud agree.
+  - `DriftClassUnknown` (`Drifted: true`): driver registry lookup failed for
+    the ref type (unsupported resource type). Operator must investigate.
+
+  Production-safety invariant: transient API errors (rate-limit, auth,
+  network) propagate and do NOT trigger state-prune semantics; only genuine
+  `interfaces.ErrResourceNotFound` (HTTP 404) gates the ghost path.
+
+  go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
+
+### Fixed
+
+- **DetectDrift Config-drift detection**: out of scope for this release. The
+  IaCProvider interface signature receives only refs, not the parsed declared
+  config, so per-driver Diff comparisons cannot be performed safely (VPC reads
+  `ip_range` from spec.Config; AppPlatform `canonicalExpose` defaults to
+  `"public"` on an empty spec — any app with `expose: internal` would report
+  false drift back to `"public"`). Use `wfctl infra plan` for full config-drift
+  detection — it has access to the spec and surfaces config drift as update
+  actions.
+
+- **`drivers.ErrResourceNotFound` aliased to `interfaces.ErrResourceNotFound`**
+  — The local sentinel in `app_platform.go` was previously a distinct
+  `errors.New(...)` value; cross-package `errors.Is(err, interfaces.ErrResourceNotFound)`
+  would silently miss it. Now aliased so all driver list-scan not-found returns
+  satisfy the canonical sentinel for the ghost-detection path.
+
+- **Deferred `trusted_sources` update for `infra.database`** — When a
+  `trusted_sources` entry of `type: app` references an app that does not yet
+  exist (first-deploy ordering), `DatabaseDriver.Create` and `.Update` no
+  longer fail with a resource-not-found error. Instead, the driver:
+
+  1. Creates/updates the DB with the resolvable subset of rules (e.g. `ip_addr`)
+     applied immediately.
+  2. Queues a deferred firewall update for the post-apply second pass.
+  3. After all plan `create` actions complete, `DOProvider.Apply` calls
+     `FlushDeferredUpdates` on any driver with pending updates, which
+     re-resolves all `type=app` names (apps now exist) and calls
+     `UpdateFirewallRules` with the full intended rule set.
+
+  Failure during `FlushDeferredUpdates` (e.g. `UpdateFirewallRules` API error)
+  is **fatal** — the error surfaces in `ApplyResult.Errors` so the operator
+  knows the intended security posture was not fully applied. Failed entries are
+  **retained in the pending queue**, so a subsequent `wfctl apply` automatically
+  re-attempts the flush without requiring operator intervention (e.g. touching a
+  config field to force a Diff update).
+
+  Only "app not yet created" (name absent from `Apps.List`) triggers deferral.
+  API-level failures (rate-limit, transient, auth errors) are propagated
+  immediately and never silently deferred.
+
+  Fixes GoCodeAlone/core-dump#154 (R4 first-deploy ordering finding).
+  See `docs/plans/2026-05-02-staging-deploy-blockers-design.md` (Blocker 2).
+
+- **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
+  plan actions to `d.Delete(ctx, ref)` using `action.Current` for the
+  `ResourceRef` (which carries the `ProviderID`; `action.Resource` is empty for
+  deletes). Previously, `"delete"` fell through to the `default` case and
+  returned `unknown action "delete"`, blocking any plan that removed a resource
+  from config. Reproducer: BMW deploy failed with `delete/bmw-staging-firewall:
+  unknown action "delete"` after the firewall was removed from infra.yaml.
+- **Apply nil-output guard** — After a successful `"delete"` action, `out`
+  is `nil` (deleted resources have no post-apply state). Added a nil check
+  before `result.Resources = append(result.Resources, *out)` to prevent a
+  nil-pointer panic on mixed delete+create plans.
+
 ## [v0.8.0] - 2026-04-28
 
 P-2 staging IaC alignment. Three independent canonical-config additions
