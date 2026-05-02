@@ -655,17 +655,23 @@ func (d *DatabaseDriver) HasDeferredUpdates() bool {
 // update fails — the caller (DOProvider.Apply) appends these to result.Errors
 // so the failure is visible to the operator.
 //
-// The pending queue is cleared after the flush regardless of whether all
-// updates succeeded, preventing duplicate retries on a subsequent call.
+// Only successfully-flushed entries are removed from the queue. Entries that
+// failed (rule-resolution error or UpdateFirewallRules API error) are retained
+// so that a subsequent Apply automatically re-attempts the flush without
+// requiring operator intervention. This matters because DatabaseDriver.Diff
+// does not compare trusted_sources, meaning a retry Apply would otherwise
+// produce no update action and the second-pass flush would never fire.
 func (d *DatabaseDriver) FlushDeferredUpdates(ctx context.Context) error {
 	if len(d.pendingFirewallUpdates) == 0 {
 		return nil
 	}
 	var errs []string
+	var remaining []deferredFirewallUpdate
 	for _, pending := range d.pendingFirewallUpdates {
 		fwRules, _, err := d.buildUpdateFirewallRules(ctx, pending.spec.Config)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("deferred firewall update %q: resolve rules: %v", pending.spec.Name, err))
+			remaining = append(remaining, pending) // retain for retry
 			continue
 		}
 		_, err = d.client.UpdateFirewallRules(ctx, pending.providerID, &godo.DatabaseUpdateFirewallRulesRequest{
@@ -673,9 +679,10 @@ func (d *DatabaseDriver) FlushDeferredUpdates(ctx context.Context) error {
 		})
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("deferred firewall update %q: %v", pending.spec.Name, WrapGodoError(err)))
+			remaining = append(remaining, pending) // retain for retry
 		}
 	}
-	d.pendingFirewallUpdates = nil // clear queue after flush
+	d.pendingFirewallUpdates = remaining // only cleared entries were successfully flushed
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}

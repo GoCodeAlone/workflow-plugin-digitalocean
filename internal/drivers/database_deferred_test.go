@@ -249,10 +249,18 @@ func TestDatabaseDriver_FlushDeferredUpdates_FullRulesApplied(t *testing.T) {
 	}
 }
 
-// TestDatabaseDriver_FlushDeferredUpdates_APIError_ReturnsError verifies that
-// when UpdateFirewallRules fails during flush, FlushDeferredUpdates returns
-// an error (fatal — operator needs to know intent diverged from achieved state).
-func TestDatabaseDriver_FlushDeferredUpdates_APIError_ReturnsError(t *testing.T) {
+// TestDatabaseDriver_FlushDeferredUpdates_APIError_RetainsQueue verifies that
+// when UpdateFirewallRules fails during flush, FlushDeferredUpdates returns an
+// error AND retains the failed entry in the pending queue so a subsequent
+// Apply (once the API is reachable) will automatically re-attempt the flush
+// without requiring operator intervention (e.g. touching a config field to
+// force a Diff update).
+//
+// This is the correct behaviour: silently clearing the queue on failure would
+// leave the database permanently stuck with partial rules because DatabaseDriver.Diff
+// does not compare trusted_sources, so a retry Apply would produce no update
+// action and the second-pass flush would never fire.
+func TestDatabaseDriver_FlushDeferredUpdates_APIError_RetainsQueue(t *testing.T) {
 	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	dbMock := &mockDatabaseClient{
 		db:          testDatabase(),
@@ -279,6 +287,10 @@ func TestDatabaseDriver_FlushDeferredUpdates_APIError_ReturnsError(t *testing.T)
 
 	if err := d.FlushDeferredUpdates(context.Background()); err == nil {
 		t.Fatal("FlushDeferredUpdates should return error when UpdateFirewallRules fails")
+	}
+	// Failed entry must be retained so a retry Apply can re-attempt the flush.
+	if !d.HasDeferredUpdates() {
+		t.Error("HasDeferredUpdates() must be true after failed flush — retry Apply must re-attempt without operator intervention")
 	}
 }
 
