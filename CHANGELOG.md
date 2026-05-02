@@ -46,12 +46,10 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   rather than falling through to `"no deployment found"`. Fixes the polling
   loop timeout described in GoCodeAlone/workflow-plugin-digitalocean#48.
 
-### Fixed
-
-- **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
-  reports 404), `InSync` (cloud Read succeeds), or `Unknown` (driver lookup
-  fails). Required for `wfctl infra apply --refresh` ghost-prune (workflow
-  v0.20.5+).
+- **`DOProvider.DetectDrift`** — real implementation classifying resources as
+  `DriftClassGhost` (cloud reports 404), `DriftClassInSync` (cloud Read
+  succeeds), or `DriftClassUnknown` (driver lookup fails). Required for
+  `wfctl infra apply --refresh` ghost-prune (workflow v0.20.5+).
 
   - `DriftClassGhost` (`Drifted: true`): state has the resource, but cloud
     `Read` returns `interfaces.ErrResourceNotFound`. Caller should prune state
@@ -66,6 +64,8 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   `interfaces.ErrResourceNotFound` (HTTP 404) gates the ghost path.
 
   go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
+
+### Fixed
 
 - **DetectDrift Config-drift detection**: out of scope for this release. The
   IaCProvider interface signature receives only refs, not the parsed declared
@@ -108,8 +108,6 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
   Fixes GoCodeAlone/core-dump#154 (R4 first-deploy ordering finding).
   See `docs/plans/2026-05-02-staging-deploy-blockers-design.md` (Blocker 2).
-
-### Fixed
 
 - **Apply `"delete"` action** — The `Apply` method now dispatches `"delete"`
   plan actions to `d.Delete(ctx, ref)` using `action.Current` for the
