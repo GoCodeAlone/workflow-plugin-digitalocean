@@ -19,23 +19,29 @@ type RegistryClient interface {
 //
 // DOCR is account-level: Basic plan supports one registry per account,
 // Professional supports up to ten. A registry can host many repositories,
-// so multi-project consolidation under one registry is the intended pattern
-// on Basic.
+// so multi-project consolidation under one registry is supported on every
+// plan tier.
+//
+// This driver is **account-singleton**: godo's Registry.Get(ctx) and
+// Delete(ctx) take no name parameter, so the driver can only see and
+// manage one registry per account regardless of plan tier. On Professional
+// accounts with multiple registries, the others must be managed out-of-band.
 //
 // Two deployment topologies are supported:
-//   - Owned: declare digitalocean.container_registry as an IaC module; this
-//     driver manages create/update/destroy. Use on single-project accounts
-//     or on Professional with per-project registries.
-//   - Shared: omit the module declaration and reference only the path under
-//     ci.registries; bootstrap the registry once out-of-band. Use when
-//     multiple projects share a Basic-plan account.
+//   - Owned: declare an infra.registry IaC module; this driver manages
+//     create/update/destroy. Use on single-project DO accounts.
+//   - Shared: omit the module declaration and reference only the path
+//     under ci.registries; bootstrap the registry once out-of-band. Use
+//     when multiple projects share a DO account.
 //
 // See docs/container-registry.md for the canonical pattern, including
 // migration guidance and the deploy-time verification snippet for Shared
 // consumers. Picking the wrong topology produces a peer-deploy race that
 // only surfaces when the second project tries to create the registry.
 //
-// Create is idempotent against the DO API for same name + region.
+// Create is idempotent against the DO API for same name + region. Update
+// is a no-op (DOCR does not support in-place tier/region changes; drift
+// is not reconciled).
 type RegistryDriver struct {
 	client RegistryClient
 }
