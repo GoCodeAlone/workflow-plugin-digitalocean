@@ -12,6 +12,7 @@ import (
 // compile-time interface checks
 var (
 	_ sdk.PluginProvider      = (*doPlugin)(nil)
+	_ sdk.ModuleProvider      = (*doPlugin)(nil)
 	_ sdk.TypedModuleProvider = (*doPlugin)(nil)
 	_ sdk.ContractProvider    = (*doPlugin)(nil)
 )
@@ -166,4 +167,71 @@ func isErrTypedContractNotHandled(err error) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// TestIacConfigToMap verifies that all IacProviderConfig fields are mapped to
+// the exact config keys that DOProvider.Initialize consumes, and that empty
+// fields are omitted.
+func TestIacConfigToMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *dopb.IacProviderConfig
+		wantKeys []string
+		absent   []string
+	}{
+		{
+			name:     "token only",
+			cfg:      &dopb.IacProviderConfig{Token: "tok"},
+			wantKeys: []string{"token"},
+			absent:   []string{"region", "spaces_access_key", "spaces_secret_key"},
+		},
+		{
+			name: "all fields",
+			cfg: &dopb.IacProviderConfig{
+				Token:           "tok",
+				Region:          "nyc3",
+				SpacesAccessKey: "access",
+				SpacesSecretKey: "secret",
+			},
+			wantKeys: []string{"token", "region", "spaces_access_key", "spaces_secret_key"},
+			absent:   nil,
+		},
+		{
+			name:     "empty config omits all keys",
+			cfg:      &dopb.IacProviderConfig{},
+			wantKeys: nil,
+			absent:   []string{"token", "region", "spaces_access_key", "spaces_secret_key"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := iacConfigToMap(tt.cfg)
+			for _, k := range tt.wantKeys {
+				if _, ok := m[k]; !ok {
+					t.Errorf("key %q missing from map", k)
+				}
+			}
+			for _, k := range tt.absent {
+				if _, ok := m[k]; ok {
+					t.Errorf("key %q should be absent from map", k)
+				}
+			}
+			// Verify specific values for all-fields case.
+			if tt.cfg.Region != "" {
+				if got, _ := m["region"].(string); got != tt.cfg.Region {
+					t.Errorf("region = %q, want %q", got, tt.cfg.Region)
+				}
+			}
+			if tt.cfg.SpacesAccessKey != "" {
+				if got, _ := m["spaces_access_key"].(string); got != tt.cfg.SpacesAccessKey {
+					t.Errorf("spaces_access_key = %q, want %q", got, tt.cfg.SpacesAccessKey)
+				}
+			}
+			if tt.cfg.SpacesSecretKey != "" {
+				if got, _ := m["spaces_secret_key"].(string); got != tt.cfg.SpacesSecretKey {
+					t.Errorf("spaces_secret_key = %q, want %q", got, tt.cfg.SpacesSecretKey)
+				}
+			}
+		})
+	}
 }

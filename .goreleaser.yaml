@@ -6,6 +6,7 @@ before:
   hooks:
     - go mod tidy
     - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+    - "sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak"
 
 builds:
   - id: workflow-plugin-digitalocean
@@ -31,6 +32,7 @@ archives:
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
       - plugin.json
+      - plugin.contracts.json
 
 checksum:
   name_template: "checksums.txt"

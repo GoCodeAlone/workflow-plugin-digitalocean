@@ -24,6 +24,7 @@ type doPlugin struct{}
 // Compile-time interface assertions.
 var (
 	_ sdk.PluginProvider      = (*doPlugin)(nil)
+	_ sdk.ModuleProvider      = (*doPlugin)(nil) // legacy map-based fallback path
 	_ sdk.TypedModuleProvider = (*doPlugin)(nil)
 	_ sdk.ContractProvider    = (*doPlugin)(nil)
 )
