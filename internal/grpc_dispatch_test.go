@@ -17,6 +17,7 @@ package internal
 // comment starting "REGRESSION(v0.7.5)".
 
 import (
+	"context"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -758,5 +759,86 @@ func TestGRPCDispatch_IaCProvider_Destroy_RoundTripFidelity(t *testing.T) {
 	}
 	if fake.lastRefs[1].Name != "my-cache" {
 		t.Errorf("lastRefs[1].Name = %q, want %q", fake.lastRefs[1].Name, "my-cache")
+	}
+}
+
+// fakeTroubleshootingDriver implements ResourceDriver + Troubleshooter so we
+// can exercise invokeDriverTroubleshoot's serialization path. The default
+// stubResourceDriver does NOT implement Troubleshooter (so the dispatch
+// returns codes.Unimplemented), which is fine for the panic-check tests but
+// not for the round-trip-fidelity test we need below.
+type fakeTroubleshootingDriver struct {
+	stubResourceDriver
+	diags []interfaces.Diagnostic
+	err   error
+}
+
+func (f *fakeTroubleshootingDriver) Troubleshoot(_ context.Context, _ interfaces.ResourceRef, _ string) ([]interfaces.Diagnostic, error) {
+	return f.diags, f.err
+}
+
+// fakeProviderReturningDriver returns a fixed driver from ResourceDriver
+// regardless of which type is asked for. Used to inject a Troubleshooter-
+// implementing driver into the dispatch path without modifying every test
+// fixture.
+type fakeProviderReturningDriver struct {
+	fakeIaCProvider
+	driver interfaces.ResourceDriver
+}
+
+func (f *fakeProviderReturningDriver) ResourceDriver(_ string) (interfaces.ResourceDriver, error) {
+	return f.driver, nil
+}
+
+// REGRESSION(v0.8.5): invokeDriverTroubleshoot must serialize Diagnostic.Detail
+// across the gRPC boundary. A prior version (v0.8.3 + v0.8.4) populated
+// Diagnostic.Detail with deploy-log content + visible failure notes via
+// attachDeployLogs but the dispatch handler omitted "detail" from the response
+// map[string]any — wfctl's remoteResourceDriver read m["detail"] → empty string
+// → emitDiagnostics never printed the Detail body, silently dropping all log
+// content at the gRPC boundary.
+func TestGRPCDispatch_ResourceDriver_Troubleshoot_Detail_RoundTripFidelity(t *testing.T) {
+	wantDetail := "---\nDeploy logs — component \"svc\" (last 200 lines):\nERROR: container exited with code 1\n---"
+	td := &fakeTroubleshootingDriver{
+		diags: []interfaces.Diagnostic{
+			{
+				ID:     "f42b2596",
+				Phase:  "deploy.components.svc.wait",
+				Cause:  "Your deploy failed because your container exited with a non-zero exit code.",
+				Detail: wantDetail,
+			},
+		},
+	}
+	provider := &fakeProviderReturningDriver{driver: td}
+	mi := &doModuleInstance{provider: provider}
+
+	args := grpcRoundTrip(t, map[string]any{
+		"resource_type":   "infra.container_service",
+		"ref_name":        "test-svc",
+		"ref_provider_id": "app-123",
+		"ref_type":        "infra.container_service",
+		"failure_msg":     "health check timed out",
+	})
+	res, err := mi.InvokeMethod("ResourceDriver.Troubleshoot", args)
+	if err != nil {
+		t.Fatalf("Troubleshoot dispatch: %v", err)
+	}
+	rawDiags, ok := res["diagnostics"].([]any)
+	if !ok || len(rawDiags) != 1 {
+		t.Fatalf("diagnostics shape: got %T len=%d, want []any len=1", res["diagnostics"], len(rawDiags))
+	}
+	m, ok := rawDiags[0].(map[string]any)
+	if !ok {
+		t.Fatalf("diag[0]: got %T, want map[string]any", rawDiags[0])
+	}
+	gotDetail, _ := m["detail"].(string)
+	if gotDetail != wantDetail {
+		t.Errorf("Detail field missing or mismatched after gRPC dispatch:\n got=%q\nwant=%q", gotDetail, wantDetail)
+	}
+	if got := m["id"]; got != "f42b2596" {
+		t.Errorf("ID: got %v, want f42b2596", got)
+	}
+	if got := m["cause"]; got == nil {
+		t.Errorf("Cause should be present")
 	}
 }

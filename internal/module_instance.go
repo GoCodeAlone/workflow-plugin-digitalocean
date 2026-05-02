@@ -419,10 +419,11 @@ func (m *doModuleInstance) invokeDriverTroubleshoot(args map[string]any) (map[st
 	diagList := make([]any, len(diags))
 	for i, d := range diags {
 		diagList[i] = map[string]any{
-			"id":    d.ID,
-			"phase": d.Phase,
-			"cause": d.Cause,
-			"at":    d.At.Format(time.RFC3339),
+			"id":     d.ID,
+			"phase":  d.Phase,
+			"cause":  d.Cause,
+			"at":     d.At.Format(time.RFC3339),
+			"detail": d.Detail,
 		}
 	}
 	return map[string]any{"diagnostics": diagList}, nil
