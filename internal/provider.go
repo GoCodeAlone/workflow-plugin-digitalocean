@@ -417,23 +417,30 @@ func (p *DOProvider) Status(ctx context.Context, resources []interfaces.Resource
 	return statuses, nil
 }
 
-// DetectDrift checks for drift between declared state and actual cloud state.
-// For each resource ref it calls the driver's Read and classifies the result:
+// DetectDrift checks for ghost resources (state entries whose cloud counterpart
+// no longer exists) and classifies each ref as Ghost, InSync, or Unknown.
 //
 //   - errors.Is(err, interfaces.ErrResourceNotFound) → DriftClassGhost (Drifted=true;
 //     state has the resource but cloud returns 404). Caller may prune state via
 //     wfctl infra apply --refresh.
 //   - any other Read error → propagate (transient API failure; do NOT classify as drift).
-//   - Read succeeds + DiffResult.NeedsUpdate || NeedsReplace → DriftClassConfig (Drifted=true).
-//   - Read succeeds + no diff → DriftClassInSync (Drifted=false).
+//   - Read succeeds → DriftClassInSync (Drifted=false).
 //   - driver registry lookup fails → DriftClassUnknown (Drifted=true; operator must investigate).
+//
+// Config-drift detection (DriftClassConfig) is out of scope here: the
+// IaCProvider interface receives only refs, not the parsed declared config, so
+// passing an empty ResourceSpec to driver Diff methods causes false positives
+// (e.g. VPC reads ip_range from spec.Config; AppPlatform canonicalExpose
+// defaults to "public" on an empty spec). Use `wfctl infra plan` for
+// config-drift detection — it has access to the full declared spec and surfaces
+// config drift as update actions.
 //
 // Production-safety invariant: only genuine 404s (wrapped with
 // interfaces.ErrResourceNotFound) trigger the ghost path. Rate-limit, auth,
 // or network errors propagate unchanged so callers cannot accidentally prune
 // state on transient failures.
 func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
-	results := make([]interfaces.DriftResult, 0, len(resources))
+	var results []interfaces.DriftResult
 	for _, ref := range resources {
 		d, err := p.ResourceDriver(ref.Type)
 		if err != nil {
@@ -442,12 +449,12 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 				Type:    ref.Type,
 				Drifted: true,
 				Class:   interfaces.DriftClassUnknown,
-				Fields:  []string{"driver-resolution: " + err.Error()},
+				Fields:  []string{"provider: " + err.Error()},
 			})
 			continue
 		}
 
-		out, err := d.Read(ctx, ref)
+		_, err = d.Read(ctx, ref)
 		if err != nil {
 			if errors.Is(err, interfaces.ErrResourceNotFound) {
 				// Ghost in state — cloud reports the resource does not exist.
@@ -466,59 +473,14 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 			return nil, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
 		}
 
-		// Read succeeded — check for config drift via the driver's Diff method.
-		// We pass an empty desired spec (only Name+Type from ref) because DetectDrift
-		// does not have access to the full declared config at this layer. Drivers'
-		// Diff implementations compare against the live state; an empty desired spec
-		// means drivers will report drift only for fields they can compare directly
-		// from the current output vs. their own reference values.
-		//
-		// For richer config-drift detection (desired config from the IaC spec),
-		// callers should use wfctl infra plan which has access to the full config.
-		diff, diffErr := d.Diff(ctx, interfaces.ResourceSpec{Name: ref.Name, Type: ref.Type}, out)
-		if diffErr != nil {
-			// Diff failure is classified as Unknown (operator-investigation-required)
-			// rather than InSync. Silently suppressing a broken-driver signal would
-			// make `wfctl infra drift` show green-all-clear when the Diff impl is
-			// incomplete or erroring. DriftClassUnknown does NOT gate prune semantics
-			// (only DriftClassGhost does), so this is safe in the two-pass apply path.
-			results = append(results, interfaces.DriftResult{
-				Name:    ref.Name,
-				Type:    ref.Type,
-				Drifted: true,
-				Class:   interfaces.DriftClassUnknown,
-				Fields:  []string{"diff: " + diffErr.Error()},
-			})
-			continue
-		}
-
-		if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
-			// Extract changed field paths and build Expected/Actual maps.
-			fields := make([]string, 0, len(diff.Changes))
-			expected := make(map[string]any, len(diff.Changes))
-			actual := make(map[string]any, len(diff.Changes))
-			for _, ch := range diff.Changes {
-				fields = append(fields, ch.Path)
-				expected[ch.Path] = ch.New
-				actual[ch.Path] = ch.Old
-			}
-			results = append(results, interfaces.DriftResult{
-				Name:     ref.Name,
-				Type:     ref.Type,
-				Drifted:  true,
-				Class:    interfaces.DriftClassConfig,
-				Fields:   fields,
-				Expected: expected,
-				Actual:   actual,
-			})
-		} else {
-			results = append(results, interfaces.DriftResult{
-				Name:    ref.Name,
-				Type:    ref.Type,
-				Drifted: false,
-				Class:   interfaces.DriftClassInSync,
-			})
-		}
+		// Read succeeded — classify as InSync. Config-drift detection routes
+		// through `wfctl infra plan` which has access to the declared spec.
+		results = append(results, interfaces.DriftResult{
+			Name:    ref.Name,
+			Type:    ref.Type,
+			Drifted: false,
+			Class:   interfaces.DriftClassInSync,
+		})
 	}
 	return results, nil
 }

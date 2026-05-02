@@ -6,18 +6,16 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
-- **`DOProvider.DetectDrift` real implementation** — Replaces the stub that
-  returned `Drifted: false` for every resource. Now classifies each resource
-  using the canonical `interfaces.DriftClass` enum (workflow v0.20.5):
+- **DetectDrift**: real implementation classifying resources as `Ghost` (cloud
+  reports 404), `InSync` (cloud Read succeeds), or `Unknown` (driver lookup
+  fails). Required for `wfctl infra apply --refresh` ghost-prune (workflow
+  v0.20.5+).
 
   - `DriftClassGhost` (`Drifted: true`): state has the resource, but cloud
     `Read` returns `interfaces.ErrResourceNotFound`. Caller should prune state
     via `wfctl infra apply --refresh`.
-  - `DriftClassConfig` (`Drifted: true`): `Read` succeeds and `Diff` reports
-    `NeedsUpdate || NeedsReplace`. Caller should reconcile via plan/apply.
-    Drifted field paths are recorded in `DriftResult.Fields`; `Expected` and
-    `Actual` maps contain the `New`/`Old` values from `DiffResult.Changes`.
-  - `DriftClassInSync` (`Drifted: false`): state and cloud agree.
+  - `DriftClassInSync` (`Drifted: false`): cloud Read succeeds — state and
+    cloud agree.
   - `DriftClassUnknown` (`Drifted: true`): driver registry lookup failed for
     the ref type (unsupported resource type). Operator must investigate.
 
@@ -27,12 +25,14 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
   go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
 
-  Note: `DriftClassConfig` requires drivers whose `Diff` implementation can
-  compare live state against the declared spec without a separately-supplied
-  desired config. Drivers that cannot do this will fall back to
-  `DriftClassUnknown` (if `Diff` errors) or `DriftClassInSync` (if `Diff`
-  returns nil drift). Use `wfctl infra plan` for richer config-drift detection
-  that has access to the full declared IaC spec.
+- **DetectDrift Config-drift detection**: out of scope for this release. The
+  IaCProvider interface signature receives only refs, not the parsed declared
+  config, so per-driver Diff comparisons cannot be performed safely (VPC reads
+  `ip_range` from spec.Config; AppPlatform `canonicalExpose` defaults to
+  `"public"` on an empty spec — any app with `expose: internal` would report
+  false drift back to `"public"`). Use `wfctl infra plan` for full config-drift
+  detection — it has access to the spec and surfaces config drift as update
+  actions.
 
 - **`drivers.ErrResourceNotFound` aliased to `interfaces.ErrResourceNotFound`**
   — The local sentinel in `app_platform.go` was previously a distinct

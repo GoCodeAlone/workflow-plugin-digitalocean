@@ -11,12 +11,11 @@ import (
 )
 
 // fakeDriverForDrift implements interfaces.ResourceDriver with configurable
-// Read and Diff behavior for DetectDrift unit tests. No live API calls are made.
+// Read behavior for DetectDrift unit tests. No live API calls are made.
+// DetectDrift does not call Diff, so no diffResult/diffErr fields are needed.
 type fakeDriverForDrift struct {
 	readErr    error
 	readOutput *interfaces.ResourceOutput
-	diffResult *interfaces.DiffResult
-	diffErr    error
 }
 
 func (f *fakeDriverForDrift) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
@@ -24,7 +23,9 @@ func (f *fakeDriverForDrift) Read(_ context.Context, _ interfaces.ResourceRef) (
 }
 
 func (f *fakeDriverForDrift) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
-	return f.diffResult, f.diffErr
+	// DetectDrift must never call Diff. If this method is called during a
+	// DetectDrift test, panic so the test fails with a clear message.
+	panic("fakeDriverForDrift.Diff called — DetectDrift must not call Diff (empty-spec causes false positives)")
 }
 
 // Minimal stubs for the remaining ResourceDriver methods.
@@ -81,56 +82,16 @@ func TestDetectDrift_NotFoundReturnsGhost(t *testing.T) {
 	}
 }
 
-// TestDetectDrift_DiffReturnsConfig verifies that when Read succeeds and Diff
-// reports drift (NeedsUpdate=true with Changes), the result is classified as
-// DriftClassConfig.
-func TestDetectDrift_DiffReturnsConfig(t *testing.T) {
+// TestDetectDrift_ReadOkReturnsInSync verifies that when Read succeeds, the result
+// is classified as DriftClassInSync with Drifted=false — even when Diff would
+// return a NeedsUpdate result. DetectDrift must NOT call Diff; config-drift
+// detection is deferred to wfctl infra plan which has access to the declared spec.
+//
+// The fakeDriverForDrift.Diff method panics if called, so any invocation from
+// DetectDrift will cause this test to fail with an explicit panic message.
+func TestDetectDrift_ReadOkReturnsInSync(t *testing.T) {
 	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
 		readOutput: &interfaces.ResourceOutput{Name: "test-vpc", Type: "infra.vpc", Status: "active"},
-		diffResult: &interfaces.DiffResult{
-			NeedsUpdate: true,
-			Changes: []interfaces.FieldChange{
-				{Path: "region", Old: "nyc1", New: "nyc3"},
-			},
-		},
-	})
-	refs := []interfaces.ResourceRef{{Name: "test-vpc", Type: "infra.vpc"}}
-
-	results, err := p.DetectDrift(context.Background(), refs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	r := results[0]
-	if !r.Drifted {
-		t.Errorf("expected Drifted=true for config drift")
-	}
-	if r.Class != interfaces.DriftClassConfig {
-		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassConfig, r.Class)
-	}
-	if len(r.Fields) == 0 {
-		t.Errorf("expected Fields to contain drifted field names, got empty")
-	}
-	found := false
-	for _, f := range r.Fields {
-		if f == "region" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected Fields to contain %q, got %v", "region", r.Fields)
-	}
-}
-
-// TestDetectDrift_NoDiffReturnsInSync verifies that when Read succeeds and Diff
-// reports no drift (NeedsUpdate=false, no Changes), the result is classified as
-// DriftClassInSync with Drifted=false.
-func TestDetectDrift_NoDiffReturnsInSync(t *testing.T) {
-	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
-		readOutput: &interfaces.ResourceOutput{Name: "test-vpc", Type: "infra.vpc", Status: "active"},
-		diffResult: &interfaces.DiffResult{NeedsUpdate: false},
 	})
 	refs := []interfaces.ResourceRef{{Name: "test-vpc", Type: "infra.vpc"}}
 
@@ -143,10 +104,10 @@ func TestDetectDrift_NoDiffReturnsInSync(t *testing.T) {
 	}
 	r := results[0]
 	if r.Drifted {
-		t.Errorf("expected Drifted=false for in-sync resource")
+		t.Errorf("expected Drifted=false: DetectDrift must not call Diff (empty-spec Diff causes false positives)")
 	}
 	if r.Class != interfaces.DriftClassInSync {
-		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassInSync, r.Class)
+		t.Errorf("expected Class=%q, got %q (Diff was called — must not be)", interfaces.DriftClassInSync, r.Class)
 	}
 }
 
@@ -193,52 +154,17 @@ func TestDetectDrift_UnknownTypeReturnsUnknown(t *testing.T) {
 	}
 }
 
-// TestDetectDrift_DiffErrorReturnsUnknown verifies that when Read succeeds but
-// Diff returns an error, the result is classified as DriftClassUnknown with
-// Drifted=true and the error message surfaced in Fields. This ensures broken
-// or incomplete driver Diff implementations are visible to the operator rather
-// than silently masquerading as InSync.
-func TestDetectDrift_DiffErrorReturnsUnknown(t *testing.T) {
-	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
-		readOutput: &interfaces.ResourceOutput{Name: "test-vpc", Type: "infra.vpc", Status: "active"},
-		diffErr:    errors.New("diff failed"),
-	})
-	refs := []interfaces.ResourceRef{{Name: "test-vpc", Type: "infra.vpc"}}
-
-	results, err := p.DetectDrift(context.Background(), refs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	r := results[0]
-	if !r.Drifted {
-		t.Errorf("expected Drifted=true for diff-error path")
-	}
-	if r.Class != interfaces.DriftClassUnknown {
-		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassUnknown, r.Class)
-	}
-	if len(r.Fields) == 0 {
-		t.Errorf("expected Fields to contain the diff error, got empty")
-	}
-	if r.Fields[0] == "" || !containsSubstring(r.Fields[0], "diff failed") {
-		t.Errorf("expected Fields[0] to contain %q, got %q", "diff failed", r.Fields[0])
-	}
-}
-
 // TestDetectDrift_TransientErrorDiscardsPriorResults verifies that when a
 // transient (non-404) Read error occurs mid-loop, DetectDrift returns nil results
 // and the propagated error. Callers must not act on a partial drift picture.
 func TestDetectDrift_TransientErrorDiscardsPriorResults(t *testing.T) {
 	transient := errors.New("DO API rate limit exceeded")
-	// First ref: Read OK, Diff reports no drift → would append an InSync result.
+	// First ref: Read OK → would append an InSync result.
 	// Second ref: Read returns transient error → must discard the first result.
 	p := &DOProvider{
 		drivers: map[string]interfaces.ResourceDriver{
 			"infra.vpc": &fakeDriverForDrift{
 				readOutput: &interfaces.ResourceOutput{Name: "ok-vpc", Type: "infra.vpc", Status: "active"},
-				diffResult: &interfaces.DiffResult{NeedsUpdate: false},
 			},
 			"infra.droplet": &fakeDriverForDrift{
 				readErr: transient,
@@ -260,18 +186,6 @@ func TestDetectDrift_TransientErrorDiscardsPriorResults(t *testing.T) {
 	if results != nil {
 		t.Errorf("expected nil results on transient error, got %v", results)
 	}
-}
-
-// containsSubstring is a simple helper to avoid importing strings in tests.
-func containsSubstring(s, sub string) bool {
-	return len(s) >= len(sub) && func() bool {
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}()
 }
 
 // TestErrResourceNotFound_AliasedToInterfacesSentinel verifies that the local
