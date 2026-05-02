@@ -79,6 +79,9 @@ func (c *stateHealClient) Delete(_ context.Context, appID string) (*godo.Respons
 	c.deleteCalledID = appID
 	return &godo.Response{Response: &http.Response{StatusCode: 204}}, c.deleteErr
 }
+func (c *stateHealClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 
 // ── Create preserves UUID (regression: name must not be used as ProviderID) ──
 

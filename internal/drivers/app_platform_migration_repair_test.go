@@ -1062,6 +1062,9 @@ func (m *migrationRepairBaseAppClient) ListDeployments(_ context.Context, _ stri
 func (m *migrationRepairBaseAppClient) Delete(_ context.Context, _ string) (*godo.Response, error) {
 	return nil, nil
 }
+func (m *migrationRepairBaseAppClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 
 type migrationRepairAppClient struct {
 	app                        *godo.App

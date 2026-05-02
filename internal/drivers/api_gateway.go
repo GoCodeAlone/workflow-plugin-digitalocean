@@ -146,7 +146,10 @@ func (d *APIGatewayDriver) HealthCheck(ctx context.Context, ref interfaces.Resou
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	return appHealthResult(app), nil
+	// APIGatewayDriver's client does not have ListDeployments; pass nil so the
+	// fallback history path is skipped and the function falls through to "no
+	// deployment found" if all three slots are empty.
+	return appHealthResult(ctx, nil, app), nil
 }
 
 func (d *APIGatewayDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {

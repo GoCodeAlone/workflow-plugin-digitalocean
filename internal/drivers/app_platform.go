@@ -3,13 +3,24 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 )
+
+// troubleshootLogTailLines is the number of recent log lines fetched per
+// component for failed deployments. 200 is enough to capture a typical
+// panic/error trace without overwhelming the operator's terminal.
+const troubleshootLogTailLines = 200
 
 // ErrResourceNotFound is returned when a resource cannot be located by name or ID.
 // It is an alias for interfaces.ErrResourceNotFound so that cross-package
@@ -25,6 +36,7 @@ type AppPlatformClient interface {
 	CreateDeployment(ctx context.Context, appID string, req ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error)
 	ListDeployments(ctx context.Context, appID string, opts *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error)
 	Delete(ctx context.Context, appID string) (*godo.Response, error)
+	GetLogs(ctx context.Context, appID, deploymentID, component string, logType godo.AppLogType, follow bool, tailLines int) (*godo.AppLogs, *godo.Response, error)
 }
 
 type appPlatformMigrationRepairClient interface {
@@ -225,8 +237,17 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	return appHealthResult(app), nil
+	listFn := func(ctx context.Context, appID string) ([]*godo.Deployment, error) {
+		deps, _, err := d.client.ListDeployments(ctx, appID, &godo.ListOptions{Page: 1, PerPage: 1})
+		return deps, err
+	}
+	return appHealthResult(ctx, listFn, app), nil
 }
+
+// listDeploymentsFn is a function that returns the most recent deployment(s)
+// for an app. It is passed to appHealthResult so the fallback path can be
+// tested without coupling appHealthResult to a concrete driver type.
+type listDeploymentsFn func(ctx context.Context, appID string) ([]*godo.Deployment, error)
 
 // appHealthResult evaluates all three DO deployment slots in priority order and
 // returns an accurate HealthResult:
@@ -236,8 +257,13 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 //   - InProgressDeployment (building)            → Healthy=false, "deployment in progress: <phase>"
 //   - InProgressDeployment (failed)              → Healthy=false, "deployment failed: <phase>"
 //   - PendingDeployment                          → Healthy=false, "deployment queued"
-//   - none of the above                          → Healthy=false, "no deployment found"
-func appHealthResult(app *godo.App) *interfaces.HealthResult {
+//   - none of the above, with history            → Healthy=false, "latest deployment <id>: <phase>"
+//   - none of the above, no history              → Healthy=false, "no deployment found"
+//
+// listFn is called only when all three slots are nil; it may be nil (in which
+// case the ListDeployments fallback is skipped and "no deployment found" is
+// returned immediately).
+func appHealthResult(ctx context.Context, listFn listDeploymentsFn, app *godo.App) *interfaces.HealthResult {
 	// 1. Active and healthy.
 	if app.ActiveDeployment != nil && app.ActiveDeployment.Phase == godo.DeploymentPhase_Active {
 		return &interfaces.HealthResult{Healthy: true}
@@ -308,8 +334,31 @@ func appHealthResult(app *godo.App) *interfaces.HealthResult {
 		return &interfaces.HealthResult{Healthy: false, Message: "deployment queued"}
 	}
 
-	// 4. No deployment at all (first-deploy not yet kicked off, or app never deployed).
+	// 4. All three slots empty — fall back to deployment history. This catches the
+	// case where DO has removed a failed/superseded deployment from all 3 slots
+	// before the next one starts (e.g. fast-fail at build time leaves the app
+	// with no current deployment but recent history).
+	if listFn != nil {
+		if hist, err := listFn(ctx, app.ID); err == nil && len(hist) > 0 {
+			latest := hist[0]
+			return &interfaces.HealthResult{
+				Healthy: false,
+				Message: fmt.Sprintf("latest deployment %s: %s", shortDepID(latest.ID), latest.Phase),
+			}
+		}
+	}
+
+	// No deployment slot AND no history available.
 	return &interfaces.HealthResult{Healthy: false, Message: "no deployment found"}
+}
+
+// shortDepID truncates a deployment UUID to its first 8 characters for
+// log readability (e.g. "f8b6200c" instead of the full UUID).
+func shortDepID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 func (d *AppPlatformDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, replicas int) (*interfaces.ResourceOutput, error) {
@@ -342,6 +391,12 @@ const troubleshootMaxDeployments = 5
 // Pending, Active) plus recent historical deployments, prioritises them, and
 // returns per-deployment Diagnostics so wfctl can render a structured failure
 // block on health-check timeout without requiring a DO console visit.
+//
+// For each candidate deployment in a terminal error phase (Error, Canceled,
+// Superseded), Troubleshoot fetches deploy logs via GetLogs and appends the
+// last troubleshootLogTailLines of output per component to the Diagnostic.Detail.
+// Log fetch failures are best-effort: the Diagnostic is still produced without
+// the log block when GetLogs or the HTTP fetch fails.
 func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.ResourceRef, _ string) ([]interfaces.Diagnostic, error) {
 	if ref.ProviderID == "" {
 		return nil, nil
@@ -360,11 +415,182 @@ func (d *AppPlatformDriver) Troubleshoot(ctx context.Context, ref interfaces.Res
 	}
 	var out []interfaces.Diagnostic
 	for _, dep := range candidates {
-		if diag := buildDiagnosticFor(dep); diag != nil {
-			out = append(out, *diag)
+		diag := buildDiagnosticFor(dep)
+		if diag == nil {
+			continue
 		}
+		// Attach deploy/build logs for terminal error phases.
+		if isTerminalErrorPhase(dep.Phase) {
+			d.attachDeployLogs(ctx, ref.ProviderID, dep, diag)
+		}
+		out = append(out, *diag)
 	}
 	return out, nil
+}
+
+// isTerminalErrorPhase reports whether a deployment phase indicates a terminal
+// failure for which fetching logs is useful.
+func isTerminalErrorPhase(phase godo.DeploymentPhase) bool {
+	switch phase {
+	case godo.DeploymentPhase_Error,
+		godo.DeploymentPhase_Canceled,
+		godo.DeploymentPhase_Superseded:
+		return true
+	}
+	return false
+}
+
+// attachDeployLogs fetches DO deploy (or build) logs for a failed deployment
+// and appends delimited log blocks to diag.Detail. One block per component.
+// Failures are best-effort: errors are logged to stderr but diag is never
+// withheld.
+func (d *AppPlatformDriver) attachDeployLogs(ctx context.Context, appID string, dep *godo.Deployment, diag *interfaces.Diagnostic) {
+	logType := chooseLogType(dep)
+	components := deploymentComponents(dep)
+
+	for _, comp := range components {
+		logs, _, err := d.client.GetLogs(ctx, appID, dep.ID, comp, logType, false, troubleshootLogTailLines)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "troubleshoot: GetLogs app=%s dep=%s component=%q: %v\n", appID, dep.ID, comp, err)
+			continue
+		}
+		if logs == nil || len(logs.HistoricURLs) == 0 {
+			continue
+		}
+		tail, err := fetchLogTail(ctx, logs.HistoricURLs, troubleshootLogTailLines)
+		if err != nil {
+			// Don't print err verbatim — net/http error strings embed the
+			// presigned URL, leaking AWS-style signed credentials to the
+			// operator's terminal log. Surface only the redacted shape.
+			fmt.Fprintf(os.Stderr, "troubleshoot: log HTTP fetch app=%s dep=%s component=%q: %s (presigned URL not logged)\n", appID, dep.ID, comp, redactURLError(err))
+			continue
+		}
+		if tail == "" {
+			continue
+		}
+		label := comp
+		if label == "" {
+			label = "<all>"
+		}
+		header := "Deploy logs"
+		if logType == godo.AppLogTypeBuild {
+			header = "Build logs"
+		}
+		diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q (last %d lines):\n%s\n---", header, label, troubleshootLogTailLines, tail)
+	}
+}
+
+// redactURLError returns an error string with any embedded URL replaced by
+// "<redacted-url>". DO's GetLogs returns presigned HistoricURLs that embed
+// signed credentials; net/http errors typically include the full request URL,
+// so verbatim logging would leak short-lived creds to the operator's log.
+func redactURLError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// url.Error.Error() = "Op URL: Err". Hide the URL.
+		return fmt.Sprintf("%s <redacted-url>: %v", ue.Op, ue.Err)
+	}
+	return err.Error()
+}
+
+// chooseLogType returns AppLogTypeBuild when the deployment's Progress
+// indicates a build-phase failure (a SummaryStep named "build" has status
+// Error), and AppLogTypeDeploy otherwise. Defaults to AppLogTypeDeploy when
+// Progress is nil or no build step error is found.
+func chooseLogType(dep *godo.Deployment) godo.AppLogType {
+	if dep.Progress == nil {
+		return godo.AppLogTypeDeploy
+	}
+	for _, step := range dep.Progress.SummarySteps {
+		if step.Status == godo.DeploymentProgressStepStatus_Error &&
+			strings.EqualFold(step.Name, "build") {
+			return godo.AppLogTypeBuild
+		}
+	}
+	return godo.AppLogTypeDeploy
+}
+
+// deploymentComponents returns the list of component names to fetch logs for.
+// Components are collected from Services, Jobs, Workers, and Functions (if the
+// AppSpec is present). If the spec is nil or all four arrays are empty, a
+// single empty string is returned — the DO API treats component="" as "all
+// components aggregated".
+func deploymentComponents(dep *godo.Deployment) []string {
+	if dep.Spec == nil {
+		// No spec available — fall back to aggregate ("" = all components).
+		return []string{""}
+	}
+	var names []string
+	for _, svc := range dep.Spec.Services {
+		if svc != nil && svc.Name != "" {
+			names = append(names, svc.Name)
+		}
+	}
+	for _, job := range dep.Spec.Jobs {
+		if job != nil && job.Name != "" {
+			names = append(names, job.Name)
+		}
+	}
+	for _, w := range dep.Spec.Workers {
+		if w != nil && w.Name != "" {
+			names = append(names, w.Name)
+		}
+	}
+	for _, fn := range dep.Spec.Functions {
+		if fn != nil && fn.Name != "" {
+			names = append(names, fn.Name)
+		}
+	}
+	if len(names) == 0 {
+		// Spec present but no components enumerated — fall back to aggregate.
+		return []string{""}
+	}
+	return names
+}
+
+// fetchLogTail fetches log content from the most recent historic URL (index 0)
+// and returns the last tailLines lines. HistoricURLs is ordered newest-first
+// per the DO API. A 10 MB cap prevents pathological responses from exhausting
+// memory. The local 30s client timeout is a defense in depth: callers
+// typically pass a ctx with a deadline, but if a future caller passes
+// context.Background, http.DefaultClient (no timeout) would let the fetch
+// hang indefinitely on a slow presigned URL.
+var fetchLogClient = &http.Client{Timeout: 30 * time.Second}
+
+func fetchLogTail(ctx context.Context, urls []string, tailLines int) (string, error) {
+	if len(urls) == 0 {
+		return "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", urls[0], nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := fetchLogClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("log fetch HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10 MB cap
+	if err != nil {
+		return "", err
+	}
+	return tailString(string(body), tailLines), nil
+}
+
+// tailString returns the last n lines of s. If s has fewer than n lines, the
+// entire string is returned.
+func tailString(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 // pickTroubleshootDeployments returns up to 3 candidate deployments in priority
