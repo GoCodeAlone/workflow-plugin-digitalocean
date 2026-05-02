@@ -16,7 +16,26 @@ type RegistryClient interface {
 }
 
 // RegistryDriver manages the DigitalOcean Container Registry (infra.registry).
-// Note: DOCR supports one registry per account; Create is idempotent.
+//
+// DOCR is account-level: Basic plan supports one registry per account,
+// Professional supports up to ten. A registry can host many repositories,
+// so multi-project consolidation under one registry is the intended pattern
+// on Basic.
+//
+// Two deployment topologies are supported:
+//   - Owned: declare digitalocean.container_registry as an IaC module; this
+//     driver manages create/update/destroy. Use on single-project accounts
+//     or on Professional with per-project registries.
+//   - Shared: omit the module declaration and reference only the path under
+//     ci.registries; bootstrap the registry once out-of-band. Use when
+//     multiple projects share a Basic-plan account.
+//
+// See docs/container-registry.md for the canonical pattern, including
+// migration guidance and the deploy-time verification snippet for Shared
+// consumers. Picking the wrong topology produces a peer-deploy race that
+// only surfaces when the second project tries to create the registry.
+//
+// Create is idempotent against the DO API for same name + region.
 type RegistryDriver struct {
 	client RegistryClient
 }
