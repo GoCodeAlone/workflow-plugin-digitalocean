@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -10,6 +11,22 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 )
+
+// ErrAppNotFound is returned by resolveAppNamesMap when a requested app name
+// is absent from the DO Apps.List result. It wraps ErrResourceNotFound so
+// callers using errors.Is(err, ErrResourceNotFound) continue to work; the
+// more specific sentinel is used internally to distinguish "app not yet
+// created" from API-level failures (rate-limit, transient, auth) that must
+// NOT trigger the deferred-update path.
+var ErrAppNotFound = fmt.Errorf("trusted_sources app: %w", ErrResourceNotFound)
+
+// deferredFirewallUpdate holds the context needed for a post-apply firewall
+// update: the DO database UUID and the full desired ResourceSpec (including
+// all trusted_sources entries, both resolvable and deferred).
+type deferredFirewallUpdate struct {
+	providerID string
+	spec       interfaces.ResourceSpec
+}
 
 // DatabaseClient is the godo Databases interface (for mocking).
 type DatabaseClient interface {
@@ -34,6 +51,12 @@ type DatabaseDriver struct {
 	client     DatabaseClient
 	appsClient appNameLister // optional; used to resolve type=app trusted_source names to UUIDs
 	region     string
+
+	// pendingFirewallUpdates accumulates deferred trusted_sources updates that
+	// could not be applied at create/update time because referenced apps did not
+	// exist yet. DOProvider.Apply calls FlushDeferredUpdates after all plan
+	// actions complete so the full rule set is applied once apps are provisioned.
+	pendingFirewallUpdates []deferredFirewallUpdate
 }
 
 // NewDatabaseDriver creates a DatabaseDriver backed by a real godo client.
@@ -65,8 +88,20 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
 
 	createRules, err := d.buildCreateFirewallRules(ctx, spec.Config)
+	deferred := false
 	if err != nil {
-		return nil, fmt.Errorf("database create %q: %w", spec.Name, err)
+		if !errors.Is(err, ErrAppNotFound) {
+			// Real API failure or config error — propagate immediately.
+			return nil, fmt.Errorf("database create %q: %w", spec.Name, err)
+		}
+		// type=app trusted_source(s) reference not-yet-existing app(s) — create
+		// DB without app-based rules now and queue a deferred firewall update for
+		// the post-apply pass (after all plan creates have completed and apps exist).
+		createRules, err = d.buildCreateFirewallRulesExcludingApps(spec.Config)
+		if err != nil {
+			return nil, fmt.Errorf("database create %q: build partial rules: %w", spec.Name, err)
+		}
+		deferred = true
 	}
 
 	req := &godo.DatabaseCreateRequest{
@@ -86,6 +121,14 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	if db == nil || db.ID == "" {
 		return nil, fmt.Errorf("database create %q: API returned database with empty ID", spec.Name)
 	}
+
+	if deferred {
+		d.pendingFirewallUpdates = append(d.pendingFirewallUpdates, deferredFirewallUpdate{
+			providerID: db.ID,
+			spec:       spec,
+		})
+	}
+
 	return dbOutput(db), nil
 }
 
@@ -154,8 +197,20 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	// A later UpdateFirewallRules call can still fail after Resize due to API/service
 	// errors, so this reduces—but does not eliminate—the chance of partial applies.
 	fwRules, fwPresent, fwErr := d.buildUpdateFirewallRules(ctx, spec.Config)
+	deferred := false
 	if fwErr != nil {
-		return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
+		if !errors.Is(fwErr, ErrAppNotFound) {
+			// Real API failure or config error — propagate immediately.
+			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, fwErr)
+		}
+		// type=app trusted_source(s) reference not-yet-existing app(s) — apply the
+		// resolvable subset of rules now and queue the full spec for a deferred
+		// post-apply update.
+		fwRules, fwPresent, fwErr = d.buildUpdateFirewallRulesExcludingApps(spec.Config)
+		if fwErr != nil {
+			return nil, fmt.Errorf("database update %q: build partial rules: %w", ref.Name, fwErr)
+		}
+		deferred = true
 	}
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
 	numNodes, _ := intFromConfig(spec.Config, "num_nodes", 1)
@@ -175,6 +230,12 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 		if err != nil {
 			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
 		}
+	}
+	if deferred {
+		d.pendingFirewallUpdates = append(d.pendingFirewallUpdates, deferredFirewallUpdate{
+			providerID: providerID,
+			spec:       spec,
+		})
 	}
 	ref.ProviderID = providerID // pass healed ID to Read
 	return d.Read(ctx, ref)
@@ -326,8 +387,11 @@ func (d *DatabaseDriver) resolveAppNamesMap(ctx context.Context, raw []any) (map
 	for i, name := range missing {
 		quotedMissing[i] = fmt.Sprintf("%q", name)
 	}
+	// Use ErrAppNotFound (not ErrResourceNotFound directly) so callers can
+	// distinguish "app not yet created" from API-level failures. ErrAppNotFound
+	// wraps ErrResourceNotFound so errors.Is(err, ErrResourceNotFound) still works.
 	return nil, fmt.Errorf("trusted_sources app(s) %s: %w",
-		strings.Join(quotedMissing, ", "), ErrResourceNotFound)
+		strings.Join(quotedMissing, ", "), ErrAppNotFound)
 }
 
 // buildCreateFirewallRules converts "trusted_sources" config to
@@ -511,3 +575,109 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 }
 
 func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
+
+// buildCreateFirewallRulesExcludingApps builds DatabaseCreateFirewallRules from
+// the "trusted_sources" config, omitting all type=app entries. Used when
+// buildCreateFirewallRules returns ErrAppNotFound so the DB can be created with
+// the resolvable subset of rules while app-based rules are deferred.
+func (d *DatabaseDriver) buildCreateFirewallRulesExcludingApps(cfg map[string]any) ([]*godo.DatabaseCreateFirewallRule, error) {
+	rawVal, exists := cfg["trusted_sources"]
+	if !exists {
+		return nil, nil
+	}
+	raw, ok := rawVal.([]any)
+	if !ok {
+		return nil, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", rawVal)
+	}
+	rules := make([]*godo.DatabaseCreateFirewallRule, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" || ruleType == "app" {
+			continue // skip app-type entries; they will be applied in the deferred pass
+		}
+		rules = append(rules, &godo.DatabaseCreateFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules, nil
+}
+
+// buildUpdateFirewallRulesExcludingApps builds DatabaseFirewallRules from the
+// "trusted_sources" config, omitting all type=app entries. Used when
+// buildUpdateFirewallRules returns ErrAppNotFound so the partial rule set can
+// be applied immediately while app-based rules are deferred.
+func (d *DatabaseDriver) buildUpdateFirewallRulesExcludingApps(cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool, error) {
+	raw, ok := cfg["trusted_sources"]
+	if !ok {
+		return nil, false, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, true, fmt.Errorf("trusted_sources: expected a list of rule objects, got %T; check your config syntax (use a YAML list, not a scalar)", raw)
+	}
+	rules := make([]*godo.DatabaseFirewallRule, 0, len(list))
+	for _, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ruleType := strFromConfig(m, "type", "")
+		ruleValue := strFromConfig(m, "value", "")
+		if ruleType == "" || ruleValue == "" || ruleType == "app" {
+			continue // skip app-type entries; they will be applied in the deferred pass
+		}
+		rules = append(rules, &godo.DatabaseFirewallRule{
+			Type:  ruleType,
+			Value: ruleValue,
+		})
+	}
+	return rules, true, nil
+}
+
+// HasDeferredUpdates reports whether the driver has pending firewall updates
+// queued from Create or Update calls where type=app trusted_sources entries
+// referenced apps that did not exist yet. DOProvider.Apply checks this after
+// the main action loop and calls FlushDeferredUpdates when true.
+func (d *DatabaseDriver) HasDeferredUpdates() bool {
+	return len(d.pendingFirewallUpdates) > 0
+}
+
+// FlushDeferredUpdates applies all pending firewall updates that were deferred
+// during Create/Update because referenced app(s) did not exist yet. Each entry
+// re-resolves its type=app trusted_sources entries (app must now exist) and
+// calls UpdateFirewallRules with the full rule set. Returns an error if any
+// update fails — the caller (DOProvider.Apply) appends these to result.Errors
+// so the failure is visible to the operator.
+//
+// The pending queue is cleared after the flush regardless of whether all
+// updates succeeded, preventing duplicate retries on a subsequent call.
+func (d *DatabaseDriver) FlushDeferredUpdates(ctx context.Context) error {
+	if len(d.pendingFirewallUpdates) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, pending := range d.pendingFirewallUpdates {
+		fwRules, _, err := d.buildUpdateFirewallRules(ctx, pending.spec.Config)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("deferred firewall update %q: resolve rules: %v", pending.spec.Name, err))
+			continue
+		}
+		_, err = d.client.UpdateFirewallRules(ctx, pending.providerID, &godo.DatabaseUpdateFirewallRulesRequest{
+			Rules: fwRules,
+		})
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("deferred firewall update %q: %v", pending.spec.Name, WrapGodoError(err)))
+		}
+	}
+	d.pendingFirewallUpdates = nil // clear queue after flush
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
