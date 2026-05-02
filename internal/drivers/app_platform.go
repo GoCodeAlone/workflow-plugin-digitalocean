@@ -3,7 +3,6 @@ package drivers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -13,8 +12,9 @@ import (
 )
 
 // ErrResourceNotFound is returned when a resource cannot be located by name or ID.
-// It is intended to be used with errors.Is for sentinel matching.
-var ErrResourceNotFound = errors.New("resource not found")
+// It is an alias for interfaces.ErrResourceNotFound so that cross-package
+// errors.Is checks work for the DetectDrift ghost-classification path.
+var ErrResourceNotFound = interfaces.ErrResourceNotFound
 
 // AppPlatformClient is the godo App interface used by AppPlatformDriver (for mocking).
 type AppPlatformClient interface {

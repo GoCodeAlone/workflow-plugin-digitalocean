@@ -417,11 +417,70 @@ func (p *DOProvider) Status(ctx context.Context, resources []interfaces.Resource
 	return statuses, nil
 }
 
-// DetectDrift checks for drift between declared and actual resource state.
-func (p *DOProvider) DetectDrift(_ context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
+// DetectDrift checks for ghost resources (state entries whose cloud counterpart
+// no longer exists) and classifies each ref as Ghost, InSync, or Unknown.
+//
+//   - errors.Is(err, interfaces.ErrResourceNotFound) → DriftClassGhost (Drifted=true;
+//     state has the resource but cloud returns 404). Caller may prune state via
+//     wfctl infra apply --refresh.
+//   - any other Read error → propagate (transient API failure; do NOT classify as drift).
+//   - Read succeeds → DriftClassInSync (Drifted=false).
+//   - driver registry lookup fails → DriftClassUnknown (Drifted=true; operator must investigate).
+//
+// Config-drift detection (DriftClassConfig) is out of scope here: the
+// IaCProvider interface receives only refs, not the parsed declared config, so
+// passing an empty ResourceSpec to driver Diff methods causes false positives
+// (e.g. VPC reads ip_range from spec.Config; AppPlatform canonicalExpose
+// defaults to "public" on an empty spec). Use `wfctl infra plan` for
+// config-drift detection — it has access to the full declared spec and surfaces
+// config drift as update actions.
+//
+// Production-safety invariant: only genuine 404s (wrapped with
+// interfaces.ErrResourceNotFound) trigger the ghost path. Rate-limit, auth,
+// or network errors propagate unchanged so callers cannot accidentally prune
+// state on transient failures.
+func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
 	var results []interfaces.DriftResult
 	for _, ref := range resources {
-		results = append(results, interfaces.DriftResult{Name: ref.Name, Type: ref.Type, Drifted: false})
+		d, err := p.ResourceDriver(ref.Type)
+		if err != nil {
+			results = append(results, interfaces.DriftResult{
+				Name:    ref.Name,
+				Type:    ref.Type,
+				Drifted: true,
+				Class:   interfaces.DriftClassUnknown,
+				Fields:  []string{"provider: " + err.Error()},
+			})
+			continue
+		}
+
+		_, err = d.Read(ctx, ref)
+		if err != nil {
+			if errors.Is(err, interfaces.ErrResourceNotFound) {
+				// Ghost in state — cloud reports the resource does not exist.
+				results = append(results, interfaces.DriftResult{
+					Name:    ref.Name,
+					Type:    ref.Type,
+					Drifted: true,
+					Class:   interfaces.DriftClassGhost,
+				})
+				continue
+			}
+			// Transient or unknown error — discard accumulated results and propagate.
+			// Returning partial results is a footgun: callers that use both results
+			// and err act on an incomplete drift picture, which may cause incorrect
+			// state-prune decisions.
+			return nil, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
+		}
+
+		// Read succeeded — classify as InSync. Config-drift detection routes
+		// through `wfctl infra plan` which has access to the declared spec.
+		results = append(results, interfaces.DriftResult{
+			Name:    ref.Name,
+			Type:    ref.Type,
+			Drifted: false,
+			Class:   interfaces.DriftClassInSync,
+		})
 	}
 	return results, nil
 }

@@ -6,6 +6,40 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
+- **DetectDrift**: real implementation classifying resources as `Ghost` (cloud
+  reports 404), `InSync` (cloud Read succeeds), or `Unknown` (driver lookup
+  fails). Required for `wfctl infra apply --refresh` ghost-prune (workflow
+  v0.20.5+).
+
+  - `DriftClassGhost` (`Drifted: true`): state has the resource, but cloud
+    `Read` returns `interfaces.ErrResourceNotFound`. Caller should prune state
+    via `wfctl infra apply --refresh`.
+  - `DriftClassInSync` (`Drifted: false`): cloud Read succeeds — state and
+    cloud agree.
+  - `DriftClassUnknown` (`Drifted: true`): driver registry lookup failed for
+    the ref type (unsupported resource type). Operator must investigate.
+
+  Production-safety invariant: transient API errors (rate-limit, auth,
+  network) propagate and do NOT trigger state-prune semantics; only genuine
+  `interfaces.ErrResourceNotFound` (HTTP 404) gates the ghost path.
+
+  go.mod bumped to workflow v0.20.5 for `interfaces.DriftClass*` constants.
+
+- **DetectDrift Config-drift detection**: out of scope for this release. The
+  IaCProvider interface signature receives only refs, not the parsed declared
+  config, so per-driver Diff comparisons cannot be performed safely (VPC reads
+  `ip_range` from spec.Config; AppPlatform `canonicalExpose` defaults to
+  `"public"` on an empty spec — any app with `expose: internal` would report
+  false drift back to `"public"`). Use `wfctl infra plan` for full config-drift
+  detection — it has access to the spec and surfaces config drift as update
+  actions.
+
+- **`drivers.ErrResourceNotFound` aliased to `interfaces.ErrResourceNotFound`**
+  — The local sentinel in `app_platform.go` was previously a distinct
+  `errors.New(...)` value; cross-package `errors.Is(err, interfaces.ErrResourceNotFound)`
+  would silently miss it. Now aliased so all driver list-scan not-found returns
+  satisfy the canonical sentinel for the ghost-detection path.
+
 - **Deferred `trusted_sources` update for `infra.database`** — When a
   `trusted_sources` entry of `type: app` references an app that does not yet
   exist (first-deploy ordering), `DatabaseDriver.Create` and `.Update` no
