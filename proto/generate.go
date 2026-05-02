@@ -1,3 +1,3 @@
 package proto
 
-//go:generate protoc --go_out=. --go_opt=paths=source_relative digitalocean.proto
+//go:generate sh -c "cd .. && protoc --go_out=. --go_opt=paths=source_relative proto/digitalocean.proto"

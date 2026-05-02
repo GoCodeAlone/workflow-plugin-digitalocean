@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,10 +139,24 @@ func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), manifestData, 0o644); err != nil {
 		t.Fatalf("write temp plugin.json: %v", err)
 	}
+	contractsData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.contracts.json"))
+	if err != nil {
+		t.Fatalf("read plugin.contracts.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.contracts.json"), contractsData, 0o644); err != nil {
+		t.Fatalf("write temp plugin.contracts.json: %v", err)
+	}
+
+	validate := exec.Command("go", "run", "github.com/GoCodeAlone/workflow/cmd/wfctl@"+workflowModuleVersion(t, repoRoot), "plugin", "validate", "--file", filepath.Join(pluginDir, "plugin.json"), "--strict-contracts")
+	validate.Dir = repoRoot
+	validate.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
+	if output, err := validate.CombinedOutput(); err != nil {
+		t.Fatalf("strict validate staged plugin package: %v\n%s", err, output)
+	}
 
 	cmd := exec.Command("go", "build", "-o", filepath.Join(pluginDir, pluginName), "./cmd/plugin")
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GOWORK=off")
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin binary: %v\n%s", err, output)
 	}
@@ -271,6 +286,18 @@ func testRepoRoot(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Dir(filepath.Dir(file))
+}
+
+func workflowModuleVersion(t *testing.T, repoRoot string) string {
+	t.Helper()
+	cmd := exec.Command("go", "list", "-m", "-f", "{{.Version}}", "github.com/GoCodeAlone/workflow")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("resolve workflow module version: %v", err)
+	}
+	return string(bytes.TrimSpace(output))
 }
 
 // TestPlugin_TypedModuleTypes verifies the typed module type list.
