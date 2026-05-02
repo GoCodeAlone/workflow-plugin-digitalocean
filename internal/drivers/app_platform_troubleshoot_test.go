@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +23,8 @@ type stubAppClient struct {
 	appErr     error
 	deps       []*godo.Deployment
 	depsErr    error
+	logs       *godo.AppLogs
+	logsErr    error
 }
 
 func (s *stubAppClient) Create(_ context.Context, _ *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
@@ -45,7 +49,7 @@ func (s *stubAppClient) Delete(_ context.Context, _ string) (*godo.Response, err
 	return nil, errors.New("not implemented in stub")
 }
 func (s *stubAppClient) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
-	return nil, nil, nil
+	return s.logs, nil, s.logsErr
 }
 
 // ── Troubleshoot tests ─────────────────────────────────────────────────────
@@ -501,5 +505,157 @@ func TestDeploymentCauseAndPhase_LeafStepFallback_NoCause(t *testing.T) {
 	}
 	if phase != string(godo.DeploymentPhase_Error) {
 		t.Errorf("expected phase from dep.Phase, got %q", phase)
+	}
+}
+
+// ── deploymentComponents tests ─────────────────────────────────────────────
+
+func TestDeploymentComponents_PrefersDeploymentLevelOverSpec(t *testing.T) {
+	dep := &godo.Deployment{
+		// Deployment-level arrays (populated by ListDeployments).
+		Services: []*godo.DeploymentService{{Name: "svc1"}},
+		// Spec-level arrays (populated by richer GetDeployment).
+		Spec: &godo.AppSpec{
+			Services: []*godo.AppServiceSpec{{Name: "spec-svc1"}},
+		},
+	}
+	got := deploymentComponents(dep)
+	if len(got) != 1 || got[0] != "svc1" {
+		t.Errorf("expected [\"svc1\"] (deployment-level wins), got %v", got)
+	}
+}
+
+func TestDeploymentComponents_FallsBackToSpecWhenDeploymentLevelEmpty(t *testing.T) {
+	dep := &godo.Deployment{
+		// No deployment-level arrays.
+		Spec: &godo.AppSpec{
+			Services: []*godo.AppServiceSpec{{Name: "spec-svc"}},
+		},
+	}
+	got := deploymentComponents(dep)
+	if len(got) != 1 || got[0] != "spec-svc" {
+		t.Errorf("expected [\"spec-svc\"] (spec fallback), got %v", got)
+	}
+}
+
+func TestDeploymentComponents_FallsBackToAggregateWhenAllEmpty(t *testing.T) {
+	dep := &godo.Deployment{}
+	got := deploymentComponents(dep)
+	if len(got) != 1 || got[0] != "" {
+		t.Errorf("expected [\"\"] (aggregate fallback), got %v", got)
+	}
+}
+
+func TestDeploymentComponents_IncludesStaticSitesDeploymentLevel(t *testing.T) {
+	dep := &godo.Deployment{
+		StaticSites: []*godo.DeploymentStaticSite{{Name: "static1"}},
+	}
+	got := deploymentComponents(dep)
+	if len(got) != 1 || got[0] != "static1" {
+		t.Errorf("expected [\"static1\"] from StaticSites, got %v", got)
+	}
+}
+
+// ── attachDeployLogs visibility tests ─────────────────────────────────────
+
+// errorDeployment is a helper that builds a minimal ERROR-phase deployment
+// with one service component (deployment-level) so attachDeployLogs runs.
+func errorDeployment(serviceName string) *godo.Deployment {
+	return &godo.Deployment{
+		ID:    "dep-test",
+		Phase: godo.DeploymentPhase_Error,
+		Services: []*godo.DeploymentService{
+			{Name: serviceName},
+		},
+	}
+}
+
+func TestAttachDeployLogs_VisibleErrorWhenGetLogsErrors(t *testing.T) {
+	dep := errorDeployment("web")
+	diag := &interfaces.Diagnostic{ID: dep.ID}
+
+	stub := &stubAppClient{logsErr: errors.New("DO API 503")}
+	d := NewAppPlatformDriverWithClient(stub, "nyc3")
+	d.attachDeployLogs(context.Background(), "app-id", dep, diag)
+
+	if !strings.Contains(diag.Detail, "log fetch unavailable") {
+		t.Errorf("Detail should contain 'log fetch unavailable'; got: %q", diag.Detail)
+	}
+	if !strings.Contains(diag.Detail, "GetLogs API error") {
+		t.Errorf("Detail should contain 'GetLogs API error'; got: %q", diag.Detail)
+	}
+}
+
+func TestAttachDeployLogs_VisibleNoteWhenEmptyHistoricURLs(t *testing.T) {
+	dep := errorDeployment("web")
+	diag := &interfaces.Diagnostic{ID: dep.ID}
+
+	stub := &stubAppClient{logs: &godo.AppLogs{HistoricURLs: nil}}
+	d := NewAppPlatformDriverWithClient(stub, "nyc3")
+	d.attachDeployLogs(context.Background(), "app-id", dep, diag)
+
+	if !strings.Contains(diag.Detail, "no historic logs returned") {
+		t.Errorf("Detail should contain 'no historic logs returned'; got: %q", diag.Detail)
+	}
+}
+
+func TestAttachDeployLogs_VisibleErrorWhenHTTPFetchErrors(t *testing.T) {
+	// Serve a 500 to trigger fetchLogTail error path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dep := errorDeployment("web")
+	diag := &interfaces.Diagnostic{ID: dep.ID}
+
+	stub := &stubAppClient{logs: &godo.AppLogs{HistoricURLs: []string{srv.URL}}}
+	d := NewAppPlatformDriverWithClient(stub, "nyc3")
+	d.attachDeployLogs(context.Background(), "app-id", dep, diag)
+
+	if !strings.Contains(diag.Detail, "log fetch failed") {
+		t.Errorf("Detail should contain 'log fetch failed'; got: %q", diag.Detail)
+	}
+}
+
+func TestAttachDeployLogs_VisibleNoteWhenEmptyBody(t *testing.T) {
+	// Return 200 OK with empty body.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dep := errorDeployment("web")
+	diag := &interfaces.Diagnostic{ID: dep.ID}
+
+	stub := &stubAppClient{logs: &godo.AppLogs{HistoricURLs: []string{srv.URL}}}
+	d := NewAppPlatformDriverWithClient(stub, "nyc3")
+	d.attachDeployLogs(context.Background(), "app-id", dep, diag)
+
+	if !strings.Contains(diag.Detail, "empty body") {
+		t.Errorf("Detail should contain 'empty body'; got: %q", diag.Detail)
+	}
+}
+
+func TestAttachDeployLogs_HappyPath_AppendsLogBlock(t *testing.T) {
+	const logBody = "line1\nline2\nError: something broke\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(logBody))
+	}))
+	defer srv.Close()
+
+	dep := errorDeployment("web")
+	diag := &interfaces.Diagnostic{ID: dep.ID}
+
+	stub := &stubAppClient{logs: &godo.AppLogs{HistoricURLs: []string{srv.URL}}}
+	d := NewAppPlatformDriverWithClient(stub, "nyc3")
+	d.attachDeployLogs(context.Background(), "app-id", dep, diag)
+
+	if !strings.Contains(diag.Detail, "Deploy logs") {
+		t.Errorf("Detail should contain 'Deploy logs' header; got: %q", diag.Detail)
+	}
+	if !strings.Contains(diag.Detail, "Error: something broke") {
+		t.Errorf("Detail should contain log content; got: %q", diag.Detail)
 	}
 }

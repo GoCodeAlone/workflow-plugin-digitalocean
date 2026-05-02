@@ -442,19 +442,34 @@ func isTerminalErrorPhase(phase godo.DeploymentPhase) bool {
 
 // attachDeployLogs fetches DO deploy (or build) logs for a failed deployment
 // and appends delimited log blocks to diag.Detail. One block per component.
-// Failures are best-effort: errors are logged to stderr but diag is never
-// withheld.
+// All four failure modes (GetLogs API error, HTTP-fetch error, empty
+// HistoricURLs, empty body) also append a brief failure note to diag.Detail so
+// the cause is visible in operator-facing output. The existing stderr writes
+// are preserved for plugin-debug but are captured at TRACE level by
+// hashicorp/go-plugin and not surfaced to operators by default.
 func (d *AppPlatformDriver) attachDeployLogs(ctx context.Context, appID string, dep *godo.Deployment, diag *interfaces.Diagnostic) {
 	logType := chooseLogType(dep)
 	components := deploymentComponents(dep)
 
+	header := "Deploy logs"
+	if logType == godo.AppLogTypeBuild {
+		header = "Build logs"
+	}
+
 	for _, comp := range components {
+		label := comp
+		if label == "" {
+			label = "<all>"
+		}
+
 		logs, _, err := d.client.GetLogs(ctx, appID, dep.ID, comp, logType, false, troubleshootLogTailLines)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "troubleshoot: GetLogs app=%s dep=%s component=%q: %v\n", appID, dep.ID, comp, err)
+			diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q: log fetch unavailable (GetLogs API error: %v)\n---", header, label, err)
 			continue
 		}
 		if logs == nil || len(logs.HistoricURLs) == 0 {
+			diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q: no historic logs returned by DO API\n---", header, label)
 			continue
 		}
 		tail, err := fetchLogTail(ctx, logs.HistoricURLs, troubleshootLogTailLines)
@@ -463,18 +478,12 @@ func (d *AppPlatformDriver) attachDeployLogs(ctx context.Context, appID string, 
 			// presigned URL, leaking AWS-style signed credentials to the
 			// operator's terminal log. Surface only the redacted shape.
 			fmt.Fprintf(os.Stderr, "troubleshoot: log HTTP fetch app=%s dep=%s component=%q: %s (presigned URL not logged)\n", appID, dep.ID, comp, redactURLError(err))
+			diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q: log fetch failed (%s)\n---", header, label, redactURLError(err))
 			continue
 		}
 		if tail == "" {
+			diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q: log fetch returned empty body\n---", header, label)
 			continue
-		}
-		label := comp
-		if label == "" {
-			label = "<all>"
-		}
-		header := "Deploy logs"
-		if logType == godo.AppLogTypeBuild {
-			header = "Build logs"
 		}
 		diag.Detail += fmt.Sprintf("\n\n---\n%s — component %q (last %d lines):\n%s\n---", header, label, troubleshootLogTailLines, tail)
 	}
@@ -514,41 +523,82 @@ func chooseLogType(dep *godo.Deployment) godo.AppLogType {
 }
 
 // deploymentComponents returns the list of component names to fetch logs for.
-// Components are collected from Services, Jobs, Workers, and Functions (if the
-// AppSpec is present). If the spec is nil or all four arrays are empty, a
-// single empty string is returned — the DO API treats component="" as "all
-// components aggregated".
+// It prefers the deployment-level arrays (Services, StaticSites, Workers, Jobs,
+// Functions) which are populated by both ListDeployments and GetDeployment.
+// If those are all empty it falls back to dep.Spec.* (populated by richer
+// GetDeployment calls that include the full spec), and finally to [""] — the
+// DO API treats component="" as "all components aggregated".
 func deploymentComponents(dep *godo.Deployment) []string {
-	if dep.Spec == nil {
-		// No spec available — fall back to aggregate ("" = all components).
-		return []string{""}
-	}
 	var names []string
-	for _, svc := range dep.Spec.Services {
+
+	// 1. Prefer deployment-level arrays: populated by ListDeployments and
+	// GetDeployment alike. dep.Spec may be nil from ListDeployments, but these
+	// fields are always present when the deployment has components.
+	for _, svc := range dep.Services {
 		if svc != nil && svc.Name != "" {
 			names = append(names, svc.Name)
 		}
 	}
-	for _, job := range dep.Spec.Jobs {
-		if job != nil && job.Name != "" {
-			names = append(names, job.Name)
+	for _, ss := range dep.StaticSites {
+		if ss != nil && ss.Name != "" {
+			names = append(names, ss.Name)
 		}
 	}
-	for _, w := range dep.Spec.Workers {
+	for _, w := range dep.Workers {
 		if w != nil && w.Name != "" {
 			names = append(names, w.Name)
 		}
 	}
-	for _, fn := range dep.Spec.Functions {
+	for _, job := range dep.Jobs {
+		if job != nil && job.Name != "" {
+			names = append(names, job.Name)
+		}
+	}
+	for _, fn := range dep.Functions {
 		if fn != nil && fn.Name != "" {
 			names = append(names, fn.Name)
 		}
 	}
-	if len(names) == 0 {
-		// Spec present but no components enumerated — fall back to aggregate.
-		return []string{""}
+	if len(names) > 0 {
+		return names
 	}
-	return names
+
+	// 2. Fallback: Spec-level arrays populated by a richer GetDeployment call
+	// that includes the full AppSpec. Present when dep came from CreateDeployment
+	// or a single-resource Get, absent from ListDeployments.
+	if dep.Spec != nil {
+		for _, svc := range dep.Spec.Services {
+			if svc != nil && svc.Name != "" {
+				names = append(names, svc.Name)
+			}
+		}
+		for _, ss := range dep.Spec.StaticSites {
+			if ss != nil && ss.Name != "" {
+				names = append(names, ss.Name)
+			}
+		}
+		for _, job := range dep.Spec.Jobs {
+			if job != nil && job.Name != "" {
+				names = append(names, job.Name)
+			}
+		}
+		for _, w := range dep.Spec.Workers {
+			if w != nil && w.Name != "" {
+				names = append(names, w.Name)
+			}
+		}
+		for _, fn := range dep.Spec.Functions {
+			if fn != nil && fn.Name != "" {
+				names = append(names, fn.Name)
+			}
+		}
+		if len(names) > 0 {
+			return names
+		}
+	}
+
+	// 3. Last resort: aggregate ("" = DO API returns logs across all components).
+	return []string{""}
 }
 
 // fetchLogTail fetches log content from the most recent historic URL (index 0)
