@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-digitalocean",
   "version": "0.8.0",
-  "description": "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, IAM (declared), and API gateway",
+  "description": "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, Block Storage volumes, IAM (declared), and API gateway",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -30,6 +30,7 @@
         "infra.registry",
         "infra.certificate",
         "infra.droplet",
+        "infra.volume",
         "infra.iam_role",
         "infra.api_gateway"
       ],
