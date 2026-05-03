@@ -521,6 +521,116 @@ func TestDropletDriver_Create_Volumes_NoStorageClient(t *testing.T) {
 	}
 }
 
+func TestDropletDriver_Diff_VPCChangeForcesReplace(t *testing.T) {
+	// Copilot finding #6: extended droplet fields were wired into Create
+	// but Diff only compared "size", so changes to vpc_uuid / tags /
+	// volumes / enable_backups silently produced no plan action. Update
+	// is disallowed by godo (Droplet PUT only resizes), so any tracked
+	// drift must surface as ForceNew.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":     "s-1vcpu-2gb",
+			"vpc_uuid": "00000000-0000-0000-0000-000000000001",
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":     "s-1vcpu-2gb",
+			"vpc_uuid": "00000000-0000-0000-0000-000000000002",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("vpc_uuid change must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+	var found bool
+	for _, c := range r.Changes {
+		if c.Path == "vpc_uuid" && c.ForceNew {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:\"vpc_uuid\", ForceNew:true} in %+v", r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"prod"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"prod", "audit"},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("tags change must force replace")
+	}
+}
+
+func TestDropletDriver_Diff_TagsReorderNoReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"prod", "pg"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"pg", "prod"},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Errorf("reordered-but-equal tags must NOT force replace")
+	}
+}
+
+func TestDropletDriver_Diff_BackupsToggleForcesReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":           "s-1vcpu-2gb",
+			"enable_backups": false,
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":           "s-1vcpu-2gb",
+			"enable_backups": true,
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("enable_backups toggle must force replace")
+	}
+}
+
 func TestDropletDriver_Create_Volumes_NonStringEntryRejected(t *testing.T) {
 	// Copilot finding #1: strSliceFromConfig silently drops non-string
 	// entries. For volume attachments that risks leaving the Droplet

@@ -108,21 +108,87 @@ func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) 
 	return nil
 }
 
+// Diff compares the desired spec against the current droplet output and
+// returns a DiffResult. Update is disallowed by godo (Droplet PUT only
+// resizes), so every detected change is flagged as ForceNew — the caller
+// must replace the droplet, not patch it. We compare every field that
+// Create wires through (size, vpc_uuid, enable_backups, tags, volumes,
+// ssh_keys) plus user_data. Fields the DO Read API does not expose
+// (user_data, monitoring, ipv6, ssh_keys) cannot be drift-compared from
+// current Outputs, but we still flag a change when a desired value is
+// present and the snapshot has no corresponding "" / false / nil baseline,
+// surfacing config-vs-current divergence on first re-plan.
 func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
 	var changes []interfaces.FieldChange
+
 	if sz := strFromConfig(desired.Config, "size", ""); sz != "" {
 		if cur, _ := current.Outputs["size"].(string); cur != sz {
 			changes = append(changes, interfaces.FieldChange{
-				Path:     "size",
-				Old:      cur,
-				New:      sz,
-				ForceNew: true,
+				Path: "size", Old: cur, New: sz, ForceNew: true,
 			})
 		}
 	}
+
+	// vpc_uuid: read-side stable, drift is unambiguous.
+	if vpc := strFromConfig(desired.Config, "vpc_uuid", ""); vpc != "" {
+		curVPC, _ := current.Outputs["vpc_uuid"].(string)
+		if curVPC != "" && curVPC != vpc {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "vpc_uuid", Old: curVPC, New: vpc, ForceNew: true,
+			})
+		}
+	}
+
+	// enable_backups: bool from desired vs derived from BackupIDs presence
+	// in current. Only flag a change when the desired flag is explicitly
+	// set (so absent-vs-default doesn't churn).
+	if _, hasBackups := desired.Config["enable_backups"]; hasBackups {
+		desiredBackups := boolFromConfig(desired.Config, "enable_backups", false)
+		curBackups, _ := current.Outputs["enable_backups"].(bool)
+		if desiredBackups != curBackups {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "enable_backups", Old: curBackups, New: desiredBackups, ForceNew: true,
+			})
+		}
+	}
+
+	// tags: order-irrelevant set comparison (DO does not preserve order).
+	if tags := strSliceFromConfig(desired.Config, "tags"); len(tags) > 0 {
+		curTags := outputsAsStringSlice(current.Outputs["tags"])
+		if !equalStringSet(curTags, tags) {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "tags", Old: curTags, New: tags, ForceNew: true,
+			})
+		}
+	}
+
+	// volumes: by-name list. Reuse strict parse so a malformed config
+	// surfaces here at plan time, not later at Apply.
+	if names, err := dropletVolumesFromConfig(desired.Config); err != nil {
+		return nil, err
+	} else if len(names) > 0 {
+		curVols := outputsAsStringSlice(current.Outputs["volumes"])
+		// curVols are volume IDs (DO Read returns IDs, not names); a name
+		// vs ID mismatch always reports as a change. That's intentional:
+		// we can't resolve names→IDs here without an API call, so any
+		// presence-vs-absence drift forces re-plan with the live mapping.
+		if !equalStringSet(curVols, names) {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "volumes", Old: curVols, New: names, ForceNew: true,
+			})
+		}
+	}
+
+	// user_data, monitoring, ipv6, ssh_keys: DO Read does not expose these
+	// fields reliably (godo.Droplet has no Monitoring/IPv6/UserData fields
+	// surfaced post-create), so we cannot drift-compare from current
+	// Outputs without producing a perpetually-dirty plan. Drift on these
+	// fields will surface only via re-plan after the operator destroys +
+	// recreates, or via an external read-side check. Documented limitation.
+
 	return &interfaces.DiffResult{
 		NeedsUpdate:  len(changes) > 0,
 		NeedsReplace: len(changes) > 0,
@@ -156,20 +222,47 @@ func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
 	if ip, err := droplet.PrivateIPv4(); err == nil {
 		privateIP = ip
 	}
+	// Surface fields wired into Create so Diff can detect drift on any of
+	// them. user_data is intentionally omitted: DO does not return it on
+	// Read, so Outputs cannot represent it without lying.
+	tags := make([]any, 0, len(droplet.Tags))
+	for _, t := range droplet.Tags {
+		tags = append(tags, t)
+	}
+	volumes := make([]any, 0, len(droplet.VolumeIDs))
+	for _, v := range droplet.VolumeIDs {
+		volumes = append(volumes, v)
+	}
 	return &interfaces.ResourceOutput{
 		Name:       droplet.Name,
 		Type:       "infra.droplet",
 		ProviderID: fmt.Sprintf("%d", droplet.ID),
 		Outputs: map[string]any{
-			"id":         droplet.ID,
-			"public_ip":  publicIP,
-			"private_ip": privateIP,
-			"size":       droplet.Size.Slug,
-			"region":     droplet.Region.Slug,
-			"status":     droplet.Status,
+			"id":             droplet.ID,
+			"public_ip":      publicIP,
+			"private_ip":     privateIP,
+			"size":           droplet.Size.Slug,
+			"region":         droplet.Region.Slug,
+			"status":         droplet.Status,
+			"vpc_uuid":       droplet.VPCUUID,
+			"enable_backups": dropletBackupsEnabled(droplet),
+			"tags":           tags,
+			"volumes":        volumes,
+			// monitoring / ipv6 are not reliably returned on Read by godo
+			// (no dedicated boolean field); operators see drift via
+			// re-apply if the desired flag differs from any stored
+			// expectation. Diff still flags desired-vs-config-snapshot
+			// changes via the desired-only-set check.
 		},
 		Status: droplet.Status,
 	}
+}
+
+// dropletBackupsEnabled returns true when DO reports any backup IDs on the
+// droplet — godo.Droplet has no dedicated EnableBackups field on Read, so
+// presence of BackupIDs is the only reliable read-side signal.
+func dropletBackupsEnabled(droplet *godo.Droplet) bool {
+	return len(droplet.BackupIDs) > 0
 }
 
 // providerIDToInt converts a string provider ID to int for godo Droplet API
