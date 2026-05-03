@@ -244,6 +244,44 @@ func dropletSSHKeysFromConfig(cfg map[string]any) ([]godo.DropletCreateSSHKey, e
 	return out, nil
 }
 
+// dropletVolumesFromConfig extracts the "volumes" config entry as a strict
+// []string of volume names. Unlike strSliceFromConfig (which silently drops
+// non-string and empty entries), this returns an explicit error for any
+// invalid element. Volume attachments are load-bearing: a typo or wrong type
+// must NOT silently leave the Droplet running without an expected disk.
+// Mirrors the error-message style of dropletSSHKeysFromConfig.
+func dropletVolumesFromConfig(cfg map[string]any) ([]string, error) {
+	v, ok := cfg["volumes"]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch raw := v.(type) {
+	case []string:
+		out := make([]string, 0, len(raw))
+		for i, s := range raw {
+			if s == "" {
+				return nil, fmt.Errorf("droplet volumes: invalid entry at index %d: expected non-empty string, got empty string", i)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	case []any:
+		out := make([]string, 0, len(raw))
+		for i, e := range raw {
+			s, ok := e.(string)
+			if !ok {
+				return nil, fmt.Errorf("droplet volumes: invalid entry at index %d: expected non-empty string, got %T", i, e)
+			}
+			if s == "" {
+				return nil, fmt.Errorf("droplet volumes: invalid entry at index %d: expected non-empty string, got empty string", i)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("droplet volumes: expected list, got %T", v)
+}
+
 // resolveDropletVolumes turns the YAML "volumes" list of NAMES into the typed
 // []godo.DropletCreateVolume {ID:...} shape that godo serialises. The DO API
 // requires IDs (Name is deprecated server-side per godo doc-comment), so we
@@ -252,7 +290,10 @@ func dropletSSHKeysFromConfig(cfg map[string]any) ([]godo.DropletCreateSSHKey, e
 // matches outside that region are rejected since DO Block Storage cannot
 // cross regions.
 func (d *DropletDriver) resolveDropletVolumes(ctx context.Context, cfg map[string]any, region string) ([]godo.DropletCreateVolume, error) {
-	names := strSliceFromConfig(cfg, "volumes")
+	names, err := dropletVolumesFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if len(names) == 0 {
 		return nil, nil
 	}

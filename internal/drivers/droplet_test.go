@@ -465,6 +465,51 @@ func TestDropletDriver_Create_Volumes_NoStorageClient(t *testing.T) {
 	}
 }
 
+func TestDropletDriver_Create_Volumes_NonStringEntryRejected(t *testing.T) {
+	// Copilot finding #1: strSliceFromConfig silently drops non-string
+	// entries. For volume attachments that risks leaving the Droplet
+	// running without an expected disk. dropletVolumesFromConfig must
+	// reject non-string entries with an explicit error.
+	mock := &mockDropletClient{droplet: testDroplet()}
+	storage := &mockStorageClient{
+		volumes: []godo.Volume{{ID: "vol-uuid-2", Name: "data", Region: &godo.Region{Slug: "nyc3"}}},
+	}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3", storage)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-droplet",
+		Config: map[string]any{
+			"volumes": []any{123, "data"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting non-string volumes entry")
+	}
+	wantSubstr := `droplet volumes: invalid entry at index 0: expected non-empty string, got int`
+	if !contains(err.Error(), wantSubstr) {
+		t.Errorf("error %q missing %q", err.Error(), wantSubstr)
+	}
+}
+
+func TestDropletDriver_Create_Volumes_EmptyStringRejected(t *testing.T) {
+	mock := &mockDropletClient{droplet: testDroplet()}
+	storage := &mockStorageClient{volumes: nil}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3", storage)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-droplet",
+		Config: map[string]any{
+			"volumes": []any{""},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting empty volumes entry")
+	}
+	if !contains(err.Error(), "expected non-empty string, got empty string") {
+		t.Errorf("error %q does not flag empty string", err.Error())
+	}
+}
+
 func contains(s, sub string) bool {
 	if len(sub) == 0 {
 		return true
