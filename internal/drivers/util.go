@@ -34,6 +34,13 @@ func intFromConfig(config map[string]any, key string, defaultVal int) (int, bool
 // silent rounding. errLabel is the human-readable field identifier used in
 // the error message (e.g. "volume size_gb"). Returns (value, present, error).
 // When present=false, value is defaultVal and error is nil.
+//
+// A type-mismatched value (e.g. size_gb: "100" string instead of int) is
+// reported as present=true with an explicit "expected integer, got <type>"
+// error so the caller does not fall back to a misleading "required" message
+// for what is actually a typed-config bug. Round-1 returned (default, false,
+// nil) here, which made the call site emit "required and must be > 0" — a
+// terrible diagnostic for the operator.
 func intStrictFromConfig(config map[string]any, key, errLabel string, defaultVal int) (int, bool, error) {
 	v, ok := config[key]
 	if !ok {
@@ -50,7 +57,7 @@ func intStrictFromConfig(config map[string]any, key, errLabel string, defaultVal
 		}
 		return int(t), true, nil
 	}
-	return defaultVal, false, nil
+	return defaultVal, true, fmt.Errorf("%s: expected integer, got %T", errLabel, v)
 }
 
 // strFromConfig extracts a string value from a config map with a default.

@@ -136,6 +136,49 @@ func TestVolumeDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Create_StringSizeRejectedWithExplicitType(t *testing.T) {
+	// Copilot round-2 finding #2: intStrictFromConfig previously returned
+	// (default, false, nil) for unsupported value types like a string, so
+	// the caller emitted "size_gb is required" which is wrong-and-confusing
+	// for `size_gb: "100"`. The function must return an explicit type-
+	// mismatch error so the operator knows to drop the quotes.
+	mock := &mockStorageClient{vol: testVolume()}
+	d := drivers.NewVolumeDriverWithClient(mock, nil, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "pg-data",
+		Config: map[string]any{"size_gb": "100"},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting string size_gb")
+	}
+	wantSubstr := "expected integer, got string"
+	if !contains(err.Error(), wantSubstr) {
+		t.Errorf("error %q missing %q", err.Error(), wantSubstr)
+	}
+	if mock.gotCreate != nil {
+		t.Errorf("CreateVolume must not be called when size_gb is wrongly typed; got %+v", mock.gotCreate)
+	}
+}
+
+func TestVolumeDriver_Create_BoolSizeRejectedWithExplicitType(t *testing.T) {
+	// Same as the string case but covering another wrong type to show the
+	// %T diagnostic widens correctly.
+	mock := &mockStorageClient{vol: testVolume()}
+	d := drivers.NewVolumeDriverWithClient(mock, nil, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "pg-data",
+		Config: map[string]any{"size_gb": true},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting bool size_gb")
+	}
+	if !contains(err.Error(), "expected integer, got bool") {
+		t.Errorf("error %q missing %q", err.Error(), "expected integer, got bool")
+	}
+}
+
 func TestVolumeDriver_Create_FractionalSizeRejected(t *testing.T) {
 	// Copilot finding #2: intFromConfig truncates float64 — size_gb: 100.9
 	// previously created a 100 GB volume silently. The strict path must
