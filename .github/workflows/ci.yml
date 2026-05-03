@@ -54,7 +54,7 @@ jobs:
           # is caught before release.
           tmp=$(mktemp)
           cp plugin.json "$tmp"
-          sed -i 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp"
-          sed -i 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp"
+          sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp" && rm -f "$tmp.bak"
+          sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp" && rm -f "$tmp.bak"
           go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file "$tmp" --strict-contracts
           rm "$tmp"
