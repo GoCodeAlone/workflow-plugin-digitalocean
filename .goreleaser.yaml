@@ -13,9 +13,9 @@ before:
   # first to actually fail; wrapping all three in `sh -c` makes the
   # behaviour match the apparent intent.
   hooks:
-    - sh -c "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
-    - sh -c "sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak"
-    - sh -c "export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file plugin.json --strict-contracts"
+    - "sh -c \"sed -i.bak 's/\\\"version\\\": \\\".*\\\"/\\\"version\\\": \\\"{{ .Version }}\\\"/' plugin.json && rm -f plugin.json.bak\""
+    - "sh -c \"sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak\""
+    - "sh -c \"export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file plugin.json --strict-contracts\""
 
 # NOTE: removed top-level `after:` hook (introduced in #41). goreleaser
 # v2 has no top-level `after:` hook — it failed v0.9.0's release at
