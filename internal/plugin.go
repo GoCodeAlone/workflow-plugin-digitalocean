@@ -42,7 +42,7 @@ func (p *doPlugin) Manifest() sdk.PluginManifest {
 		Name:        "workflow-plugin-digitalocean",
 		Version:     Version,
 		Author:      "GoCodeAlone",
-		Description: "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, IAM (declared), and API gateway",
+		Description: "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, Block Storage volumes, IAM (declared), and API gateway",
 	}
 }
 
