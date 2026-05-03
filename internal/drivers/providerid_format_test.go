@@ -30,6 +30,7 @@ func TestAllDrivers_DeclareProviderIDFormat(t *testing.T) {
 		{"firewall", drivers.NewFirewallDriverWithClient(&mockFirewallClient{}), interfaces.IDFormatUUID},
 		{"kubernetes", drivers.NewKubernetesDriverWithClient(&mockK8sClient{}, "nyc3"), interfaces.IDFormatUUID},
 		{"load_balancer", drivers.NewLoadBalancerDriverWithClient(&mockLBClient{}, "nyc3"), interfaces.IDFormatUUID},
+		{"volume", drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3"), interfaces.IDFormatUUID},
 		{"vpc", drivers.NewVPCDriverWithClient(&mockVPCClient{}, "nyc3"), interfaces.IDFormatUUID},
 
 		// ── DomainName drivers ────────────────────────────────────────────
