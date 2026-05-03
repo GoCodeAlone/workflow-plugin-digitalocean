@@ -52,9 +52,14 @@ jobs:
           # Also validate after simulating the GoReleaser before-hook rewrites
           # (mirrors .goreleaser.yaml before.hooks) so a bad template change
           # is caught before release.
-          tmp=$(mktemp)
-          cp plugin.json "$tmp"
-          sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp" && rm -f "$tmp.bak"
-          sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp" && rm -f "$tmp.bak"
-          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file "$tmp" --strict-contracts
-          rm "$tmp"
+          # NOTE: wfctl plugin validate --strict-contracts looks for
+          # plugin.contracts.json co-located with plugin.json (same dir).
+          # Use a temp DIR (not just a temp file) and copy BOTH so the
+          # rewrite-validation finds the contract descriptor.
+          tmp_dir=$(mktemp -d)
+          cp plugin.json "$tmp_dir/"
+          cp plugin.contracts.json "$tmp_dir/"
+          sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
+          sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
+          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file "$tmp_dir/plugin.json" --strict-contracts
+          rm -rf "$tmp_dir"
