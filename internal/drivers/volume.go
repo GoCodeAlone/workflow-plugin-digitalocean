@@ -50,7 +50,10 @@ func NewVolumeDriverWithClient(c StorageClient, actions StorageActionsClient, re
 
 func (d *VolumeDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	region := strFromConfig(spec.Config, "region", d.region)
-	sizeGB, _ := intFromConfig(spec.Config, "size_gb", 0)
+	sizeGB, _, err := intStrictFromConfig(spec.Config, "size_gb", "volume size_gb", 0)
+	if err != nil {
+		return nil, fmt.Errorf("volume create %q: %w", spec.Name, err)
+	}
 	if sizeGB <= 0 {
 		return nil, fmt.Errorf("volume create %q: size_gb is required and must be > 0", spec.Name)
 	}
@@ -87,7 +90,10 @@ func (d *VolumeDriver) Update(ctx context.Context, ref interfaces.ResourceRef, s
 	if ref.ProviderID == "" {
 		return nil, fmt.Errorf("volume update %q: empty ProviderID", ref.Name)
 	}
-	desiredSize, _ := intFromConfig(spec.Config, "size_gb", 0)
+	desiredSize, _, err := intStrictFromConfig(spec.Config, "size_gb", "volume size_gb", 0)
+	if err != nil {
+		return nil, fmt.Errorf("volume update %q: %w", ref.Name, err)
+	}
 	if desiredSize <= 0 {
 		return nil, fmt.Errorf("volume update %q: size_gb is required and must be > 0", ref.Name)
 	}
@@ -135,7 +141,11 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 	var changes []interfaces.FieldChange
 	var needsReplace bool
 
-	if desiredSize, ok := intFromConfig(desired.Config, "size_gb", 0); ok && desiredSize > 0 {
+	desiredSize, sizePresent, err := intStrictFromConfig(desired.Config, "size_gb", "volume size_gb", 0)
+	if err != nil {
+		return nil, err
+	}
+	if sizePresent && desiredSize > 0 {
 		curSize := outputsAsInt(current.Outputs["size_gb"])
 		if curSize != desiredSize {
 			// Growth = in-place resize; shrink = replace (DO has no shrink API).

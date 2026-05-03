@@ -1,8 +1,16 @@
 package drivers
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // intFromConfig extracts an integer value from a config map, returning a default if absent.
+//
+// NOTE: float64 values are coerced to int via truncation. For capacity /
+// size-style fields where silent truncation can under-provision (e.g.
+// volume size_gb), use intStrictFromConfig which rejects fractional values
+// explicitly.
 func intFromConfig(config map[string]any, key string, defaultVal int) (int, bool) {
 	v, ok := config[key]
 	if !ok {
@@ -17,6 +25,32 @@ func intFromConfig(config map[string]any, key string, defaultVal int) (int, bool
 		return int(t), true
 	}
 	return defaultVal, false
+}
+
+// intStrictFromConfig extracts an integer with strict fractional rejection.
+// Used for capacity / size fields where silent truncation of e.g. 100.9 to
+// 100 would under-provision storage. Mirrors the float64 handling in
+// dropletSSHKeysFromConfig so the operator gets a clear error rather than
+// silent rounding. errLabel is the human-readable field identifier used in
+// the error message (e.g. "volume size_gb"). Returns (value, present, error).
+// When present=false, value is defaultVal and error is nil.
+func intStrictFromConfig(config map[string]any, key, errLabel string, defaultVal int) (int, bool, error) {
+	v, ok := config[key]
+	if !ok {
+		return defaultVal, false, nil
+	}
+	switch t := v.(type) {
+	case int:
+		return t, true, nil
+	case int64:
+		return int(t), true, nil
+	case float64:
+		if t != float64(int64(t)) {
+			return defaultVal, true, fmt.Errorf("%s: fractional value %v rejected; specify an integer", errLabel, t)
+		}
+		return int(t), true, nil
+	}
+	return defaultVal, false, nil
 }
 
 // strFromConfig extracts a string value from a config map with a default.

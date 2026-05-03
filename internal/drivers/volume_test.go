@@ -136,6 +136,66 @@ func TestVolumeDriver_Create_EmptyIDFromAPI(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Create_FractionalSizeRejected(t *testing.T) {
+	// Copilot finding #2: intFromConfig truncates float64 — size_gb: 100.9
+	// previously created a 100 GB volume silently. The strict path must
+	// reject fractional values explicitly so operators can fix the typo.
+	mock := &mockStorageClient{vol: testVolume()}
+	d := drivers.NewVolumeDriverWithClient(mock, nil, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "pg-data",
+		Config: map[string]any{"size_gb": 100.9},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting fractional size_gb")
+	}
+	wantSubstr := "fractional value 100.9 rejected"
+	if !contains(err.Error(), wantSubstr) {
+		t.Errorf("error %q missing %q", err.Error(), wantSubstr)
+	}
+	if mock.gotCreate != nil {
+		t.Errorf("CreateVolume must not be called when size_gb is fractional; got %+v", mock.gotCreate)
+	}
+}
+
+func TestVolumeDriver_Update_FractionalSizeRejected(t *testing.T) {
+	mock := &mockStorageClient{vol: testVolume()}
+	actions := &mockStorageActionsClient{}
+	d := drivers.NewVolumeDriverWithClient(mock, actions, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "pg-data", ProviderID: "vol-aaaa",
+	}, interfaces.ResourceSpec{
+		Name:   "pg-data",
+		Config: map[string]any{"size_gb": 200.5},
+	})
+	if err == nil {
+		t.Fatal("expected error rejecting fractional size_gb on update")
+	}
+	if actions.resizedTo != 0 {
+		t.Errorf("Resize must not be called for fractional size; resizedTo = %d", actions.resizedTo)
+	}
+}
+
+func TestVolumeDriver_Create_WholeFloatAccepted(t *testing.T) {
+	// structpb collapses 50 → float64(50) on the wire; whole-valued floats
+	// must still pass the strict check.
+	mock := &mockStorageClient{vol: testVolume()}
+	d := drivers.NewVolumeDriverWithClient(mock, nil, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "pg-data",
+		Config: map[string]any{"size_gb": float64(50)},
+	})
+	if err != nil {
+		t.Fatalf("Create with whole-valued float64 size_gb must succeed: %v", err)
+	}
+	if mock.gotCreate == nil || mock.gotCreate.SizeGigaBytes != 50 {
+		t.Errorf("CreateVolume.SizeGigaBytes = %v, want 50", mock.gotCreate)
+	}
+}
+
 func TestVolumeDriver_Read_Success(t *testing.T) {
 	mock := &mockStorageClient{vol: testVolume()}
 	d := drivers.NewVolumeDriverWithClient(mock, nil, "nyc3")
