@@ -194,9 +194,15 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 	// itself sets description/tags at creation time only). Treat any change
 	// as ForceNew so drift surfaces as a planned replace rather than being
 	// silently ignored.
-	if desc := strFromConfig(desired.Config, "description", ""); desc != "" {
+	//
+	// Use "key present" rather than "non-empty" so add-from-empty (no desc
+	// → "Postgres data volume") and clear-to-empty ("audit log" → "")
+	// transitions both surface as drift. Absent key still skips (backwards-
+	// compat for YAML predating the field).
+	if _, hasDesc := desired.Config["description"]; hasDesc {
+		desc := strFromConfig(desired.Config, "description", "")
 		curDesc, _ := current.Outputs["description"].(string)
-		if curDesc != "" && curDesc != desc {
+		if curDesc != desc {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "description", Old: curDesc, New: desc, ForceNew: true,
 			})

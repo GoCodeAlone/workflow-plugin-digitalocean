@@ -573,6 +573,58 @@ func TestVolumeDriver_Diff_TagsUnorderedNoChange(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Diff_DescriptionAddFromEmptyForcesReplace(t *testing.T) {
+	// Copilot round-2 finding #5: the empty-side guard skipped the
+	// empty→non-empty transition, so adding a description after Create
+	// produced no diff. Drop the guard so add-from-empty surfaces.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "description": ""},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100, "description": "Postgres data"},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("description add-from-empty must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestVolumeDriver_Diff_DescriptionClearToEmptyForcesReplace(t *testing.T) {
+	// Inverse: clearing description ("audit log" → "") must surface drift.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "description": "audit log"},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100, "description": ""},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("description clear-to-empty must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestVolumeDriver_Diff_DescriptionAbsentSkipped(t *testing.T) {
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "description": "audit log"},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Errorf("absent description must NOT trigger drift; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
 func TestVolumeDriver_Diff_DescriptionChangeForcesReplace(t *testing.T) {
 	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
 	cur := &interfaces.ResourceOutput{
