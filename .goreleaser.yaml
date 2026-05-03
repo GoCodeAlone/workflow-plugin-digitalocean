@@ -3,10 +3,19 @@ version: 2
 project_name: workflow-plugin-digitalocean
 
 before:
+  # goreleaser v2 exec's each hook string via shlex.Split rather than
+  # passing it to a shell, so shell builtins (export), shell operators
+  # (&&, ;), and command substitution ($(...)) only work when wrapped in
+  # `sh -c "<...>"`. The two sed lines below only worked accidentally:
+  # goreleaser passed everything past the first whitespace as args to
+  # `sed`, which silently absorbs `&&` and `rm` as positional args. The
+  # wfctl-validate line below contains `export` (a builtin) so was the
+  # first to actually fail; wrapping all three in `sh -c` makes the
+  # behaviour match the apparent intent.
   hooks:
-    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
-    - "sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak"
-    - "export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file plugin.json --strict-contracts"
+    - "sh -c \"sed -i.bak 's/\\\"version\\\": \\\".*\\\"/\\\"version\\\": \\\"{{ .Version }}\\\"/' plugin.json && rm -f plugin.json.bak\""
+    - "sh -c \"sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak\""
+    - "sh -c \"export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file plugin.json --strict-contracts\""
 
 # NOTE: removed top-level `after:` hook (introduced in #41). goreleaser
 # v2 has no top-level `after:` hook — it failed v0.9.0's release at
