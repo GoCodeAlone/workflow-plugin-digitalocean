@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package workflow.plugins.digitalocean;
+
+option go_package = "github.com/GoCodeAlone/workflow-plugin-digitalocean/proto";
+
+// IacProviderConfig is the typed configuration for the "iac.provider" module.
+// It corresponds to the config map accepted by DOProvider.Initialize.
+message IacProviderConfig {
+  // token is the DigitalOcean personal access token (required).
+  string token = 1;
+
+  // region is the default DigitalOcean region slug (e.g. "nyc3").
+  // Defaults to "nyc3" when empty.
+  string region = 2;
+
+  // spaces_access_key is the DO Spaces access key for object-storage operations.
+  // Required only when the infra.storage resource type is used.
+  string spaces_access_key = 3;
+
+  // spaces_secret_key is the DO Spaces secret key for object-storage operations.
+  // Required only when the infra.storage resource type is used.
+  string spaces_secret_key = 4;
+}
