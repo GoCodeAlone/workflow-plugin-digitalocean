@@ -182,6 +182,34 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 		}
 	}
 
+	// description and tags: DO Block Storage does NOT expose update endpoints
+	// for these (godo.StorageActions only supports Resize; the Volume API
+	// itself sets description/tags at creation time only). Treat any change
+	// as ForceNew so drift surfaces as a planned replace rather than being
+	// silently ignored.
+	if desc := strFromConfig(desired.Config, "description", ""); desc != "" {
+		curDesc, _ := current.Outputs["description"].(string)
+		if curDesc != "" && curDesc != desc {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "description", Old: curDesc, New: desc, ForceNew: true,
+			})
+			needsReplace = true
+		}
+	}
+
+	if tags := strSliceFromConfig(desired.Config, "tags"); len(tags) > 0 {
+		curTags := outputsAsStringSlice(current.Outputs["tags"])
+		// equalStringSet (firewall.go) treats order-irrelevant — DO does not
+		// preserve tag order across reads, so reorders must NOT trigger
+		// replace.
+		if !equalStringSet(curTags, tags) {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "tags", Old: curTags, New: tags, ForceNew: true,
+			})
+			needsReplace = true
+		}
+	}
+
 	return &interfaces.DiffResult{
 		NeedsUpdate:  len(changes) > 0,
 		NeedsReplace: needsReplace,
@@ -216,6 +244,13 @@ func (d *VolumeDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
 }
 
 func volumeOutput(vol *godo.Volume) *interfaces.ResourceOutput {
+	// tags: copy to a fresh []any slice so structpb round-trips don't
+	// mutate godo's internal slice; Diff also reads via outputsAsStringSlice
+	// which accepts both []string and []any shapes.
+	tags := make([]any, 0, len(vol.Tags))
+	for _, t := range vol.Tags {
+		tags = append(tags, t)
+	}
 	return &interfaces.ResourceOutput{
 		Name:       vol.Name,
 		Type:       "infra.volume",
@@ -226,12 +261,15 @@ func volumeOutput(vol *godo.Volume) *interfaces.ResourceOutput {
 			"region":          regionSlug(vol.Region),
 			"size_gb":         float64(vol.SizeGigaBytes),
 			"filesystem_type": vol.FilesystemType,
+			"description":     vol.Description,
+			"tags":            tags,
 		},
 		// godo.Volume exposes no Status field; report a stable string so
 		// downstream callers don't read empty Status as "unknown failure".
 		Status: "available",
 	}
 }
+
 
 // regionSlug returns r.Slug for a non-nil region, "" otherwise. Centralised
 // so volume helpers don't repeat the nil-guard.

@@ -411,6 +411,92 @@ func TestVolumeDriver_Diff_FilesystemTypeForcesReplace(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
+	// Copilot finding #5: changes to description / tags were silently
+	// ignored because Diff did not compare them. DO Block Storage has no
+	// update endpoints for these fields (godo.StorageActions only exposes
+	// Resize), so a change MUST surface as ForceNew rather than being
+	// dropped.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size_gb": float64(100),
+			"tags":    []any{"prod", "pg"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size_gb": 100,
+			"tags":    []any{"prod", "pg", "audit"},
+		},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("tags change must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+	if !r.NeedsUpdate {
+		t.Errorf("tags change must signal NeedsUpdate=true")
+	}
+	// Confirm the FieldChange for tags is present and ForceNew.
+	var found bool
+	for _, c := range r.Changes {
+		if c.Path == "tags" && c.ForceNew {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:\"tags\", ForceNew:true} in %+v", r.Changes)
+	}
+}
+
+func TestVolumeDriver_Diff_TagsUnorderedNoChange(t *testing.T) {
+	// DO doesn't preserve tag order across reads. Equal-set must NOT
+	// trigger a replace.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size_gb": float64(100),
+			"tags":    []any{"prod", "pg"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size_gb": 100,
+			"tags":    []any{"pg", "prod"}, // reordered
+		},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Errorf("reordered-but-equal tags must NOT force replace")
+	}
+}
+
+func TestVolumeDriver_Diff_DescriptionChangeForcesReplace(t *testing.T) {
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size_gb":     float64(100),
+			"description": "old description",
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size_gb":     100,
+			"description": "new description",
+		},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("description change must force replace")
+	}
+}
+
 func TestVolumeDriver_Diff_NoChanges(t *testing.T) {
 	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
 	cur := &interfaces.ResourceOutput{
