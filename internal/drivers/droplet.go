@@ -157,7 +157,12 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 	}
 
 	// tags: order-irrelevant set comparison (DO does not preserve order).
-	if tags := strSliceFromConfig(desired.Config, "tags"); len(tags) > 0 {
+	// We compare unconditionally — only when the "tags" key is present in
+	// desired — so clearing tags (non-empty current → empty desired)
+	// surfaces as drift instead of being silently ignored. dropletTagsFromDesired
+	// distinguishes "key absent" from "key present and empty".
+	if _, hasTags := desired.Config["tags"]; hasTags {
+		tags := strSliceFromConfig(desired.Config, "tags")
 		curTags := outputsAsStringSlice(current.Outputs["tags"])
 		if !equalStringSet(curTags, tags) {
 			changes = append(changes, interfaces.FieldChange{

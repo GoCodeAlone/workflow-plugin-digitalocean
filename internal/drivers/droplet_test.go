@@ -583,6 +583,65 @@ func TestDropletDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
 	}
 }
 
+func TestDropletDriver_Diff_TagsClearForcesReplace(t *testing.T) {
+	// Copilot round-2 finding #3: clearing tags (non-empty current → empty
+	// desired) was silently ignored because the Diff path skipped when
+	// len(desired.tags)==0. Drop the empty-side guard so a desired:[] with
+	// non-empty current surfaces as ForceNew. Operators sometimes need to
+	// strip tags to remove a Droplet from a tag-based firewall or backup
+	// schedule; "no diff" is dangerously wrong here.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"prod", "pg"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{}, // explicit empty
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("clearing tags must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestDropletDriver_Diff_TagsAbsentSkipped(t *testing.T) {
+	// Inverse of the clear test: when "tags" key is absent from desired
+	// (operator hasn't said anything about tags), Diff must NOT plan a
+	// change just because current has tags. That would force-recreate any
+	// Droplet whose YAML predates the tags field.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"tags": []any{"prod"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			// no "tags" key
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("absent tags key must NOT trigger drift; got NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
+
 func TestDropletDriver_Diff_TagsReorderNoReplace(t *testing.T) {
 	mock := &mockDropletClient{}
 	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
