@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -77,7 +78,7 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 	if droplet == nil || droplet.ID == 0 {
 		return nil, fmt.Errorf("droplet create %q: API returned droplet with empty ID", spec.Name)
 	}
-	return dropletOutput(droplet), nil
+	return d.dropletOutput(ctx, droplet), nil
 }
 
 func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
@@ -89,7 +90,7 @@ func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*
 	if err != nil {
 		return nil, fmt.Errorf("droplet read %q: %w", ref.Name, WrapGodoError(err))
 	}
-	return dropletOutput(droplet), nil
+	return d.dropletOutput(ctx, droplet), nil
 }
 
 func (d *DropletDriver) Update(_ context.Context, _ interfaces.ResourceRef, _ interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -166,15 +167,14 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 	}
 
 	// volumes: by-name list. Reuse strict parse so a malformed config
-	// surfaces here at plan time, not later at Apply.
+	// surfaces here at plan time, not later at Apply. dropletOutput
+	// resolves DO's raw VolumeIDs back to volume *names* before storing
+	// them in Outputs, so this comparison is name-vs-name and stable
+	// across plans (no perpetual force-replace).
 	if names, err := dropletVolumesFromConfig(desired.Config); err != nil {
 		return nil, err
 	} else if len(names) > 0 {
 		curVols := outputsAsStringSlice(current.Outputs["volumes"])
-		// curVols are volume IDs (DO Read returns IDs, not names); a name
-		// vs ID mismatch always reports as a change. That's intentional:
-		// we can't resolve names→IDs here without an API call, so any
-		// presence-vs-absence drift forces re-plan with the live mapping.
 		if !equalStringSet(curVols, names) {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "volumes", Old: curVols, New: names, ForceNew: true,
@@ -213,7 +213,19 @@ func (d *DropletDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int
 	return nil, fmt.Errorf("droplet does not support scale operation")
 }
 
-func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
+// dropletOutput translates a godo.Droplet into ResourceOutput. Volumes are
+// resolved from godo's VolumeIDs (UUIDs) to volume *names* so that subsequent
+// Diff comparisons against the desired config (which carries names) line up
+// without forcing a perpetual replace. Without name resolution, every Read
+// after Create would compare e.g. ["vol-uuid-1"] vs ["pg-data"] and re-plan
+// a destroy+recreate of the Droplet — catastrophic for stateful workloads.
+//
+// Resolution failures (e.g. the volume was deleted out-of-band) fall back to
+// the raw ID so operators still see *something* in state, plus a
+// "volumes_resolution" Outputs entry recording which IDs failed to resolve.
+// This is logged so it surfaces in the engine log alongside the existing
+// state-heal warnings.
+func (d *DropletDriver) dropletOutput(ctx context.Context, droplet *godo.Droplet) *interfaces.ResourceOutput {
 	var publicIP string
 	if ip, err := droplet.PublicIPv4(); err == nil {
 		publicIP = ip
@@ -229,32 +241,72 @@ func dropletOutput(droplet *godo.Droplet) *interfaces.ResourceOutput {
 	for _, t := range droplet.Tags {
 		tags = append(tags, t)
 	}
+
+	// Resolve VolumeIDs → names so Diff compares like-for-like with the
+	// desired config (volume names). Cache lookups by ID within a single
+	// call to avoid redundant API hits when Droplets carry the same volume
+	// listed twice (rare but legal).
 	volumes := make([]any, 0, len(droplet.VolumeIDs))
-	for _, v := range droplet.VolumeIDs {
-		volumes = append(volumes, v)
+	var resolutionFailures []any
+	idCache := make(map[string]string, len(droplet.VolumeIDs))
+	for _, vid := range droplet.VolumeIDs {
+		if name, ok := idCache[vid]; ok {
+			volumes = append(volumes, name)
+			continue
+		}
+		name := vid // fallback to raw ID if we cannot resolve the name
+		if d.storage != nil {
+			vol, _, err := d.storage.GetVolume(ctx, vid)
+			if err != nil {
+				log.Printf("warn: droplet %q: GetVolume(%q) failed; surfacing raw ID in Outputs[\"volumes\"]: %v",
+					droplet.Name, vid, err)
+				resolutionFailures = append(resolutionFailures, vid)
+			} else if vol != nil && vol.Name != "" {
+				name = vol.Name
+			} else {
+				log.Printf("warn: droplet %q: GetVolume(%q) returned nil/empty Name; surfacing raw ID",
+					droplet.Name, vid)
+				resolutionFailures = append(resolutionFailures, vid)
+			}
+		} else {
+			// No storage client wired; cannot resolve. Record a single
+			// note rather than per-ID warnings so the log isn't spammed.
+			resolutionFailures = append(resolutionFailures, vid)
+		}
+		idCache[vid] = name
+		volumes = append(volumes, name)
 	}
+
+	outputs := map[string]any{
+		"id":             droplet.ID,
+		"public_ip":      publicIP,
+		"private_ip":     privateIP,
+		"size":           droplet.Size.Slug,
+		"region":         droplet.Region.Slug,
+		"status":         droplet.Status,
+		"vpc_uuid":       droplet.VPCUUID,
+		"enable_backups": dropletBackupsEnabled(droplet),
+		"tags":           tags,
+		"volumes":        volumes,
+		// monitoring / ipv6 are not reliably returned on Read by godo
+		// (no dedicated boolean field); operators see drift via
+		// re-apply if the desired flag differs from any stored
+		// expectation. Diff still flags desired-vs-config-snapshot
+		// changes via the desired-only-set check.
+	}
+	if len(resolutionFailures) > 0 {
+		outputs["volumes_resolution"] = map[string]any{
+			"unresolved_ids": resolutionFailures,
+			"note":           "one or more volume IDs could not be resolved to a name; raw IDs surfaced in volumes[]",
+		}
+	}
+
 	return &interfaces.ResourceOutput{
 		Name:       droplet.Name,
 		Type:       "infra.droplet",
 		ProviderID: fmt.Sprintf("%d", droplet.ID),
-		Outputs: map[string]any{
-			"id":             droplet.ID,
-			"public_ip":      publicIP,
-			"private_ip":     privateIP,
-			"size":           droplet.Size.Slug,
-			"region":         droplet.Region.Slug,
-			"status":         droplet.Status,
-			"vpc_uuid":       droplet.VPCUUID,
-			"enable_backups": dropletBackupsEnabled(droplet),
-			"tags":           tags,
-			"volumes":        volumes,
-			// monitoring / ipv6 are not reliably returned on Read by godo
-			// (no dedicated boolean field); operators see drift via
-			// re-apply if the desired flag differs from any stored
-			// expectation. Diff still flags desired-vs-config-snapshot
-			// changes via the desired-only-set check.
-		},
-		Status: droplet.Status,
+		Outputs:    outputs,
+		Status:     droplet.Status,
 	}
 }
 

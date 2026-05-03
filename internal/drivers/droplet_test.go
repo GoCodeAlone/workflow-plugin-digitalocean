@@ -631,6 +631,182 @@ func TestDropletDriver_Diff_BackupsToggleForcesReplace(t *testing.T) {
 	}
 }
 
+// mockStorageClientByID returns volumes from a map keyed by ID, so GetVolume
+// can resolve UUIDs back to names. Used by Read-side tests for finding #1.
+type mockStorageClientByID struct {
+	mockStorageClient
+	byID map[string]godo.Volume
+	// getErrIDs is the set of volume IDs for which GetVolume returns err
+	// (simulating an out-of-band volume deletion).
+	getErrIDs map[string]bool
+	// getCalls records the order of GetVolume invocations so tests can
+	// assert caching (no duplicate lookups for the same ID).
+	getCalls []string
+}
+
+func (m *mockStorageClientByID) GetVolume(_ context.Context, id string) (*godo.Volume, *godo.Response, error) {
+	m.getCalls = append(m.getCalls, id)
+	if m.getErrIDs[id] {
+		return nil, nil, fmt.Errorf("volume %s: not found (404)", id)
+	}
+	if v, ok := m.byID[id]; ok {
+		return &v, nil, nil
+	}
+	return nil, nil, fmt.Errorf("volume %s: missing from mock", id)
+}
+
+func TestDropletDriver_Read_VolumesResolvedToNames(t *testing.T) {
+	// Copilot round-2 finding #1: previously dropletOutput stored godo's
+	// raw VolumeIDs (UUIDs) as Outputs["volumes"], while desired config
+	// carries volume *names*. After every successful Create, the next plan
+	// would compare ["vol-uuid-1"] against ["pg-data"] and force-replace
+	// the Droplet — a deploy-time loss of all PG state.
+	//
+	// dropletOutput must call Storage.GetVolume to resolve each ID to its
+	// name so Diff comparisons line up.
+	droplet := testDroplet()
+	droplet.VolumeIDs = []string{"vol-uuid-1", "vol-uuid-2"}
+	mock := &mockDropletClient{droplet: droplet}
+	storage := &mockStorageClientByID{
+		byID: map[string]godo.Volume{
+			"vol-uuid-1": {ID: "vol-uuid-1", Name: "pg-data"},
+			"vol-uuid-2": {ID: "vol-uuid-2", Name: "pg-wal"},
+		},
+	}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3", storage)
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-droplet", ProviderID: "42",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	vols, ok := out.Outputs["volumes"].([]any)
+	if !ok {
+		t.Fatalf("Outputs[volumes] = %T, want []any", out.Outputs["volumes"])
+	}
+	if len(vols) != 2 {
+		t.Fatalf("len(volumes) = %d, want 2", len(vols))
+	}
+	if vols[0] != "pg-data" || vols[1] != "pg-wal" {
+		t.Errorf("volumes = %v, want [pg-data pg-wal] (names, not UUIDs)", vols)
+	}
+}
+
+func TestDropletDriver_Diff_VolumesNoReplaceWhenNamesMatch(t *testing.T) {
+	// End-to-end check: with the current Outputs populated by
+	// dropletOutput's name-resolution path AND the desired config carrying
+	// the same names, Diff must NOT plan a replace. This is the regression
+	// guarding against the "destroy PG Droplet on every deploy" bug.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":    "s-1vcpu-2gb",
+			"volumes": []any{"pg-data", "pg-wal"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":    "s-1vcpu-2gb",
+			"volumes": []any{"pg-data", "pg-wal"},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsUpdate || r.NeedsReplace {
+		t.Errorf("matching volume names must NOT trigger a diff; got NeedsUpdate=%v NeedsReplace=%v changes=%+v",
+			r.NeedsUpdate, r.NeedsReplace, r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_VolumesReplaceWhenDesiredMissingName(t *testing.T) {
+	// Removing a volume from the desired config (or adding one) is a real
+	// drift and must surface as ForceNew.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":    "s-1vcpu-2gb",
+			"volumes": []any{"pg-data", "pg-wal"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":    "s-1vcpu-2gb",
+			"volumes": []any{"pg-data"}, // pg-wal removed
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("removing a volume from desired must force replace; got NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestDropletDriver_Read_VolumeResolutionFailureFallsBackToID(t *testing.T) {
+	// If GetVolume errors (e.g. the volume was deleted out-of-band) we
+	// must surface the raw ID rather than dropping the entry, AND we must
+	// record the failure in Outputs["volumes_resolution"] so operators
+	// can debug.
+	droplet := testDroplet()
+	droplet.VolumeIDs = []string{"vol-uuid-deleted"}
+	mock := &mockDropletClient{droplet: droplet}
+	storage := &mockStorageClientByID{
+		byID:      map[string]godo.Volume{},
+		getErrIDs: map[string]bool{"vol-uuid-deleted": true},
+	}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3", storage)
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-droplet", ProviderID: "42",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	vols, _ := out.Outputs["volumes"].([]any)
+	if len(vols) != 1 || vols[0] != "vol-uuid-deleted" {
+		t.Errorf("volumes = %v, want [vol-uuid-deleted] (ID fallback)", vols)
+	}
+	resolution, ok := out.Outputs["volumes_resolution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected volumes_resolution in Outputs, got %T", out.Outputs["volumes_resolution"])
+	}
+	unresolved, _ := resolution["unresolved_ids"].([]any)
+	if len(unresolved) != 1 || unresolved[0] != "vol-uuid-deleted" {
+		t.Errorf("unresolved_ids = %v, want [vol-uuid-deleted]", unresolved)
+	}
+}
+
+func TestDropletDriver_Read_VolumeResolutionCachesPerCall(t *testing.T) {
+	// If a Droplet somehow lists the same VolumeID twice, dropletOutput
+	// must only call GetVolume once for that ID.
+	droplet := testDroplet()
+	droplet.VolumeIDs = []string{"vol-uuid-1", "vol-uuid-1"}
+	mock := &mockDropletClient{droplet: droplet}
+	storage := &mockStorageClientByID{
+		byID: map[string]godo.Volume{
+			"vol-uuid-1": {ID: "vol-uuid-1", Name: "pg-data"},
+		},
+	}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3", storage)
+
+	_, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-droplet", ProviderID: "42",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(storage.getCalls) != 1 {
+		t.Errorf("GetVolume called %d times for duplicate ID; want 1 (cached): %v",
+			len(storage.getCalls), storage.getCalls)
+	}
+}
+
 func TestDropletDriver_Create_Volumes_NonStringEntryRejected(t *testing.T) {
 	// Copilot finding #1: strSliceFromConfig silently drops non-string
 	// entries. For volume attachments that risks leaving the Droplet
