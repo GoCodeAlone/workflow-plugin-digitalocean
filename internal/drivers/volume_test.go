@@ -549,6 +549,51 @@ func TestVolumeDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Diff_TagsClearForcesReplace(t *testing.T) {
+	// Copilot round-2 finding #6: clearing tags (non-empty current →
+	// empty desired) was silently ignored because Diff skipped when
+	// len(desired.tags)==0. DO Block Storage has no tag-update endpoint,
+	// so any tag change must surface as ForceNew.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size_gb": float64(100),
+			"tags":    []any{"prod", "pg"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size_gb": 100,
+			"tags":    []any{}, // explicit empty
+		},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("clearing tags must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestVolumeDriver_Diff_TagsAbsentSkipped(t *testing.T) {
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size_gb": float64(100),
+			"tags":    []any{"prod"},
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Errorf("absent tags key must NOT trigger drift; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
 func TestVolumeDriver_Diff_TagsUnorderedNoChange(t *testing.T) {
 	// DO doesn't preserve tag order across reads. Equal-set must NOT
 	// trigger a replace.

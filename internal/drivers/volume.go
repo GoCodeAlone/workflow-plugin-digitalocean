@@ -210,7 +210,11 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 		}
 	}
 
-	if tags := strSliceFromConfig(desired.Config, "tags"); len(tags) > 0 {
+	// Use "key present in desired" so clearing tags ([prod] -> []) surfaces
+	// as drift instead of being silently ignored. Same rationale as the
+	// description guard above.
+	if _, hasTags := desired.Config["tags"]; hasTags {
+		tags := strSliceFromConfig(desired.Config, "tags")
 		curTags := outputsAsStringSlice(current.Outputs["tags"])
 		// equalStringSet (firewall.go) treats order-irrelevant — DO does not
 		// preserve tag order across reads, so reorders must NOT trigger
