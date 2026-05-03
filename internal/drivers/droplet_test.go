@@ -379,6 +379,62 @@ func TestDropletDriver_Create_SSHKeys_Mixed(t *testing.T) {
 	}
 }
 
+func TestDropletDriver_Create_SSHKeys_TopLevelIntSlice(t *testing.T) {
+	// Copilot finding #3: dropletSSHKeysFromConfig accepted []any and
+	// []string at the top level but bailed on Go-native []int / []int64
+	// even though the design admits int IDs. Cover both shapes.
+	mock := &mockDropletClient{droplet: testDroplet()}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-droplet",
+		Config: map[string]any{
+			"ssh_keys": []int{101, 102},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create with []int ssh_keys: %v", err)
+	}
+	got := mock.gotReq.SSHKeys
+	if len(got) != 2 || got[0].ID != 101 || got[1].ID != 102 {
+		t.Errorf("SSHKeys = %+v, want [{ID:101} {ID:102}]", got)
+	}
+}
+
+func TestDropletDriver_Create_SSHKeys_TopLevelInt64Slice(t *testing.T) {
+	mock := &mockDropletClient{droplet: testDroplet()}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-droplet",
+		Config: map[string]any{
+			"ssh_keys": []int64{555, 666},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create with []int64 ssh_keys: %v", err)
+	}
+	got := mock.gotReq.SSHKeys
+	if len(got) != 2 || got[0].ID != 555 || got[1].ID != 666 {
+		t.Errorf("SSHKeys = %+v, want [{ID:555} {ID:666}]", got)
+	}
+}
+
+func TestDropletDriver_Create_SSHKeys_TopLevelIntSlice_NonPositiveRejected(t *testing.T) {
+	mock := &mockDropletClient{droplet: testDroplet()}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-droplet",
+		Config: map[string]any{
+			"ssh_keys": []int{0, 101},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive ID in []int ssh_keys")
+	}
+}
+
 func TestDropletDriver_Create_SSHKeys_FractionalRejected(t *testing.T) {
 	mock := &mockDropletClient{droplet: testDroplet()}
 	d := drivers.NewDropletDriverWithClient(mock, "nyc3")

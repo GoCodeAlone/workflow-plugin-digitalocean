@@ -198,14 +198,34 @@ func dropletSSHKeysFromConfig(cfg map[string]any) ([]godo.DropletCreateSSHKey, e
 	}
 	raw, ok := v.([]any)
 	if !ok {
-		// Accept a typed []string for Go-native callers as a convenience.
-		if ss, ok := v.([]string); ok {
-			out := make([]godo.DropletCreateSSHKey, 0, len(ss))
-			for _, s := range ss {
+		// Accept Go-native typed slices as a convenience. Each branch
+		// mirrors the per-element validation in the []any path.
+		switch tv := v.(type) {
+		case []string:
+			out := make([]godo.DropletCreateSSHKey, 0, len(tv))
+			for i, s := range tv {
 				if s == "" {
-					return nil, fmt.Errorf("ssh_keys: empty fingerprint")
+					return nil, fmt.Errorf("ssh_keys[%d]: empty fingerprint", i)
 				}
 				out = append(out, godo.DropletCreateSSHKey{Fingerprint: s})
+			}
+			return out, nil
+		case []int:
+			out := make([]godo.DropletCreateSSHKey, 0, len(tv))
+			for i, n := range tv {
+				if n <= 0 {
+					return nil, fmt.Errorf("ssh_keys[%d]: non-positive ID %d", i, n)
+				}
+				out = append(out, godo.DropletCreateSSHKey{ID: n})
+			}
+			return out, nil
+		case []int64:
+			out := make([]godo.DropletCreateSSHKey, 0, len(tv))
+			for i, n := range tv {
+				if n <= 0 {
+					return nil, fmt.Errorf("ssh_keys[%d]: non-positive ID %d", i, n)
+				}
+				out = append(out, godo.DropletCreateSSHKey{ID: int(n)})
 			}
 			return out, nil
 		}
