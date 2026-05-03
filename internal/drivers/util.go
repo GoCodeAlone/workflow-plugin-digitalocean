@@ -27,6 +27,48 @@ func strFromConfig(config map[string]any, key, defaultVal string) string {
 	return defaultVal
 }
 
+// boolFromConfig extracts a boolean value from a config map. Returns
+// defaultVal when the key is absent or holds a non-bool value. structpb
+// preserves bool natively so no float64 fallback is needed here.
+func boolFromConfig(config map[string]any, key string, defaultVal bool) bool {
+	if v, ok := config[key].(bool); ok {
+		return v
+	}
+	return defaultVal
+}
+
+// strSliceFromConfig extracts a []string from a config map. Accepts either
+// the typed []string shape (uncommon outside Go-native callers) or the
+// []any shape that survives a structpb round-trip (the common case for
+// values that originate in YAML/JSON). Non-string entries and empty
+// strings are dropped silently — callers needing strict validation should
+// re-check the result.
+func strSliceFromConfig(config map[string]any, key string) []string {
+	v, ok := config[key]
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // imageRepo returns the repository portion of a flat "<repo>:<tag>" image reference.
 func imageRepo(image string) string {
 	parts := splitImageRef(image)
