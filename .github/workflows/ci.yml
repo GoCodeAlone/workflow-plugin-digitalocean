@@ -47,4 +47,14 @@ jobs:
       - name: Validate strict plugin contracts
         run: |
           WFCTL_VERSION="$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}')"
+          # Validate as checked in.
           go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file plugin.json --strict-contracts
+          # Also validate after simulating the GoReleaser before-hook rewrites
+          # (mirrors .goreleaser.yaml before.hooks) so a bad template change
+          # is caught before release.
+          tmp=$(mktemp)
+          cp plugin.json "$tmp"
+          sed -i 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp"
+          sed -i 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp"
+          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file "$tmp" --strict-contracts
+          rm "$tmp"

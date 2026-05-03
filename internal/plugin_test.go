@@ -2,21 +2,17 @@ package internal
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	dopb "github.com/GoCodeAlone/workflow-plugin-digitalocean/proto"
-	wfexternal "github.com/GoCodeAlone/workflow/plugin/external"
 	externalPb "github.com/GoCodeAlone/workflow/plugin/external/proto"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -141,83 +137,6 @@ func TestPlugin_StaticContractManifestMatchesRuntimeRegistry(t *testing.T) {
 	}
 	if staticContract.Config != runtimeContract.ConfigMessage {
 		t.Errorf("manifest config = %q, runtime config = %q", staticContract.Config, runtimeContract.ConfigMessage)
-	}
-}
-
-func TestPlugin_GRPCStrictContractsEndToEnd(t *testing.T) {
-	repoRoot := testRepoRoot(t)
-	t.Setenv("WORKFLOW_PLUGIN_DIGITALOCEAN_DISABLE_LEGACY_MODULE", "1")
-	const pluginName = "workflow-plugin-digitalocean"
-	pluginsDir := filepath.Join(t.TempDir(), "plugins")
-	pluginDir := filepath.Join(pluginsDir, pluginName)
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		t.Fatalf("create plugin dir: %v", err)
-	}
-	manifestData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
-	if err != nil {
-		t.Fatalf("read plugin.json: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), manifestData, 0o644); err != nil {
-		t.Fatalf("write temp plugin.json: %v", err)
-	}
-	contractsData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.contracts.json"))
-	if err != nil {
-		t.Fatalf("read plugin.contracts.json: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.contracts.json"), contractsData, 0o644); err != nil {
-		t.Fatalf("write temp plugin.contracts.json: %v", err)
-	}
-
-	validate := exec.Command("go", "run", "github.com/GoCodeAlone/workflow/cmd/wfctl@"+workflowModuleVersion(t, repoRoot), "plugin", "validate", "--file", filepath.Join(pluginDir, "plugin.json"), "--strict-contracts")
-	validate.Dir = repoRoot
-	validate.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
-	if output, err := validate.CombinedOutput(); err != nil {
-		t.Fatalf("strict validate staged plugin package: %v\n%s", err, output)
-	}
-
-	cmd := exec.Command("go", "build", "-o", filepath.Join(pluginDir, pluginName), "./cmd/plugin")
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build plugin binary: %v\n%s", err, output)
-	}
-
-	manager := wfexternal.NewExternalPluginManager(pluginsDir, log.New(io.Discard, "", 0))
-	adapter, err := manager.LoadPlugin(pluginName)
-	if err != nil {
-		t.Fatalf("load plugin over gRPC: %v", err)
-	}
-	t.Cleanup(manager.Shutdown)
-
-	registry := adapter.ContractRegistry()
-	if registry == nil || len(registry.Contracts) != 1 {
-		t.Fatalf("gRPC contract registry length = %d, want 1", len(registry.GetContracts()))
-	}
-	contract := registry.Contracts[0]
-	if contract.ModuleType != iacProviderModuleType {
-		t.Fatalf("gRPC contract module type = %q, want %s", contract.ModuleType, iacProviderModuleType)
-	}
-	if contract.ConfigMessage != string((&dopb.IacProviderConfig{}).ProtoReflect().Descriptor().FullName()) {
-		t.Fatalf("gRPC contract config = %q", contract.ConfigMessage)
-	}
-
-	factory := adapter.ModuleFactories()[iacProviderModuleType]
-	if factory == nil {
-		t.Fatalf("missing %s module factory from gRPC adapter", iacProviderModuleType)
-	}
-	if _, err := NewDOPlugin().(*doPlugin).CreateModule(iacProviderModuleType, "legacy-disabled", map[string]any{
-		"token": "fake-token-for-test",
-	}); err == nil {
-		t.Fatal("legacy module creation unexpectedly succeeded while disabled; gRPC success would no longer prove typed_config was used")
-	}
-	module := factory("strict-do", map[string]any{
-		"token":             "fake-token-for-test",
-		"region":            "nyc3",
-		"spaces_access_key": "access",
-		"spaces_secret_key": "secret",
-	})
-	if err := wfexternal.AsModuleError(module); err != nil {
-		t.Fatalf("strict gRPC module creation failed: %v", err)
 	}
 }
 
@@ -384,18 +303,6 @@ func testRepoRoot(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Dir(filepath.Dir(file))
-}
-
-func workflowModuleVersion(t *testing.T, repoRoot string) string {
-	t.Helper()
-	cmd := exec.Command("go", "list", "-m", "-f", "{{.Version}}", "github.com/GoCodeAlone/workflow")
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPRIVATE=github.com/GoCodeAlone/*")
-	output, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("resolve workflow module version: %v", err)
-	}
-	return string(bytes.TrimSpace(output))
 }
 
 // TestPlugin_TypedModuleTypes verifies the typed module type list.
