@@ -6,6 +6,18 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Fixed
 
+- **`infra.vpc` exposes `id` output** — wfctl `infra_output: <vpc>.id`
+  secrets need an `id` field in the VPC outputs map. Previously the VPC
+  UUID lived only on `ProviderID` (metadata), not on Outputs, so
+  downstream `vpc_ref` / `vpc_uuid` references failed with `field "id"
+  not found in outputs of module`. Mirrors `ProviderID` to
+  `Outputs["id"]` so the standard `<vpc>.id` reference works. Surfaced
+  by core-dump deploy run 25278900082.
+
+## [v0.9.1]
+
+### Fixed
+
 - **`IacProviderConfig` accepts `provider` field** — wfctl bootstrap uses
   `provider: digitalocean` as the discriminator to identify which
   iac.provider module owns a given backend (e.g. `backend: spaces`).
