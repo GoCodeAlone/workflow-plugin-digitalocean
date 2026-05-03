@@ -4,14 +4,19 @@ project_name: workflow-plugin-digitalocean
 
 before:
   hooks:
-    - cp plugin.json plugin.json.orig
     - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
     - "sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' plugin.json && rm -f plugin.json.bak"
     - "export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file plugin.json --strict-contracts"
 
-after:
-  hooks:
-    - mv plugin.json.orig plugin.json
+# NOTE: removed top-level `after:` hook (introduced in #41). goreleaser
+# v2 has no top-level `after:` hook — it failed v0.9.0's release at
+# `yaml: unmarshal errors: line 12: field after not found in type
+# config.Project`. The previous `mv plugin.json.orig plugin.json` was
+# theatre — the GH Actions runner is ephemeral, so the in-place sed
+# mutations to plugin.json are discarded the moment the runner shuts
+# down. There is no need to restore plugin.json on the runner. Removed
+# the matching `cp plugin.json plugin.json.orig` from the before block
+# too — it was preserving state nothing else reads.
 
 builds:
   - id: workflow-plugin-digitalocean
