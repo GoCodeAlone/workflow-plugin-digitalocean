@@ -454,6 +454,61 @@ func TestVolumeDriver_Diff_FilesystemTypeForcesReplace(t *testing.T) {
 	}
 }
 
+func TestVolumeDriver_Diff_FilesystemTypeRawToExt4ForcesReplace(t *testing.T) {
+	// Copilot round-2 finding #4: the empty-side guard skipped the
+	// raw(empty)→ext4 transition, so attaching a filesystem_type to a
+	// previously-raw volume produced no diff. DO can't reformat in place,
+	// so any filesystem_type change must surface as ForceNew.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "filesystem_type": ""},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100, "filesystem_type": "ext4"},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("filesystem_type raw->ext4 must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestVolumeDriver_Diff_FilesystemTypeExt4ToRawForcesReplace(t *testing.T) {
+	// Inverse: ext4 → "" (operator removed filesystem_type). Treat as drift.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "filesystem_type": "ext4"},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100, "filesystem_type": ""},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("filesystem_type ext4->raw must force replace; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
+func TestVolumeDriver_Diff_FilesystemTypeAbsentSkipped(t *testing.T) {
+	// When the desired config has no filesystem_type key, current ext4 must
+	// NOT be forced back to "". Backwards-compat for YAML predating the field.
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"size_gb": float64(100), "filesystem_type": "ext4"},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Errorf("absent filesystem_type must NOT trigger drift; NeedsReplace=%v", r.NeedsReplace)
+	}
+}
+
 func TestVolumeDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
 	// Copilot finding #5: changes to description / tags were silently
 	// ignored because Diff did not compare them. DO Block Storage has no

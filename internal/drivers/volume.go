@@ -172,9 +172,16 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 		}
 	}
 
-	if fs := strFromConfig(desired.Config, "filesystem_type", ""); fs != "" {
+	// filesystem_type: any change forces replace (DO has no in-place
+	// reformat). Drop both empty-side guards so transitions raw↔ext4
+	// (empty→non-empty or vice versa) surface as drift, not silently
+	// ignored. We compare unconditionally when the desired key is present;
+	// absent desired means "operator did not opt in" and we leave current
+	// alone for backwards compat.
+	if _, hasFS := desired.Config["filesystem_type"]; hasFS {
+		fs := strFromConfig(desired.Config, "filesystem_type", "")
 		curFS, _ := current.Outputs["filesystem_type"].(string)
-		if curFS != "" && curFS != fs {
+		if curFS != fs {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "filesystem_type", Old: curFS, New: fs, ForceNew: true,
 			})
