@@ -112,13 +112,15 @@ func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) 
 // Diff compares the desired spec against the current droplet output and
 // returns a DiffResult. Update is disallowed by godo (Droplet PUT only
 // resizes), so every detected change is flagged as ForceNew — the caller
-// must replace the droplet, not patch it. We compare every field that
-// Create wires through (size, vpc_uuid, enable_backups, tags, volumes,
-// ssh_keys) plus user_data. Fields the DO Read API does not expose
-// (user_data, monitoring, ipv6, ssh_keys) cannot be drift-compared from
-// current Outputs, but we still flag a change when a desired value is
-// present and the snapshot has no corresponding "" / false / nil baseline,
-// surfacing config-vs-current divergence on first re-plan.
+// must replace the droplet, not patch it.
+//
+// Detected: size, vpc_uuid, enable_backups, tags, volumes (by NAME after
+// dropletOutput's ID→name resolution).
+//
+// NOT detected (godo Read limitation, tracked in issue #56): user_data,
+// ssh_keys, monitoring, ipv6. Operators must taint the Droplet manually
+// to roll a new value for any of these. See the inline comment near the
+// end of this function for the full rationale.
 func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
@@ -192,12 +194,34 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 		}
 	}
 
-	// user_data, monitoring, ipv6, ssh_keys: DO Read does not expose these
-	// fields reliably (godo.Droplet has no Monitoring/IPv6/UserData fields
-	// surfaced post-create), so we cannot drift-compare from current
-	// Outputs without producing a perpetually-dirty plan. Drift on these
-	// fields will surface only via re-plan after the operator destroys +
-	// recreates, or via an external read-side check. Documented limitation.
+	// KNOWN LIMITATION (Copilot round-2 finding #8): the following fields
+	// CANNOT be drift-detected here because godo.Droplet (returned by
+	// Droplets.Get) does not surface them post-create:
+	//
+	//   - user_data    — write-only at create; not in Droplet.Get response
+	//   - ssh_keys     — no SSH-key list returned by Droplet.Get
+	//   - monitoring   — no dedicated boolean field on godo.Droplet
+	//   - ipv6         — no dedicated boolean field on godo.Droplet
+	//                    (network-address presence is an unreliable signal)
+	//
+	// Changing any of these in YAML after the Droplet is created will
+	// produce NO plan action — the Droplet keeps the original cloud-init,
+	// SSH key list, etc. Operators must `taint` the Droplet (or delete +
+	// re-apply) to roll a new value.
+	//
+	// TODO(workflow-plugin-digitalocean#56): once godo exposes these
+	// fields in Droplet.Get, OR we add a side-channel desired-config
+	// snapshot, implement strict drift detection here.
+	//
+	// We deliberately do NOT add a desired-only-set check (that would be
+	// "always force replace when user_data is in YAML" — perpetually
+	// dirty plans). Silent no-op is the lesser evil until the upstream
+	// gap is closed; the comment + issue reference make the limitation
+	// discoverable.
+	_ = strFromConfig(desired.Config, "user_data", "")     // see TODO above
+	_ = boolFromConfig(desired.Config, "monitoring", false) // see TODO above
+	_ = boolFromConfig(desired.Config, "ipv6", false)       // see TODO above
+	// ssh_keys: parsed in Create; not re-parsed here to avoid wasted work.
 
 	return &interfaces.DiffResult{
 		NeedsUpdate:  len(changes) > 0,
