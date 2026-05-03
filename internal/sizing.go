@@ -68,6 +68,10 @@ var doSizingMap = map[string]map[interfaces.Size]string{
 	"infra.registry":    noopSizing(),
 	"infra.certificate": noopSizing(),
 	"infra.iam_role":    noopSizing(),
+	// infra.volume sizing is dimensional (size_gb), not tiered — every
+	// abstract Size maps to "n/a" and the operator must set size_gb
+	// explicitly in spec.Config.
+	"infra.volume": noopSizing(),
 }
 
 // noopSizing returns a size map where every tier maps to "n/a".

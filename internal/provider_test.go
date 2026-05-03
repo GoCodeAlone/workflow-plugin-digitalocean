@@ -49,6 +49,7 @@ func TestDOProvider_Capabilities(t *testing.T) {
 		"infra.registry",
 		"infra.certificate",
 		"infra.droplet",
+		"infra.volume",
 		"infra.iam_role",
 		"infra.api_gateway",
 	}

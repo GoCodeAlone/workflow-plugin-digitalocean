@@ -34,6 +34,12 @@ func TestResolveSizing(t *testing.T) {
 		{"infra.registry", interfaces.SizeS, "n/a"},
 		{"infra.certificate", interfaces.SizeM, "n/a"},
 		{"infra.iam_role", interfaces.SizeS, "n/a"},
+		// Copilot finding #4: infra.volume sizing is dimensional (size_gb),
+		// not tiered — must be registered as noopSizing so resolveSizing
+		// returns a stable "n/a" SKU rather than failing with "no sizing
+		// entry for resource type".
+		{"infra.volume", interfaces.SizeS, "n/a"},
+		{"infra.volume", interfaces.SizeXL, "n/a"},
 	}
 
 	for _, tc := range cases {

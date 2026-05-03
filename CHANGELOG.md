@@ -6,6 +6,41 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Added
 
+- **`infra.volume` driver** — DigitalOcean Block Storage. Create / Read /
+  Update (in-place resize via `StorageActions.Resize` for size growth) /
+  Delete / Diff (size shrinks, region changes, and filesystem_type changes
+  force replace) / HealthCheck (Read succeeds → healthy; godo `Volume`
+  exposes no Status field, so a successful API round-trip is the strongest
+  available signal).
+
+  Config keys: `name` (from `spec.Name`), `region` (defaults to provider
+  region), `size_gb` (required, > 0), `filesystem_type` (`ext4` / `xfs`;
+  default empty = raw block device), `description`, `tags`.
+
+  Outputs: `id` (UUID), `name`, `region`, `size_gb`, `filesystem_type`.
+  ProviderIDFormat = `IDFormatUUID`.
+
+- **Droplet driver — extended config** for self-hosted services that need
+  more than the bare-minimum size/image/region. New optional keys, all
+  additive and defaulted-empty (no behaviour change for existing configs):
+
+  - `user_data` (string) — cloud-init payload
+  - `vpc_uuid` (string) — VPC the Droplet joins
+  - `ssh_keys` ([]string | []int | mixed) — fingerprint strings OR numeric
+    SSH-key IDs; element type is detected at runtime (structpb-safe; floats
+    must be whole numbers)
+  - `tags` ([]string)
+  - `enable_backups` (bool) — maps to `Backups`
+  - `monitoring` (bool)
+  - `ipv6` (bool)
+  - `volumes` ([]string of Block Storage volume **names**) — names are
+    resolved to IDs at create time via `Storage.ListVolumes(name=,region=)`;
+    a name that doesn't resolve in the Droplet's region returns
+    `droplet volumes: volume %q not found`
+
+  Droplet outputs gain `private_ip` (`droplet.PrivateIPv4()`) so downstream
+  services in the same VPC can be wired directly.
+
 - **Troubleshoot fetches DO deploy/build logs** (PR-E2) — `AppPlatformDriver.Troubleshoot`
   now calls `godo.AppsService.GetLogs` for each component in any deployment
   whose phase is `Error`, `Canceled`, or `Superseded`. The DO API returns

@@ -79,6 +79,7 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 		"infra.registry":          drivers.NewRegistryDriver(p.client),
 		"infra.certificate":       drivers.NewCertificateDriver(p.client),
 		"infra.droplet":           drivers.NewDropletDriver(p.client, p.region),
+		"infra.volume":            drivers.NewVolumeDriver(p.client, p.region),
 		"infra.iam_role":          drivers.NewIAMRoleDriver(),
 		"infra.api_gateway":       drivers.NewAPIGatewayDriver(p.client, p.region),
 	}
@@ -102,6 +103,7 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.registry", Tier: 2, Operations: ops},
 		{ResourceType: "infra.certificate", Tier: 1, Operations: ops},
 		{ResourceType: "infra.droplet", Tier: 1, Operations: ops},
+		{ResourceType: "infra.volume", Tier: 1, Operations: noScale},
 		{ResourceType: "infra.iam_role", Tier: 1, Operations: noScale},
 		{ResourceType: "infra.api_gateway", Tier: 3, Operations: noScale},
 	}
