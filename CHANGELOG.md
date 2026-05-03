@@ -4,6 +4,22 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`IacProviderConfig` accepts `provider` field** — wfctl bootstrap uses
+  `provider: digitalocean` as the discriminator to identify which
+  iac.provider module owns a given backend (e.g. `backend: spaces`).
+  v0.9.0's strict-contracts proto (PR #41) didn't declare `provider`,
+  so configs carrying the canonical discriminator (BMW, core-dump, etc.)
+  failed typed-config marshal with `protobuf error` (wfctl unwraps to
+  the bottom-most error, hiding the field name). Added `string provider
+  = 5` to the proto; the field is accepted but ignored by the plugin
+  itself (manifest.iacProvider.name = digitalocean is the source of
+  truth for provider identity). Surfaced by core-dump's first deploy
+  attempt against v0.9.0.
+
+## [v0.9.0]
+
 ### Added
 
 - **`infra.volume` driver** — DigitalOcean Block Storage. Create / Read /

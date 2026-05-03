@@ -21,4 +21,16 @@ message IacProviderConfig {
   // spaces_secret_key is the DO Spaces secret key for object-storage operations.
   // Required only when the infra.storage resource type is used.
   string spaces_secret_key = 4;
+
+  // provider is the wfctl bootstrap discriminator (e.g. "digitalocean")
+  // used to identify which iac.provider module owns a given backend
+  // (per cmd/wfctl/infra_bootstrap.go's lookup for backend="spaces" etc.).
+  // The plugin itself does not need this field — manifest.iacProvider.name
+  // already declares ownership — but the strict-contracts proto must
+  // accept it because protojson UnmarshalOptions{DiscardUnknown: false}
+  // (workflow plugin/external/convert.go:65) errors on unknown fields.
+  // Without this declaration, configs with `provider: digitalocean`
+  // (the canonical pattern across BMW, core-dump, etc.) fail v0.9.0+
+  // strict-contract typed-config marshal.
+  string provider = 5;
 }
