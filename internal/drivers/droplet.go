@@ -133,10 +133,15 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 		}
 	}
 
-	// vpc_uuid: read-side stable, drift is unambiguous.
-	if vpc := strFromConfig(desired.Config, "vpc_uuid", ""); vpc != "" {
+	// vpc_uuid: read-side stable, drift is unambiguous. Drop the
+	// curVPC != "" guard so adding vpc_uuid to a Droplet whose state
+	// predates the field (current.Outputs has no vpc_uuid yet) still
+	// surfaces as ForceNew. Empty desired with non-empty current is
+	// also drift — operator dropped the VPC pin, plan must recreate.
+	if _, hasVPC := desired.Config["vpc_uuid"]; hasVPC {
+		vpc := strFromConfig(desired.Config, "vpc_uuid", "")
 		curVPC, _ := current.Outputs["vpc_uuid"].(string)
-		if curVPC != "" && curVPC != vpc {
+		if curVPC != vpc {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "vpc_uuid", Old: curVPC, New: vpc, ForceNew: true,
 			})

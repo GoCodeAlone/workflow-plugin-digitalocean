@@ -559,6 +559,60 @@ func TestDropletDriver_Diff_VPCChangeForcesReplace(t *testing.T) {
 	}
 }
 
+func TestDropletDriver_Diff_VPCAddFromEmptyForcesReplace(t *testing.T) {
+	// Copilot round-2 finding #7: pre-release Droplet states won't have
+	// vpc_uuid in Outputs (the field was added later). Adding vpc_uuid to
+	// an already-managed Droplet planned no action because the curVPC != ""
+	// guard skipped the change. Drop that guard so empty current vs
+	// non-empty desired triggers ForceNew.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			// no vpc_uuid — represents pre-release state
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":     "s-1vcpu-2gb",
+			"vpc_uuid": "00000000-0000-0000-0000-000000000001",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("vpc_uuid add-from-empty must force replace; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_VPCAbsentSkipped(t *testing.T) {
+	// Inverse: when vpc_uuid is absent from desired, current vpc_uuid must
+	// NOT be cleared as drift. Backwards-compat for YAML predating the field.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":     "s-1vcpu-2gb",
+			"vpc_uuid": "00000000-0000-0000-0000-000000000001",
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size": "s-1vcpu-2gb"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("absent vpc_uuid must NOT trigger drift; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
+
 func TestDropletDriver_Diff_TagsChangeForcesReplace(t *testing.T) {
 	mock := &mockDropletClient{}
 	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
