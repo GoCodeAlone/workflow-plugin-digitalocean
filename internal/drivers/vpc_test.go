@@ -65,6 +65,11 @@ func TestVPCDriver_Create(t *testing.T) {
 	if out.ProviderID != "vpc-123" {
 		t.Errorf("ProviderID = %q, want %q", out.ProviderID, "vpc-123")
 	}
+	// `id` output mirrors ProviderID so wfctl `infra_output: <vpc>.id`
+	// secrets can read the VPC UUID for downstream vpc_ref / vpc_uuid.
+	if got, _ := out.Outputs["id"].(string); got != "vpc-123" {
+		t.Errorf(`Outputs["id"] = %q, want %q`, got, "vpc-123")
+	}
 }
 
 func TestVPCDriver_Create_Error(t *testing.T) {

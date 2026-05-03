@@ -180,6 +180,12 @@ func vpcOutput(vpc *godo.VPC) *interfaces.ResourceOutput {
 		Type:       "infra.vpc",
 		ProviderID: vpc.ID,
 		Outputs: map[string]any{
+			// Expose `id` so wfctl `infra_output: <vpc>.id` secrets can
+			// read the VPC UUID. Mirrors ProviderID — without this,
+			// downstream modules can't reference the VPC by ID for
+			// vpc_ref / vpc_uuid fields (App Platform vpc_ref + Droplet
+			// vpc_uuid both want the bare UUID, not a URN).
+			"id":       vpc.ID,
 			"ip_range": vpc.IPRange,
 			"region":   vpc.RegionSlug,
 			"urn":      vpc.URN,
