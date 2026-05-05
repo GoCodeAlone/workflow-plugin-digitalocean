@@ -506,6 +506,39 @@ func TestDOProvider_ValidatePlan_ClassifyRegionEmptyGroup(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_UnknownRegionSlugWarnsNotErrors pins
+// Copilot review #16 (round 5): a region slug that is neither a known
+// App Platform group nor a known zone (e.g., a brand-new DO region
+// 'atl1' the plugin's hardcoded allowlist hasn't caught up to) MUST
+// downgrade to Severity=Warning so non-strict align lets operators
+// proceed without a plugin bump. The documented misconfig cases
+// (group-where-zone-required, zone-where-group-required) keep
+// Severity=Error.
+func TestDOProvider_ValidatePlan_UnknownRegionSlugWarnsNotErrors(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		// VPC with unknown region — should Warning (forward-compat).
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "fwd-vpc", Type: "infra.vpc",
+			Config: map[string]any{"region": "atl1"},
+		}},
+		// AP with unknown region — should Warning (forward-compat).
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "fwd-app", Type: "infra.container_service",
+			Config: map[string]any{"region": "atl"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	if len(d) != 2 {
+		t.Fatalf("expected 2 diagnostics for unknown slugs; got %d: %+v", len(d), d)
+	}
+	for _, x := range d {
+		if x.Severity != interfaces.PlanDiagnosticWarning {
+			t.Errorf("expected Severity=Warning for unknown slug; got %v in %+v", x.Severity, x)
+		}
+	}
+}
+
 // TestDOProvider_ValidatePlan_CompileTimeAssertion documents that the
 // compile-time interface assertion in validate_plan.go locks
 // DOProvider's ProviderValidator implementation. If the interface

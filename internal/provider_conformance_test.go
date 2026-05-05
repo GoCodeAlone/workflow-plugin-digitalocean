@@ -77,10 +77,17 @@ func TestConformance(t *testing.T) {
 					t.Fatal("CONFORMANCE_LIVE_CLOUD=1 but DIGITALOCEAN_ACCESS_TOKEN is not set")
 				}
 			}
-			// Copilot review #13 (round 4): use t.Context() so live-
-			// cloud Initialize is interrupted promptly when the test
-			// is canceled or hits its deadline; context.Background()
-			// would survive both signals.
+			// Copilot review #13 (round 4) → #15 (round 5):
+			// pass t.Context() through Initialize so callers that
+			// honor context (and any future rev of Initialize that
+			// does) get the test-scoped cancellation/deadline path.
+			// Note: today's DOProvider.Initialize implementation
+			// constructs its godo client with its own
+			// context.Background() and ignores the passed-in ctx,
+			// so passing t.Context() is forward-prep rather than an
+			// immediate behavior change. Tracked as a follow-up to
+			// thread the context through the godo construction so
+			// LiveCloud cancellation reaches the HTTP transport.
 			if err := p.Initialize(t.Context(), map[string]any{
 				"token":  token,
 				"region": "nyc3",

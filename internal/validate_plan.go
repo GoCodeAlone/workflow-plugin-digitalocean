@@ -123,8 +123,28 @@ func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDia
 			diags = appendAppPlatformDiagnostics(diags, a.Resource, region, byName)
 		case "infra.vpc", "infra.droplet", "infra.volume":
 			if region != "" && !isZoneSlug(region) {
+				// Copilot review #16 (round 5): a region that is
+				// neither a known zone nor a known App Platform
+				// group falls into two buckets:
+				//   (a) a documented misconfig — operator typed an
+				//       App Platform group ("nyc") where a zone is
+				//       required. This is the recurring bug and
+				//       stays Severity=Error.
+				//   (b) an unknown slug — possibly a brand-new DO
+				//       region the plugin's hardcoded allowlist
+				//       hasn't caught up to. This was previously
+				//       Error too, blocking apply until the plugin
+				//       was bumped. Now downgraded to Warning so
+				//       operators on bleeding-edge DO regions can
+				//       proceed (under non-strict align) while
+				//       --strict still catches the case for
+				//       cautious operators.
+				severity := interfaces.PlanDiagnosticWarning
+				if isAppPlatformRegionGroup(region) {
+					severity = interfaces.PlanDiagnosticError
+				}
 				diags = append(diags, interfaces.PlanDiagnostic{
-					Severity: interfaces.PlanDiagnosticError,
+					Severity: severity,
 					Resource: a.Resource.Name,
 					Field:    "region",
 					Message: fmt.Sprintf(
@@ -227,8 +247,22 @@ func appendAppPlatformDiagnostics(
 	byName map[string]planResource,
 ) []interfaces.PlanDiagnostic {
 	if region != "" && !isAppPlatformRegionGroup(region) {
+		// Copilot review #16 (round 5): two-bucket severity
+		// matching the VPC/Droplet/Volume case above:
+		//   (a) operator typed a known zone slug ("nyc3") where a
+		//       group ("nyc") is required — documented misconfig,
+		//       stays Error.
+		//   (b) unknown slug — possibly a brand-new App Platform
+		//       group the plugin's allowlist hasn't caught up to.
+		//       Downgraded to Warning so operators can proceed
+		//       (under non-strict align) without a plugin bump;
+		//       --strict still escalates.
+		severity := interfaces.PlanDiagnosticWarning
+		if isZoneSlug(region) {
+			severity = interfaces.PlanDiagnosticError
+		}
 		diags = append(diags, interfaces.PlanDiagnostic{
-			Severity: interfaces.PlanDiagnosticError,
+			Severity: severity,
 			Resource: spec.Name,
 			Field:    "region",
 			Message: fmt.Sprintf(
