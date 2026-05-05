@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -112,11 +113,17 @@ func (t *httpClientCapturingTransport) RoundTrip(req *http.Request) (*http.Respo
 	if t.resp != nil {
 		return t.resp, nil
 	}
-	// Return a minimal 200 with empty JSON body so godo doesn't choke.
+	// Return a minimal 200 with a valid JSON object body so godo's response
+	// decoder doesn't error on EOF / invalid JSON when the caller passes a
+	// pointer-to-struct destination. We don't care what the test caller does
+	// with the response — only that the transport observed the request, which
+	// proves the ctx-injected http.Client made it through Initialize.
+	header := make(http.Header)
+	header.Set("Content-Type", "application/json")
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       http.NoBody,
-		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("{}")),
+		Header:     header,
 		Request:    req,
 	}, nil
 }
