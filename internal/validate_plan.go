@@ -9,11 +9,15 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 )
 
-// uuidPattern matches a canonical RFC-4122 UUID (8-4-4-4-12 lower-case
-// hex with hyphens). DO VPC IDs are UUIDs; vpc_ref values that match
-// this shape are external-or-resolved-VPC-IDs, NOT in-plan resource
-// names — the validator MUST NOT flag them as dangling references.
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+// uuidPattern matches a canonical RFC-4122 UUID (8-4-4-4-12 hex with
+// hyphens). The match is case-insensitive (Copilot review #12 round 4
+// — UUIDs are case-insensitive in practice; a VPC UUID emitted in
+// upper-case by an operator's clipboard or a templating engine must
+// also be classified as a UUID, not as a plain resource name). DO
+// VPC IDs are UUIDs; vpc_ref values that match this shape are
+// external-or-resolved-VPC-IDs, NOT in-plan resource names — the
+// validator MUST NOT flag them as dangling references.
+var uuidPattern = regexp.MustCompile(`^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // jitTemplatePattern matches the wfctl JIT substitution syntax
 // (${VAR} / ${MODULE.field} / $(...)). vpc_ref values that contain a

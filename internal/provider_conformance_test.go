@@ -30,7 +30,6 @@
 package internal
 
 import (
-	"context"
 	"os"
 	"testing"
 
@@ -78,7 +77,11 @@ func TestConformance(t *testing.T) {
 					t.Fatal("CONFORMANCE_LIVE_CLOUD=1 but DIGITALOCEAN_ACCESS_TOKEN is not set")
 				}
 			}
-			if err := p.Initialize(context.Background(), map[string]any{
+			// Copilot review #13 (round 4): use t.Context() so live-
+			// cloud Initialize is interrupted promptly when the test
+			// is canceled or hits its deadline; context.Background()
+			// would survive both signals.
+			if err := p.Initialize(t.Context(), map[string]any{
 				"token":  token,
 				"region": "nyc3",
 			}); err != nil {

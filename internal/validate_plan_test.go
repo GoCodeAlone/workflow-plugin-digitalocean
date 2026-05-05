@@ -427,6 +427,29 @@ func TestDOProvider_ValidatePlan_VPCRefAsUUIDIsDeferred(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_VPCRefAsUpperCaseUUIDIsDeferred pins
+// Copilot review #12 (round 4): UUIDs are case-insensitive; an
+// upper-case or mixed-case VPC UUID must also be classified as a
+// UUID literal (not as a plain resource name) so it does not trigger
+// false dangling-reference diagnostics. Verifies the (?i) flag on
+// uuidPattern.
+func TestDOProvider_ValidatePlan_VPCRefAsUpperCaseUUIDIsDeferred(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "A1B2C3D4-E5F6-7890-ABCD-EF0123456789"},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "app", Type: "infra.container_service",
+			Config: map[string]any{"region": "nyc", "vpc_ref": "A1b2C3d4-E5f6-7890-AbCd-Ef0123456789"},
+		}},
+	}}
+	if d := p.ValidatePlan(plan); len(d) != 0 {
+		t.Errorf("expected 0 diagnostics for upper/mixed-case UUID vpc_ref; got %+v", d)
+	}
+}
+
 // TestDOProvider_ValidatePlan_VPCRefAsJITTemplateIsDeferred pins
 // Copilot review #8/#9 (round 3): vpc_ref values that contain the
 // wfctl JIT substitution syntax (${MODULE.field} or $(...)) MUST NOT

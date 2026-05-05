@@ -3,8 +3,13 @@ on:
   pull_request:
     branches: [main]
 permissions:
+  # Copilot review #14 (round 4): scope to least privilege —
+  # contents:read for checkout, issues:write for the sticky PR
+  # comment (PR comments are issues at the GitHub API layer). The
+  # prior pull-requests:write grant was unused (no PR-state
+  # mutations) and inconsistent with the other workflows in this
+  # repo (ci.yml uses contents:read only).
   contents: read
-  pull-requests: write
   issues: write
 env:
   GOPRIVATE: github.com/GoCodeAlone/*
