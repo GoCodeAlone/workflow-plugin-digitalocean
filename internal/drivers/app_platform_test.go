@@ -371,6 +371,77 @@ func TestAppPlatformDriver_Diff_NoChanges(t *testing.T) {
 	}
 }
 
+// TestAppPlatformDriver_Diff_RegionChangeForcesReplace covers issue #70:
+// App Platform region is a Create-only field on godo.AppSpec — UpdateApp
+// does not accept region changes. Region drift must surface as ForceNew so
+// dependents (vpc_ref to a region-locked VPC) get correctly recreated too.
+func TestAppPlatformDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc3",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc1",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsReplace {
+		t.Fatal("region change must force replace; NeedsReplace=false")
+	}
+	var found bool
+	for _, c := range result.Changes {
+		if c.Path == "region" && c.Old == "nyc3" && c.New == "nyc1" && c.ForceNew {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:region, Old:nyc3, New:nyc1, ForceNew:true}; got %+v", result.Changes)
+	}
+}
+
+// TestAppPlatformDriver_Diff_RegionEmptyCurrentSkipped covers the
+// upgrade-safe guard: Apps in state from earlier plugin versions (when
+// appOutput didn't include region) must not false-positive on the first
+// plan after upgrade — they'll Read on next apply to populate the field.
+func TestAppPlatformDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+			// no region — represents pre-region-output state
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc1",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsReplace {
+		t.Error("empty curRegion should not force replace; got NeedsReplace=true")
+	}
+	for _, c := range result.Changes {
+		if c.Path == "region" {
+			t.Errorf("empty curRegion should not emit a region change; got %+v", c)
+		}
+	}
+}
+
 // TestAppPlatformDriver_Diff_DetectsExposeChange covers quality-review Finding
 // 1: changing `expose` (a security-relevant toggle) on an existing service
 // must produce a Plan action — Diff cannot silently no-op the way the

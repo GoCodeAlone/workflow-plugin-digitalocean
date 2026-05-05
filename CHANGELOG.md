@@ -4,6 +4,10 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **VPCDriver / DropletDriver / AppPlatformDriver `Diff` now compares `region`** (#70) — previously only `VolumeDriver.Diff` checked region drift; the other three drivers silently no-op'd on region changes despite DO having no in-place region update on those resources. Region change now correctly emits `FieldChange{ForceNew: true}` and sets `NeedsReplace=true`. Surfaced by core-dump's TC2 cutover plan-shape assertion which expected a 5-resource cascade replace but got 1 (Volume only); without the assertion gate the partial cutover would have left VPC + Droplet in nyc3 while the App + Volume moved to nyc1, producing a half-migrated state requiring manual cleanup. Includes upgrade-safe guard: `appOutput`, `vpcOutput`, `dropletOutput` already populate `region`, but state from earlier plugin versions may not — the new check skips when `current.Outputs["region"]` is empty so the next Read populates it without false-positive drift. AppPlatformDriver also adds `region` to `appOutput.Outputs` for the same reason. Regression tests cover both the change-detection and empty-current-skip paths for all three drivers.
+
 ## [v0.10.0]
 
 ### Added
