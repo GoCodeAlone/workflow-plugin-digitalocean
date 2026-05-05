@@ -711,12 +711,9 @@ func buildJobSpec(m map[string]any) *godo.AppJobSpec {
 		InstanceSizeSlug: strFromConfig(m, "instance_size_slug", ""),
 		Envs:             envVarsFromJobConfig(m),
 	}
-	// Image from "image" field.
-	if imgStr := strFromConfig(m, "image", ""); imgStr != "" {
-		img, err := ParseImageRef(imgStr)
-		if err == nil {
-			job.Image = img
-		}
+	// Image from "image" field (accepts string or structured map).
+	if img, err := imageSpecFromConfig(m); err == nil {
+		job.Image = img
 	}
 	// Scheduled jobs have a cron expression.
 	if cron := strFromConfig(m, "cron", ""); cron != "" {
@@ -785,11 +782,9 @@ func buildWorkerSpec(m map[string]any) *godo.AppWorkerSpec {
 		Envs:             envVarsFromJobConfig(m),
 		Autoscaling:      autoscalingFromConfig(m),
 	}
-	if imgStr := strFromConfig(m, "image", ""); imgStr != "" {
-		img, err := ParseImageRef(imgStr)
-		if err == nil {
-			w.Image = img
-		}
+	// Image from "image" field (accepts string or structured map).
+	if img, err := imageSpecFromConfig(m); err == nil {
+		w.Image = img
 	}
 	// size tier override.
 	if size := strFromConfig(m, "size", ""); size != "" {
