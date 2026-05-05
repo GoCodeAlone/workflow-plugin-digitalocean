@@ -32,6 +32,9 @@
       "url": "https://github.com/GoCodeAlone/workflow-plugin-digitalocean/releases/download/v0.9.0/workflow-plugin-digitalocean-darwin-arm64.tar.gz"
     }
   ],
+  "iacProvider": {
+    "computePlanVersion": "v2"
+  },
   "capabilities": {
     "configProvider": false,
     "moduleTypes": ["iac.provider"],
