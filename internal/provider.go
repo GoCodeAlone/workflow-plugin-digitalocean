@@ -39,6 +39,7 @@ type DOProvider struct {
 
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
 var _ interfaces.ProviderMigrationRepairer = (*DOProvider)(nil)
+var _ interfaces.Enumerator = (*DOProvider)(nil)
 
 // NewDOProvider creates an uninitialised DOProvider.
 func NewDOProvider() *DOProvider {
@@ -273,6 +274,148 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 	}
 
 	return result, nil
+}
+
+// EnumerateByTag implements the opt-in interfaces.Enumerator interface.
+//
+// Lists DO resources tagged with the given tag and returns them as
+// interfaces.ResourceRef values keyed on the same (Name, Type, ProviderID)
+// tuple that the corresponding ResourceDriver(type).Delete consumes. Used by
+// `wfctl infra cleanup --tag <name>` to drive tag-scoped teardown.
+//
+// Implementation strategy:
+//   - Tags.Get is queried first as a probe: if the tag itself does not exist
+//     in the DO account (404), the result is an empty slice (not an error).
+//     This matches operator expectation that running cleanup against a tag
+//     that has never been used reports "no resources" rather than failing.
+//     A 200 here indicates the tag is known to DO, but the per-resource
+//     queries below are what actually populate the result slice — Tags.Get's
+//     own response only carries counts + last-tagged metadata, not a full
+//     list of tagged resources.
+//   - Droplets uses the native ListByTag endpoint.
+//   - Volumes and Databases do not expose a tag-filter parameter, so the
+//     full list is fetched and filtered client-side on the Tags slice.
+//   - Other DO resource types (load balancers, k8s clusters, app platform,
+//     etc.) either do not support tags or have not yet been wired here.
+//     The cleanup subcommand documents per-provider coverage in
+//     workflow/docs/WFCTL.md `#### infra cleanup`.
+//
+// The contract for the returned ResourceRef.ProviderID matches what each
+// ResourceDriver expects on Delete: a string-formatted droplet ID for
+// droplets, the volume ID for volumes, and the database cluster UUID for
+// databases. Name is the user-facing resource name. Type is the canonical
+// `infra.<kind>` matching DOProvider's driver registration.
+func (p *DOProvider) EnumerateByTag(ctx context.Context, tag string) ([]interfaces.ResourceRef, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("digitalocean: EnumerateByTag called on provider that is not initialized — call Initialize first")
+	}
+	if tag == "" {
+		return nil, fmt.Errorf("digitalocean: EnumerateByTag requires a non-empty tag argument")
+	}
+
+	// Probe Tags.Get to distinguish "tag does not exist" (return empty) from
+	// "API call failed" (return error). godo wraps non-2xx responses in
+	// godo.ErrorResponse with the HTTP Response embedded.
+	if _, _, err := p.client.Tags.Get(ctx, tag); err != nil {
+		var doErr *godo.ErrorResponse
+		if errors.As(err, &doErr) && doErr.Response != nil && doErr.Response.StatusCode == 404 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("digitalocean: get tag %q: %w", tag, err)
+	}
+
+	var refs []interfaces.ResourceRef
+
+	// Droplets — native ListByTag, paginated.
+	dropletPage := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		droplets, resp, err := p.client.Droplets.ListByTag(ctx, tag, dropletPage)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list droplets by tag %q: %w", tag, err)
+		}
+		for _, d := range droplets {
+			refs = append(refs, interfaces.ResourceRef{
+				Name:       d.Name,
+				Type:       "infra.droplet",
+				ProviderID: fmt.Sprintf("%d", d.ID),
+			})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate droplets: %w", err)
+		}
+		dropletPage.Page = nextPage + 1
+	}
+
+	// Volumes — list all, filter client-side on Tags membership.
+	volumePage := &godo.ListVolumeParams{ListOptions: &godo.ListOptions{Page: 1, PerPage: 200}}
+	for {
+		volumes, resp, err := p.client.Storage.ListVolumes(ctx, volumePage)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list volumes for tag %q: %w", tag, err)
+		}
+		for _, v := range volumes {
+			if !stringSliceContains(v.Tags, tag) {
+				continue
+			}
+			refs = append(refs, interfaces.ResourceRef{
+				Name:       v.Name,
+				Type:       "infra.volume",
+				ProviderID: v.ID,
+			})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate volumes: %w", err)
+		}
+		volumePage.ListOptions.Page = nextPage + 1
+	}
+
+	// Databases — list all, filter client-side on Tags membership.
+	dbPage := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		databases, resp, err := p.client.Databases.List(ctx, dbPage)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list databases for tag %q: %w", tag, err)
+		}
+		for _, db := range databases {
+			if !stringSliceContains(db.Tags, tag) {
+				continue
+			}
+			refs = append(refs, interfaces.ResourceRef{
+				Name:       db.Name,
+				Type:       "infra.database",
+				ProviderID: db.ID,
+			})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate databases: %w", err)
+		}
+		dbPage.Page = nextPage + 1
+	}
+
+	return refs, nil
+}
+
+// stringSliceContains reports whether s is present in slice. Used by EnumerateByTag
+// to filter resources whose tag list includes the requested tag.
+func stringSliceContains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // Destroy deletes the given resources.
