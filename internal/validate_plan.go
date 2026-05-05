@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -48,8 +49,20 @@ func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDia
 	// (from action.Resource) and existing (from action.Current) entries
 	// land here so an App Platform that references an existing VPC by
 	// name (no plan action of its own) still resolves.
+	//
+	// Delete-action resources are EXCLUDED from the index — a vpc_ref
+	// pointing to a VPC scheduled for deletion in the same plan must not
+	// "resolve" as if it were live; otherwise the database/App Platform
+	// checks would silently treat a soon-to-be-gone VPC as valid.
+	// (Copilot review #1 — "vpc_ref can resolve to a VPC that is being
+	// deleted in the same plan".) Cross-resource references to
+	// delete-targets surface as dangling-reference Errors via the same
+	// path as references to names not in the plan at all.
 	byName := make(map[string]planResource, len(plan.Actions))
 	for _, a := range plan.Actions {
+		if a.Action == "delete" {
+			continue
+		}
 		byName[a.Resource.Name] = planResource{spec: a.Resource, current: a.Current}
 	}
 
@@ -87,10 +100,15 @@ func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDia
 // appendDatabaseDiagnostics emits cross-resource diagnostics for an
 // infra.database action. Currently:
 //
-//   - vpc_ref MUST resolve to either an in-plan VPC or a name the
-//     operator knows is an existing VPC (Warning when missing). A
-//     dangling vpc_ref is the conformance scenario's regression-pin
-//     case (Scenario_CrossResourceConstraintRejection).
+//   - vpc_ref MUST resolve to a non-delete VPC action in the same plan.
+//     A vpc_ref pointing to a name that is absent from the plan
+//     entirely OR that is scheduled for deletion in the plan emits a
+//     Severity=Error diagnostic. This is the dangling-cross-resource-
+//     reference case the conformance suite locks via
+//     Scenario_CrossResourceConstraintRejection — both the W-4 design
+//     and the conformance scenario require Error severity, not
+//     Warning, so the conformance assertion ("at least one
+//     PlanDiagnosticError") matches.
 func appendDatabaseDiagnostics(
 	diags []interfaces.PlanDiagnostic,
 	spec interfaces.ResourceSpec,
@@ -218,10 +236,24 @@ func appPlatformRegionGroupOf(zone string) string {
 	return zoneToGroup[zone]
 }
 
-// zonesInGroup returns the sorted list of zone slugs inside a group, for
-// use in diagnostic messages.
+// zonesInGroup returns a sorted (lexicographic) copy of the zone slugs
+// inside a group, for use in diagnostic messages where deterministic
+// ordering matters (test assertions, copy-paste reproducibility).
+// Returns nil for unknown groups. The returned slice is owned by the
+// caller and safe to mutate.
+//
+// Copilot review #3: the prior implementation returned the underlying
+// slice without sorting; the docstring promised sorted output but did
+// not deliver it.
 func zonesInGroup(group string) []string {
-	return appPlatformGroupZones[group]
+	src := appPlatformGroupZones[group]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]string, len(src))
+	copy(out, src)
+	sort.Strings(out)
+	return out
 }
 
 // classifyRegion returns a short human-readable label for a region slug

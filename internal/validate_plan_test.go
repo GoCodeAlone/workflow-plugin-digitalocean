@@ -280,6 +280,45 @@ func TestDOProvider_ValidatePlan_DatabaseDanglingVPCRef(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_DatabaseVPCRefToDeleteTargetIsDangling
+// pins Copilot review #1: a vpc_ref pointing to a VPC that is being
+// deleted in the same plan must be treated as a dangling reference
+// (Severity=Error), NOT silently accepted as if the VPC were live.
+// The byName index must exclude delete-action resources for
+// cross-resource resolution to work correctly.
+func TestDOProvider_ValidatePlan_DatabaseVPCRefToDeleteTargetIsDangling(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		// VPC scheduled for deletion in this plan.
+		{
+			Action: "delete",
+			Resource: interfaces.ResourceSpec{Name: "old-vpc", Type: "infra.vpc", Config: map[string]any{}},
+			Current: &interfaces.ResourceState{
+				Name: "old-vpc", Type: "infra.vpc", ProviderID: "vpc-old",
+				Outputs: map[string]any{"region": "nyc1"},
+			},
+		},
+		// Database referencing the soon-to-be-deleted VPC.
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "old-vpc"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	if len(d) == 0 {
+		t.Fatal("expected at least one diagnostic for vpc_ref to delete-target")
+	}
+	var hasDanglingError bool
+	for _, x := range d {
+		if x.Severity == interfaces.PlanDiagnosticError && x.Field == "vpc_ref" && x.Resource == "db" {
+			hasDanglingError = true
+		}
+	}
+	if !hasDanglingError {
+		t.Errorf("expected Severity=Error vpc_ref diagnostic on db resource; got %+v", d)
+	}
+}
+
 // TestDOProvider_ValidatePlan_DatabaseVPCRefInPlanNoFinding asserts
 // the inverse — when a database vpc_ref resolves to an in-plan VPC,
 // no diagnostic is emitted (well-formed plan, happy path).

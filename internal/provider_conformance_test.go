@@ -53,21 +53,24 @@ func TestConformance(t *testing.T) {
 	cfg := conformance.Config{
 		Provider: func() interfaces.IaCProvider {
 			p := NewDOProvider()
-			// Always initialize. The non-cloud scenarios
-			// (cross-resource constraint rejection, plan-stale
-			// diagnostic, structpb-roundtrip, infra-output
-			// cross-module resolution, protected-replace
-			// with/without override) all need the driver registry
-			// populated to dispatch their probes — they do NOT
-			// require a real DO token because the driver methods
-			// they exercise are read-only or pure-data
-			// transformations. A stub token is sufficient.
+			// Always initialize the provider exactly once with a
+			// single token, picked at runtime: the real
+			// DIGITALOCEAN_ACCESS_TOKEN when LiveCloud is enabled,
+			// or a stub placeholder otherwise. The non-cloud
+			// scenarios (cross-resource constraint rejection,
+			// plan-stale diagnostic, structpb-roundtrip,
+			// infra-output cross-module resolution,
+			// protected-replace with/without override) need the
+			// driver registry populated to dispatch their probes
+			// but do NOT require a real DO token because the
+			// driver methods they exercise are read-only or
+			// pure-data transformations.
 			//
-			// LiveCloud scenarios overwrite the stub with the real
-			// DIGITALOCEAN_ACCESS_TOKEN below; the godo client
-			// inside each driver re-reads it via the closure'd
-			// oauth2 token source so a stub-then-real swap means
-			// the second Initialize wins.
+			// Copilot review #4: the prior comment described a
+			// "stub-then-real swap" with two Initialize calls;
+			// the implementation has always made one call with
+			// the right token chosen up-front, so the comment was
+			// incorrect.
 			token := "stub-token-for-non-cloud-conformance"
 			if liveCloud {
 				token = os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")
