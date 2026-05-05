@@ -249,25 +249,21 @@ func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*inte
 	// main action loop. These arise when a resource's config (e.g. DB
 	// trusted_sources with type=app) references another resource provisioned
 	// later in the same plan. By this point all plan creates have completed
-	// and the referenced resources exist. Each driver type is flushed at
-	// most once.
-	seen := make(map[string]struct{}, len(plan.Actions))
-	for _, action := range plan.Actions {
-		if _, done := seen[action.Resource.Type]; done {
-			continue
-		}
-		seen[action.Resource.Type] = struct{}{}
-		d, dErr := p.ResourceDriver(action.Resource.Type)
-		if dErr != nil {
-			continue
-		}
+	// and the referenced resources exist.
+	//
+	// Iterate the driver registry directly (not plan.Actions) so that orphaned
+	// deferred entries are flushed even when their resource type no longer
+	// appears in the current plan (e.g. after a transient flush failure on a
+	// prior Apply run). Each driver is checked at most once regardless of how
+	// many actions reference it.
+	for resourceType, d := range p.drivers {
 		du, ok := d.(deferredUpdater)
 		if !ok || !du.HasDeferredUpdates() {
 			continue
 		}
 		if flushErr := du.FlushDeferredUpdates(ctx); flushErr != nil {
 			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name,
+				Resource: resourceType,
 				Action:   "deferred_update",
 				Error:    flushErr.Error(),
 			})

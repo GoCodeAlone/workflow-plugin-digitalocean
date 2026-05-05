@@ -577,9 +577,11 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
 
 // buildCreateFirewallRulesExcludingApps builds DatabaseCreateFirewallRules from
-// the "trusted_sources" config, omitting all type=app entries. Used when
-// buildCreateFirewallRules returns ErrAppNotFound so the DB can be created with
-// the resolvable subset of rules while app-based rules are deferred.
+// the "trusted_sources" config, omitting type=app entries that require name
+// resolution (non-UUID values). Used when buildCreateFirewallRules returns
+// ErrAppNotFound so the DB can be created with the resolvable subset of rules
+// while slug-based app rules are deferred. UUID-shaped type=app values are
+// passed through directly since they require no resolution.
 func (d *DatabaseDriver) buildCreateFirewallRulesExcludingApps(cfg map[string]any) ([]*godo.DatabaseCreateFirewallRule, error) {
 	rawVal, exists := cfg["trusted_sources"]
 	if !exists {
@@ -597,8 +599,8 @@ func (d *DatabaseDriver) buildCreateFirewallRulesExcludingApps(cfg map[string]an
 		}
 		ruleType := strFromConfig(m, "type", "")
 		ruleValue := strFromConfig(m, "value", "")
-		if ruleType == "" || ruleValue == "" || ruleType == "app" {
-			continue // skip app-type entries; they will be applied in the deferred pass
+		if ruleType == "" || ruleValue == "" || (ruleType == "app" && !isUUIDLike(ruleValue)) {
+			continue // skip non-UUID app-type entries; they will be applied in the deferred pass
 		}
 		rules = append(rules, &godo.DatabaseCreateFirewallRule{
 			Type:  ruleType,
@@ -609,9 +611,11 @@ func (d *DatabaseDriver) buildCreateFirewallRulesExcludingApps(cfg map[string]an
 }
 
 // buildUpdateFirewallRulesExcludingApps builds DatabaseFirewallRules from the
-// "trusted_sources" config, omitting all type=app entries. Used when
-// buildUpdateFirewallRules returns ErrAppNotFound so the partial rule set can
-// be applied immediately while app-based rules are deferred.
+// "trusted_sources" config, omitting type=app entries that require name
+// resolution (non-UUID values). Used when buildUpdateFirewallRules returns
+// ErrAppNotFound so the partial rule set can be applied immediately while
+// slug-based app rules are deferred. UUID-shaped type=app values are passed
+// through directly since they require no resolution.
 func (d *DatabaseDriver) buildUpdateFirewallRulesExcludingApps(cfg map[string]any) ([]*godo.DatabaseFirewallRule, bool, error) {
 	raw, ok := cfg["trusted_sources"]
 	if !ok {
@@ -629,8 +633,8 @@ func (d *DatabaseDriver) buildUpdateFirewallRulesExcludingApps(cfg map[string]an
 		}
 		ruleType := strFromConfig(m, "type", "")
 		ruleValue := strFromConfig(m, "value", "")
-		if ruleType == "" || ruleValue == "" || ruleType == "app" {
-			continue // skip app-type entries; they will be applied in the deferred pass
+		if ruleType == "" || ruleValue == "" || (ruleType == "app" && !isUUIDLike(ruleValue)) {
+			continue // skip non-UUID app-type entries; they will be applied in the deferred pass
 		}
 		rules = append(rules, &godo.DatabaseFirewallRule{
 			Type:  ruleType,
