@@ -1,0 +1,73 @@
+name: codemod-report
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+env:
+  GOPRIVATE: github.com/GoCodeAlone/*
+jobs:
+  codemod-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Configure Git for private repos
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -n "${RELEASES_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+      - name: Run iac-codemod refactor-apply (dry-run)
+        run: |
+          set -euo pipefail
+          WFCTL_VERSION="$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}')"
+          go run "github.com/GoCodeAlone/workflow/cmd/iac-codemod@${WFCTL_VERSION}" \
+            refactor-apply -dry-run . > /tmp/codemod-report.md
+          # Short summary for the sticky PR comment.
+          head -30 /tmp/codemod-report.md > /tmp/codemod-summary.md
+          echo "" >> /tmp/codemod-summary.md
+          echo "_Full report (90-day retention) attached as workflow artifact._" >> /tmp/codemod-summary.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codemod-report-${{ github.event.pull_request.number }}
+          path: /tmp/codemod-report.md
+          retention-days: 90
+      - name: Comment summary on PR (first-party action SHA-pinned)
+        # rev5 — pin to commit SHA even though first-party. Tag mutability is a
+        # known risk; Renovate config tracks upstream releases via .github/renovate.json.
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('/tmp/codemod-summary.md', 'utf8');
+            const marker = '<!-- codemod-report-sticky -->';
+            const body = `${marker}\n${summary}`;
+            // Paginate to handle PRs with >30 comments (default page size).
+            const allComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = allComments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
