@@ -77,8 +77,45 @@ func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDia
 					),
 				})
 			}
+		case "infra.database":
+			diags = appendDatabaseDiagnostics(diags, a.Resource, byName)
 		}
 	}
+	return diags
+}
+
+// appendDatabaseDiagnostics emits cross-resource diagnostics for an
+// infra.database action. Currently:
+//
+//   - vpc_ref MUST resolve to either an in-plan VPC or a name the
+//     operator knows is an existing VPC (Warning when missing). A
+//     dangling vpc_ref is the conformance scenario's regression-pin
+//     case (Scenario_CrossResourceConstraintRejection).
+func appendDatabaseDiagnostics(
+	diags []interfaces.PlanDiagnostic,
+	spec interfaces.ResourceSpec,
+	byName map[string]planResource,
+) []interfaces.PlanDiagnostic {
+	vpcRef, _ := spec.Config["vpc_ref"].(string)
+	if vpcRef == "" {
+		return diags
+	}
+	if _, ok := byName[vpcRef]; ok {
+		return diags
+	}
+	// vpc_ref names a resource not in the plan. Surface as Error so the
+	// conformance scenario's "at least one Severity=Error" assertion
+	// matches; this is the dangling-cross-resource-reference case the
+	// W-4 design explicitly calls out as a plan-time validator gap.
+	diags = append(diags, interfaces.PlanDiagnostic{
+		Severity: interfaces.PlanDiagnosticError,
+		Resource: spec.Name,
+		Field:    "vpc_ref",
+		Message: fmt.Sprintf(
+			"DO database %q references vpc_ref %q which is not declared in the same plan; either add the VPC resource or remove the vpc_ref",
+			spec.Name, vpcRef,
+		),
+	})
 	return diags
 }
 

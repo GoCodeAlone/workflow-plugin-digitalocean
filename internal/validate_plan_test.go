@@ -248,6 +248,58 @@ func TestDOProvider_ValidatePlan_DeleteActionsSkipped(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_DatabaseDanglingVPCRef asserts the
+// regression-pin case the conformance suite locks
+// (Scenario_CrossResourceConstraintRejection): a database with a
+// vpc_ref pointing to a name not present in the plan emits at least
+// one Severity=Error diagnostic. This is the in-tree mirror of the
+// portable conformance assertion.
+func TestDOProvider_ValidatePlan_DatabaseDanglingVPCRef(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "missing-vpc"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	if len(d) == 0 {
+		t.Fatal("expected at least one diagnostic for dangling vpc_ref")
+	}
+	var hasError bool
+	for _, x := range d {
+		if x.Message == "" {
+			t.Errorf("diagnostic message must be non-empty: %+v", x)
+		}
+		if x.Severity == interfaces.PlanDiagnosticError {
+			hasError = true
+		}
+	}
+	if !hasError {
+		t.Errorf("expected at least one Severity=Error diagnostic; got %+v", d)
+	}
+}
+
+// TestDOProvider_ValidatePlan_DatabaseVPCRefInPlanNoFinding asserts
+// the inverse — when a database vpc_ref resolves to an in-plan VPC,
+// no diagnostic is emitted (well-formed plan, happy path).
+func TestDOProvider_ValidatePlan_DatabaseVPCRefInPlanNoFinding(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-vpc", Type: "infra.vpc",
+			Config: map[string]any{"region": "nyc1"},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "core-vpc"},
+		}},
+	}}
+	if d := p.ValidatePlan(plan); len(d) != 0 {
+		t.Errorf("expected 0 diagnostics for in-plan vpc_ref; got %+v", d)
+	}
+}
+
 // TestDOProvider_ValidatePlan_CompileTimeAssertion documents that the
 // compile-time interface assertion in validate_plan.go locks
 // DOProvider's ProviderValidator implementation. If the interface

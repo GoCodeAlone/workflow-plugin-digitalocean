@@ -4,6 +4,84 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+## [v0.10.0]
+
+### Added
+
+- **`iacProvider.computePlanVersion: v2` opt-in** (PR P-DO TP4) — wfctl's
+  runtime dispatcher now routes Apply through `wfctlhelpers.ApplyPlan`
+  instead of the legacy in-provider switch. The new dispatch path adds:
+  Replace decomposition + `ReplaceIDMap` propagation, JIT
+  `${MODULE.id}` / `${VAR}` substitution, the input-drift postcondition,
+  per-action context cancellation between iterations, and the
+  `interfaces.UpsertSupporter` recovery contract.
+
+  Backward compat: wfctl < v0.21.0 ignores the new field; the legacy
+  v1 dispatch (`provider.Apply` switch, now wrapping
+  `wfctlhelpers.ApplyPlan`) continues to work for all existing callers.
+
+- **`ValidatePlan` (`interfaces.ProviderValidator`)** (PR P-DO TP3) —
+  read-only, no-remote-call cross-resource constraint check that runs
+  at `wfctl infra align` time before any cloud API call. First pass
+  covers three constraint families:
+  1. App Platform `infra.container_service` requires a region GROUP
+     slug (`nyc`, `ams`, `fra`, `sfo`, `sgp`, `syd`, `tor`, `blr`,
+     `lon`); zone slugs (`nyc1`, `sfo3`, …) rejected with
+     `PlanDiagnosticError`.
+  2. Zone-bound resources (`infra.vpc`, `infra.droplet`, `infra.volume`)
+     require a zone slug; bare group slugs rejected with
+     `PlanDiagnosticError`.
+  3. Cross-resource: App Platform `vpc_ref` must reference a VPC whose
+     region zone belongs to the App Platform's region group; database
+     `vpc_ref` must resolve to an in-plan VPC. Locks the recurring
+     "App Platform in nyc cannot reach VPC in sfo3" production bug
+     class (root-cause issue D from the conformance design).
+
+  Severity mapping: Error always fails align; Warning fails only under
+  `--strict`; Info never affects exit. ValidatePlan is read-only and
+  makes no remote calls per the W-4 contract.
+
+- **Conformance test (`provider_conformance_test.go`)** (PR P-DO TP5)
+  — invokes `iac/conformance.Run` against a freshly-constructed
+  `DOProvider`. Behind the `conformance` build tag; opt in with
+  `go test -tags=conformance ./internal/...`. Six non-cloud scenarios
+  run by default; `CONFORMANCE_LIVE_CLOUD=1` (with
+  `DIGITALOCEAN_ACCESS_TOKEN`) opts into the cloud-touching probes.
+
+- **`.github/workflows/codemod-report.yml`** (PR P-DO TP1) — per-PR
+  workflow runs `iac-codemod refactor-apply -dry-run` against the
+  plugin source, uploads the full Markdown report as a 90-day retention
+  GitHub Actions artifact, and posts/updates a sticky PR comment with
+  the top-30-line summary so drive-by reviewers see findings without
+  downloading the artifact.
+
+### Changed
+
+- **`DOProvider.Apply` collapsed to wrap `wfctlhelpers.ApplyPlan`**
+  (PR P-DO TP2) — the in-Apply per-action switch
+  (create/update/replace/delete + upsert recovery + nil-out diagnostic)
+  is replaced with a single dispatch to the helper. The DO-plugin-specific
+  deferred-update flush (DatabaseDriver `type=app` `trusted_sources`
+  referencing apps created later in the plan; regression-gated by
+  `provider_deferred_test.go`) is preserved by wrapping `ApplyPlan` with
+  the second-pass loop. The wrapper deviates from the codemod's canonical
+  single-statement shape; the deviation is documented and marked with
+  `// wfctl:skip-iac-codemod` so `AssertApplyDelegatesToHelper`
+  recognises it as intentional.
+
+- **DO drivers `AppPlatformDriver`, `VPCDriver`, `FirewallDriver`,
+  `DatabaseDriver`** structurally satisfy the canonical
+  `interfaces.UpsertSupporter` (their existing `SupportsUpsert() bool`
+  method is bit-identical to the new interface; no driver-side changes
+  needed).
+
+- **`DOProvider.Apply` `delete` action with `Current == nil`** — under
+  v2 dispatch the contract is "driver is the authority on what an empty
+  ProviderID means" (per `wfctlhelpers/apply.go::doUpdate`'s analogous
+  comment). The v1-era pre-flight precondition error is retired;
+  `provider_apply_test.go::TestDOProvider_Apply_DeleteAction_MissingCurrent`
+  was rewritten to lock the new contract.
+
 ### Fixed
 
 - **`infra.vpc` exposes `id` output** — wfctl `infra_output: <vpc>.id`
@@ -13,6 +91,11 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   not found in outputs of module`. Mirrors `ProviderID` to
   `Outputs["id"]` so the standard `<vpc>.id` reference works. Surfaced
   by core-dump deploy run 25278900082.
+
+### Bumped
+
+- `github.com/GoCodeAlone/workflow` → `e2c582bece90` (workflow main HEAD
+  with W-7 conformance suite + W-8 codemod merged).
 
 ## [v0.9.1]
 
