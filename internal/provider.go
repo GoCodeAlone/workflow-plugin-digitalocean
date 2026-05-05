@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
+	"github.com/GoCodeAlone/workflow/iac/wfctlhelpers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
@@ -217,134 +218,68 @@ func resourceOutputFromState(state interfaces.ResourceState) *interfaces.Resourc
 	}
 }
 
-// upsertSupporter is an optional interface for ResourceDrivers that support
-// locating a resource by name alone (empty ProviderID) in their Read method.
-// Only drivers that implement name-based discovery should implement this
-// interface. Apply gates the ErrResourceAlreadyExists → upsert path on it to
-// prevent calling Read with an empty ProviderID on drivers that require one.
-type upsertSupporter interface {
-	SupportsUpsert() bool
-}
-
 // deferredUpdater is an optional interface for ResourceDrivers that accumulate
 // resource-level updates that cannot be applied until all plan creates complete.
 // The canonical case is DatabaseDriver deferring type=app trusted_sources entries
 // that reference apps created later in the same plan. Apply calls
-// FlushDeferredUpdates once after the main action loop; errors are appended to
+// FlushDeferredUpdates once after the main dispatch loop; errors are appended to
 // ApplyResult.Errors so the failure is visible to the operator.
+//
+// This is a DO-plugin-specific extension point not yet hoisted into
+// wfctlhelpers.ApplyPlan; the second-pass flush below preserves the regression
+// gate while the v2 dispatch handles the per-action loop.
 type deferredUpdater interface {
 	HasDeferredUpdates() bool
 	FlushDeferredUpdates(ctx context.Context) error
 }
 
-// Apply executes the plan.
+// Apply executes the plan via wfctlhelpers.ApplyPlan, then runs the
+// DO-specific deferred-update second pass.
+//
+// PR P-DO TP2: under iacProvider.computePlanVersion: v2 wfctl dispatches
+// directly through wfctlhelpers.ApplyPlan and does not call this method.
+// The implementation here remains for legacy v1 callers (wfctl < v0.21.0
+// or any in-process embedder of the gRPC plugin) and for the deferred-flush
+// behavior that wfctlhelpers does not yet hoist.
+//
+// Per-action upsert recovery, JIT substitution, the Replace cascade, and
+// the input-drift postcondition all live in wfctlhelpers.ApplyPlan now —
+// drivers that opt into the upsert recovery path implement
+// interfaces.UpsertSupporter (DO drivers AppPlatform, VPC, Firewall,
+// Database all do; signature: SupportsUpsert() bool). The local
+// upsertSupporter interface previously declared here is no longer needed:
+// its SupportsUpsert() bool method is structurally identical to
+// interfaces.UpsertSupporter, so the existing driver implementations
+// satisfy the canonical interface without code change.
+//
+// wfctl:skip-iac-codemod
+//
+// The body intentionally wraps wfctlhelpers.ApplyPlan rather than
+// matching the codemod's canonical single-statement
+// `return wfctlhelpers.ApplyPlan(ctx, p, plan)` shape: the
+// post-helper deferred-update flush below is a DO-plugin-specific
+// regression gate (see provider_deferred_test.go and CHANGELOG entry
+// for staging-deploy-blockers Blocker 2) that wfctlhelpers does not
+// hoist. The skip marker tells the codemod's
+// AssertApplyDelegatesToHelper analyzer this deviation is intentional.
+// When wfctlhelpers grows a deferred-update lifecycle hook, the
+// wrapper can collapse and the marker can drop.
 func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
-	result := &interfaces.ApplyResult{PlanID: plan.ID}
-	for _, action := range plan.Actions {
-		d, err := p.ResourceDriver(action.Resource.Type)
-		if err != nil {
-			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name, Action: action.Action, Error: err.Error(),
-			})
-			continue
-		}
-		var out *interfaces.ResourceOutput
-		switch action.Action {
-		case "create":
-			out, err = d.Create(ctx, action.Resource)
-			if errors.Is(err, interfaces.ErrResourceAlreadyExists) {
-				// Upsert: resource exists in the provider but is absent from
-				// local state. Only attempt upsert if the driver supports
-				// name-based discovery (SupportsUpsert returns true).
-				// Drivers that pass ProviderID directly to their API client
-				// (VPC, database, firewall, etc.) do not support this path.
-				us, ok := d.(upsertSupporter)
-				if !ok || !us.SupportsUpsert() {
-					// Propagate original error; upsert not available for this type.
-					break
-				}
-				createErr := err
-				ref := interfaces.ResourceRef{
-					Name: action.Resource.Name,
-					Type: action.Resource.Type,
-				}
-				existing, readErr := d.Read(ctx, ref)
-				if readErr != nil {
-					// Preserve createErr so ErrResourceAlreadyExists remains
-					// in the error chain for callers using errors.Is.
-					err = fmt.Errorf("upsert: read after conflict: %w", errors.Join(createErr, readErr))
-					break
-				}
-				if existing.ProviderID == "" {
-					err = fmt.Errorf("upsert: resource %q found by name but ProviderID is empty; cannot update: %w", ref.Name, createErr)
-					break
-				}
-				ref.ProviderID = existing.ProviderID
-				out, err = d.Update(ctx, ref, action.Resource)
-			}
-		case "update":
-			ref := interfaces.ResourceRef{
-				Name:       action.Resource.Name,
-				Type:       action.Resource.Type,
-				ProviderID: action.Current.ProviderID,
-			}
-			out, err = d.Update(ctx, ref, action.Resource)
-		case "replace":
-			if action.Current == nil {
-				err = fmt.Errorf("replace action missing current resource state")
-				break
-			}
-			ref := interfaces.ResourceRef{
-				Name:       action.Resource.Name,
-				Type:       action.Resource.Type,
-				ProviderID: action.Current.ProviderID,
-			}
-			if err = d.Delete(ctx, ref); err != nil {
-				break
-			}
-			out, err = d.Create(ctx, action.Resource)
-		case "delete":
-			// Delete uses Current for the ref (ProviderID). Resource.Config is
-			// empty for deletes — the desired state is "absent" — but
-			// Resource.Type and Name are still set (required for driver lookup above).
-			if action.Current == nil {
-				err = fmt.Errorf("delete action for %q missing current resource state", action.Resource.Name)
-				break
-			}
-			ref := interfaces.ResourceRef{
-				Name:       action.Current.Name,
-				Type:       action.Current.Type,
-				ProviderID: action.Current.ProviderID,
-			}
-			err = d.Delete(ctx, ref)
-			// out remains nil — deleted resources have no post-apply output.
-		default:
-			err = fmt.Errorf("unknown action %q", action.Action)
-		}
-		if err != nil {
-			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name, Action: action.Action, Error: err.Error(),
-			})
-			continue
-		}
-		if out != nil {
-			result.Resources = append(result.Resources, *out)
-		} else if action.Action != "delete" {
-			// A nil output without an error from create/update/replace is a driver
-			// bug — surface it explicitly so callers aren't silently missing state
-			// entries. "delete" legitimately returns nil out, so it's excluded.
-			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: action.Resource.Name, Action: action.Action,
-				Error: "driver returned nil output without error",
-			})
-		}
+	result, err := wfctlhelpers.ApplyPlan(ctx, p, plan)
+	if err != nil {
+		// ApplyPlan only returns a top-level error on context cancellation
+		// — per-action failures land on result.Errors. Surface the
+		// cancellation alongside whatever partial result is in hand so
+		// callers can still inspect any actions that completed.
+		return result, err
 	}
 
-	// Second pass: flush deferred updates accumulated by drivers during the main
-	// action loop. These arise when a resource's config (e.g. DB trusted_sources
-	// with type=app) references another resource provisioned later in the same
-	// plan. By this point all plan creates have completed and the referenced
-	// resources exist. Each driver type is flushed at most once.
+	// Second pass: flush deferred updates accumulated by drivers during the
+	// main action loop. These arise when a resource's config (e.g. DB
+	// trusted_sources with type=app) references another resource provisioned
+	// later in the same plan. By this point all plan creates have completed
+	// and the referenced resources exist. Each driver type is flushed at
+	// most once.
 	seen := make(map[string]struct{}, len(plan.Actions))
 	for _, action := range plan.Actions {
 		if _, done := seen[action.Resource.Type]; done {

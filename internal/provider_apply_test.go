@@ -84,8 +84,22 @@ func TestDOProvider_Apply_DeleteAction(t *testing.T) {
 	}
 }
 
-// TestDOProvider_Apply_DeleteAction_MissingCurrent verifies that a delete
-// action with no Current state is collected as an error (not a panic/crash).
+// TestDOProvider_Apply_DeleteAction_MissingCurrent verifies the v2-dispatch
+// contract for a delete action with action.Current == nil:
+// wfctlhelpers.ApplyPlan dispatches Delete with an empty-ProviderID
+// ResourceRef (the driver is the authority on what an empty ProviderID
+// means — see wfctlhelpers/apply.go::doUpdate's analogous comment). The
+// v1-era pre-flight precondition error has been retired with the v2
+// migration (PR P-DO TP2): the response when ProviderID is empty is now
+// driver-dependent rather than centrally synthesised.
+//
+// Copilot review #11 (round 3): driver behavior on an empty-ProviderID
+// delete varies — FirewallDriver.Delete, for example, resolves by name
+// when ProviderID is empty (uses ListByTag/ListByDroplet to locate the
+// firewall) and may succeed; other drivers (DatabaseDriver,
+// VolumeDriver) require ProviderID and surface a typed error. The v2
+// contract is "the driver knows what an empty ProviderID means for its
+// resource shape", not "all drivers reject empty ProviderID".
 func TestDOProvider_Apply_DeleteAction_MissingCurrent(t *testing.T) {
 	fake := &deleteFakeDriver{}
 	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.firewall": fake}}
@@ -93,21 +107,30 @@ func TestDOProvider_Apply_DeleteAction_MissingCurrent(t *testing.T) {
 	plan := &interfaces.IaCPlan{
 		ID: "plan-delete-no-current",
 		Actions: []interfaces.PlanAction{{
-			Action:  "delete",
+			Action:   "delete",
 			Resource: interfaces.ResourceSpec{Name: "orphan-firewall", Type: "infra.firewall"},
-			Current: nil, // missing — defensive handling required
+			Current:  nil, // v2 contract: dispatched with empty ProviderID
 		}},
 	}
 
 	result, err := p.Apply(t.Context(), plan)
 	if err != nil {
-		t.Fatalf("Apply returned top-level error (want nil + error in result.Errors): %v", err)
+		t.Fatalf("Apply returned top-level error: %v", err)
 	}
-	if len(result.Errors) == 0 {
-		t.Fatal("expected error in result.Errors for delete with missing Current, got none")
+	// v2 contract: the dispatch IS made with an empty ProviderID; this
+	// stub fake accepts it and returns nil. Real drivers handle the
+	// empty case driver-by-driver (some resolve-by-name, some error).
+	if fake.deleteCalls != 1 {
+		t.Errorf("Delete dispatched %d times, want 1 (v2 dispatch contract)", fake.deleteCalls)
 	}
-	if fake.deleteCalls != 0 {
-		t.Errorf("Delete should not be called when Current is nil, but called %d times", fake.deleteCalls)
+	if fake.deletedRef.ProviderID != "" {
+		t.Errorf("Delete called with ProviderID %q, want empty (Current was nil)", fake.deletedRef.ProviderID)
+	}
+	// No top-level error and no per-action error because the fake driver
+	// accepted the empty-ProviderID delete. (Real drivers like FirewallDriver
+	// would emit an error here; the fake's job is to verify dispatch only.)
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no per-action errors for fake driver dispatch, got %v", result.Errors)
 	}
 }
 
