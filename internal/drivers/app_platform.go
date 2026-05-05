@@ -209,7 +209,30 @@ func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceS
 	if desiredExpose != curExpose {
 		changes = append(changes, interfaces.FieldChange{Path: "expose", Old: curExpose, New: desiredExpose})
 	}
-	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
+
+	// region: App Platform's UpdateApp does not accept region changes —
+	// region is a Create-only field on godo.AppSpec, so any drift forces
+	// replace. Mirror VolumeDriver.Diff's region pattern. Guard
+	// curRegion != "" so apps in state from earlier plugin versions
+	// (when appOutput didn't include region) don't false-positive on
+	// the first plan after upgrade — they'll Read on next apply to
+	// populate the field.
+	var needsReplace bool
+	if region := strFromConfig(desired.Config, "region", ""); region != "" {
+		curRegion, _ := current.Outputs["region"].(string)
+		if curRegion != "" && curRegion != region {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "region", Old: curRegion, New: region, ForceNew: true,
+			})
+			needsReplace = true
+		}
+	}
+
+	return &interfaces.DiffResult{
+		NeedsUpdate:  len(changes) > 0,
+		NeedsReplace: needsReplace,
+		Changes:      changes,
+	}, nil
 }
 
 // canonicalExpose returns the canonical `expose` value for a desired-spec
@@ -768,6 +791,11 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			// desired `cfg["image"]` and avoid emitting spurious image
 			// FieldChanges on no-op reconciles — F4 round-3 Finding A.
 			"image": deriveImageFromAppSpec(app.Spec),
+			// `region` is the App Platform region from AppSpec.Region.
+			// Stored on Outputs so Diff can detect region drift and
+			// surface it as ForceNew (App Platform's UpdateApp does not
+			// accept region changes — region is a Create-only field).
+			"region": app.Spec.Region,
 		},
 		Status: "running",
 	}

@@ -965,6 +965,78 @@ func TestDropletDriver_Create_Volumes_EmptyStringRejected(t *testing.T) {
 	}
 }
 
+// TestDropletDriver_Diff_RegionChangeForcesReplace covers issue #70:
+// Droplets are regional and DO does not support region change in Update
+// (godo Droplet PUT only resizes). Region drift must surface as ForceNew
+// so cascade dependents (Volume mount, Firewall tags) get correctly
+// re-coordinated against the replaced Droplet.
+func TestDropletDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":   "s-1vcpu-2gb",
+			"region": "nyc3",
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":   "s-1vcpu-2gb",
+			"region": "nyc1",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Fatal("region change must force replace; NeedsReplace=false")
+	}
+	var found bool
+	for _, c := range r.Changes {
+		if c.Path == "region" && c.Old == "nyc3" && c.New == "nyc1" && c.ForceNew {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:region, Old:nyc3, New:nyc1, ForceNew:true}; got %+v", r.Changes)
+	}
+}
+
+// TestDropletDriver_Diff_RegionEmptyCurrentSkipped covers the upgrade-safe
+// guard: Droplets in state from earlier plugin versions (when dropletOutput
+// didn't include region) must not false-positive on the first plan after
+// upgrade — they'll Read on next apply to populate the field.
+func TestDropletDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			// no region — represents pre-region-output state
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":   "s-1vcpu-2gb",
+			"region": "nyc1",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace {
+		t.Error("empty curRegion should not force replace; got NeedsReplace=true")
+	}
+	for _, c := range r.Changes {
+		if c.Path == "region" {
+			t.Errorf("empty curRegion should not emit a region change; got %+v", c)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	if len(sub) == 0 {
 		return true

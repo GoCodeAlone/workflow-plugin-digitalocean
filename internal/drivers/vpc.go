@@ -151,6 +151,22 @@ func (d *VPCDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 			})
 		}
 	}
+
+	// region: VPCs are regional and DO does not support region change in
+	// Update. Mirror VolumeDriver.Diff's region pattern: any region drift
+	// forces replace. Guard curRegion != "" so VPCs in state from earlier
+	// plugin versions (when vpcOutput didn't include region) don't false-
+	// positive on the first plan after upgrade — they'll Read on next
+	// apply to populate the field.
+	if region := strFromConfig(desired.Config, "region", ""); region != "" {
+		curRegion, _ := current.Outputs["region"].(string)
+		if curRegion != "" && curRegion != region {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "region", Old: curRegion, New: region, ForceNew: true,
+			})
+		}
+	}
+
 	return &interfaces.DiffResult{
 		NeedsUpdate:  len(changes) > 0,
 		NeedsReplace: len(changes) > 0,

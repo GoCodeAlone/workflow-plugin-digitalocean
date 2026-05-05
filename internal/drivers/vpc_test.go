@@ -217,6 +217,65 @@ func TestVPCDriver_Diff_IPRangeChange(t *testing.T) {
 	}
 }
 
+// TestVPCDriver_Diff_RegionChangeForcesReplace covers issue #70: VPCs are
+// regional and DO does not support region change in Update. Region drift
+// must surface as ForceNew so cascade dependents (Droplet vpc_uuid, App
+// vpc_ref) are correctly replaced too.
+func TestVPCDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"ip_range": "10.20.0.0/16", "region": "nyc3"},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"ip_range": "10.20.0.0/16", "region": "nyc1"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsReplace {
+		t.Fatal("expected NeedsReplace for region change")
+	}
+	var found bool
+	for _, c := range result.Changes {
+		if c.Path == "region" && c.Old == "nyc3" && c.New == "nyc1" && c.ForceNew {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:region, Old:nyc3, New:nyc1, ForceNew:true}; got %+v", result.Changes)
+	}
+}
+
+// TestVPCDriver_Diff_RegionEmptyCurrentSkipped covers the upgrade-safe
+// guard: VPCs in state from earlier plugin versions (when vpcOutput
+// didn't include region) must not false-positive on the first plan
+// after upgrade — they'll Read on next apply to populate the field.
+func TestVPCDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
+	mock := &mockVPCClient{vpc: testVPC()}
+	d := drivers.NewVPCDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{"ip_range": "10.20.0.0/16"}, // no region
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"ip_range": "10.20.0.0/16", "region": "nyc1"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsReplace {
+		t.Error("empty curRegion should not force replace; got NeedsReplace=true")
+	}
+	for _, c := range result.Changes {
+		if c.Path == "region" {
+			t.Errorf("empty curRegion should not emit a region change; got %+v", c)
+		}
+	}
+}
+
 func TestVPCDriver_SupportsUpsert(t *testing.T) {
 	d := drivers.NewVPCDriverWithClient(&mockVPCClient{}, "nyc3")
 	if !d.SupportsUpsert() {
