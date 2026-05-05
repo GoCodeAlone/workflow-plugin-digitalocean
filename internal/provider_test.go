@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -12,6 +14,19 @@ import (
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
 )
+
+// TestMain disables the platform/diffcache filesystem backend so per-test Diff
+// dispatch is reproducible. ComputePlan caches Diff results under
+// ~/.cache/wfctl/diff/ keyed on (PluginVersion, Type, ProviderID, SHAConfig,
+// SHAOutputs); without disabling, prior test runs poison subsequent runs and
+// fakes that record Diff invocations observe zero calls. WFCTL_DIFFCACHE is
+// resolved by getDiffCache via sync.Once on first cache-eligible Diff call.
+func TestMain(m *testing.M) {
+	if err := os.Setenv("WFCTL_DIFFCACHE", "disabled"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
 
 // compile-time interface check
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
@@ -219,9 +234,18 @@ func TestConfigHash_Empty(t *testing.T) {
 	}
 }
 
+// planDiffFakeDriver is a test double whose Diff records each invocation.
+// platform.ComputePlan dispatches Diff in parallel via errgroup, so all
+// observable state mutations are guarded by mu.
 type planDiffFakeDriver struct {
-	diffResult      *interfaces.DiffResult
-	diffCalls       int
+	diffResult *interfaces.DiffResult
+	mu         sync.Mutex
+	diffCalls  int
+	// receivedSpec / receivedCurrent capture the LAST Diff invocation; in
+	// multi-resource tests they reflect non-deterministic ordering since
+	// dispatch is parallel — assertions that depend on a specific resource
+	// should pin the spec by Name in the assertion (or use a multi-shot
+	// recorder per name).
 	receivedSpec    interfaces.ResourceSpec
 	receivedCurrent *interfaces.ResourceOutput
 }
@@ -237,6 +261,8 @@ func (f *planDiffFakeDriver) Update(_ context.Context, _ interfaces.ResourceRef,
 }
 func (f *planDiffFakeDriver) Delete(_ context.Context, _ interfaces.ResourceRef) error { return nil }
 func (f *planDiffFakeDriver) Diff(_ context.Context, spec interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.diffCalls++
 	f.receivedSpec = spec
 	f.receivedCurrent = current
@@ -355,17 +381,21 @@ func TestDOProvider_Plan_KeepsDistinctCurrentStatePerAction(t *testing.T) {
 	}
 }
 
-func TestDOProvider_Plan_KeepsDistinctCurrentStatePerConfigHashAction(t *testing.T) {
+// TestDOProvider_Plan_RejectsUnregisteredDriverType pins the new contract
+// after refactoring DOProvider.Plan to platform.ComputePlan
+// (workflow-plugin-digitalocean#63). Previously the hand-rolled Plan body
+// silently fell back to a configHash compare when ResourceDriver returned an
+// error; the canonical helper instead surfaces the missing-driver error so
+// operators see a clear failure rather than a stale-shape plan.
+//
+// Replaces TestDOProvider_Plan_KeepsDistinctCurrentStatePerConfigHashAction —
+// the legacy-fallback semantic that test pinned no longer applies.
+func TestDOProvider_Plan_RejectsUnregisteredDriverType(t *testing.T) {
 	desired := []interfaces.ResourceSpec{
 		{
 			Name:   "one-dns",
 			Type:   "infra.dns",
 			Config: map[string]any{"domain": "one.example.com"},
-		},
-		{
-			Name:   "two-dns",
-			Type:   "infra.dns",
-			Config: map[string]any{"domain": "two.example.com"},
 		},
 	}
 	current := []interfaces.ResourceState{
@@ -375,27 +405,18 @@ func TestDOProvider_Plan_KeepsDistinctCurrentStatePerConfigHashAction(t *testing
 			ProviderID:    "one.example.com",
 			AppliedConfig: map[string]any{"domain": "old-one.example.com"},
 		},
-		{
-			Name:          "two-dns",
-			Type:          "infra.dns",
-			ProviderID:    "two.example.com",
-			AppliedConfig: map[string]any{"domain": "old-two.example.com"},
-		},
 	}
+	// DOProvider with no drivers registered — ResourceDriver returns an error
+	// for every type. ComputePlan must propagate that error rather than
+	// silently emit a configHash-based update.
 	p := &DOProvider{}
 
-	plan, err := p.Plan(t.Context(), desired, current)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
+	_, err := p.Plan(t.Context(), desired, current)
+	if err == nil {
+		t.Fatal("expected error from Plan when driver is not registered; got nil")
 	}
-	if len(plan.Actions) != 2 {
-		t.Fatalf("plan actions = %d, want 2", len(plan.Actions))
-	}
-	if plan.Actions[0].Current == nil || plan.Actions[0].Current.ProviderID != "one.example.com" {
-		t.Fatalf("first action current = %+v, want one.example.com", plan.Actions[0].Current)
-	}
-	if plan.Actions[1].Current == nil || plan.Actions[1].Current.ProviderID != "two.example.com" {
-		t.Fatalf("second action current = %+v, want two.example.com", plan.Actions[1].Current)
+	if !strings.Contains(err.Error(), "infra.dns") {
+		t.Errorf("error %q should mention the missing resource type", err.Error())
 	}
 }
 

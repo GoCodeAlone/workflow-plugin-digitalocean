@@ -12,6 +12,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/iac/wfctlhelpers"
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/GoCodeAlone/workflow/platform"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc/codes"
@@ -167,67 +168,23 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 	return resolveSizing(resourceType, size, hints)
 }
 
-// Plan computes the set of actions needed to reach the desired state.
+// Plan computes the set of actions needed to reach the desired state by
+// delegating to the canonical platform.ComputePlan helper. The helper
+// dispatches per-resource Diff in parallel, classifies replace vs update
+// (including the ForceNew → replace promotion), emits creates/deletes in
+// dependency-correct order, and consults the diff cache.
+//
+// The 2-statement form (call + pointer-bridge return) is mandated by the
+// W-Refactor / iac-codemod analyzer (cmd/iac-codemod AssertPlanDelegatesToHelper);
+// see workflow CHANGELOG entry referencing platform.ComputePlan as the
+// canonical target for v2 IaC providers.
+//
+// addresses workflow-plugin-digitalocean#63: the prior hand-rolled body
+// duplicated ComputePlan's classification logic and silently dropped the
+// ForceNew → replace upgrade path (only NeedsReplace was honored).
 func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
-	currentByName := make(map[string]interfaces.ResourceState, len(current))
-	for _, r := range current {
-		currentByName[r.Name] = r
-	}
-
-	plan := &interfaces.IaCPlan{
-		ID:        fmt.Sprintf("plan-%d", time.Now().UnixNano()),
-		CreatedAt: time.Now(),
-	}
-
-	for _, spec := range desired {
-		cur, exists := currentByName[spec.Name]
-		if !exists {
-			plan.Actions = append(plan.Actions, interfaces.PlanAction{
-				Action:   "create",
-				Resource: spec,
-			})
-			continue
-		}
-		if driver, err := p.ResourceDriver(spec.Type); err == nil {
-			diff, err := driver.Diff(ctx, spec, resourceOutputFromState(cur))
-			if err != nil {
-				return nil, fmt.Errorf("plan diff %s/%s: %w", spec.Type, spec.Name, err)
-			}
-			if diff != nil && (diff.NeedsUpdate || diff.NeedsReplace) {
-				action := "update"
-				if diff.NeedsReplace {
-					action = "replace"
-				}
-				plan.Actions = append(plan.Actions, interfaces.PlanAction{
-					Action:   action,
-					Resource: spec,
-					Current:  &cur,
-					Changes:  diff.Changes,
-				})
-				continue
-			}
-			if diff != nil {
-				continue
-			}
-		}
-		if configHash(cur.AppliedConfig) != configHash(spec.Config) {
-			plan.Actions = append(plan.Actions, interfaces.PlanAction{
-				Action:   "update",
-				Resource: spec,
-				Current:  &cur,
-			})
-		}
-	}
-	return plan, nil
-}
-
-func resourceOutputFromState(state interfaces.ResourceState) *interfaces.ResourceOutput {
-	return &interfaces.ResourceOutput{
-		Name:       state.Name,
-		Type:       state.Type,
-		ProviderID: state.ProviderID,
-		Outputs:    state.Outputs,
-	}
+	plan, err := platform.ComputePlan(ctx, p, desired, current)
+	return &plan, err
 }
 
 // deferredUpdater is an optional interface for ResourceDrivers that accumulate
