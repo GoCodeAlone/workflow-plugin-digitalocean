@@ -3,7 +3,7 @@ module github.com/GoCodeAlone/workflow-plugin-digitalocean
 go 1.26.0
 
 require (
-	github.com/GoCodeAlone/workflow v0.20.5
+	github.com/GoCodeAlone/workflow v0.20.6-0.20260505011403-e2c582bece90
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.2
