@@ -2,11 +2,50 @@ package internal
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 )
+
+// uuidPattern matches a canonical RFC-4122 UUID (8-4-4-4-12 lower-case
+// hex with hyphens). DO VPC IDs are UUIDs; vpc_ref values that match
+// this shape are external-or-resolved-VPC-IDs, NOT in-plan resource
+// names — the validator MUST NOT flag them as dangling references.
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// jitTemplatePattern matches the wfctl JIT substitution syntax
+// (${VAR} / ${MODULE.field} / $(...)). vpc_ref values that contain a
+// template are resolved at apply time by wfctlhelpers.ApplyPlan's
+// jitsubst.ResolveSpec; ValidatePlan runs at PLAN time (before
+// substitution) and MUST treat templated values as deferred.
+var jitTemplatePattern = regexp.MustCompile(`\$[\{\(]`)
+
+// looksLikeResourceName reports whether s is plausibly an in-plan
+// resource Name reference rather than a UUID or a JIT template. Used
+// by ValidatePlan to decide whether to apply name-based byName lookup
+// for vpc_ref. The contract: only the name-shape branch may emit
+// dangling-reference diagnostics — UUIDs and templates are deferred to
+// apply-time validation in the wfctlhelpers dispatch path.
+//
+// Copilot review #8/#9 (round 3): the prior validator unconditionally
+// did name-based lookup, which incorrectly rejected production configs
+// that pass vpc_ref as a UUID (the shape DO's Apps/Databases API
+// expects) or as ${vpc.id} (the canonical wfctl form, resolved by JIT
+// at apply time).
+func looksLikeResourceName(s string) bool {
+	if s == "" {
+		return false
+	}
+	if uuidPattern.MatchString(s) {
+		return false
+	}
+	if jitTemplatePattern.MatchString(s) {
+		return false
+	}
+	return true
+}
 
 // ValidatePlan implements interfaces.ProviderValidator (W-4): a read-only,
 // no-remote-call cross-resource constraint check that runs at `wfctl infra
@@ -118,6 +157,15 @@ func appendDatabaseDiagnostics(
 	if vpcRef == "" {
 		return diags
 	}
+	// Copilot review #9 (round 3): vpc_ref's accepted shapes per the
+	// DO Databases API are a VPC UUID OR a wfctl JIT template like
+	// ${vpc.id} that resolves to a UUID at apply time. Only flag the
+	// in-plan-name-reference branch — UUID and template values are
+	// deferred to apply-time validation by wfctlhelpers.ApplyPlan
+	// after JIT substitution.
+	if !looksLikeResourceName(vpcRef) {
+		return diags
+	}
 	target, ok := byName[vpcRef]
 	if !ok {
 		// vpc_ref names a resource not in the plan. Surface as Error so
@@ -130,7 +178,7 @@ func appendDatabaseDiagnostics(
 			Resource: spec.Name,
 			Field:    "vpc_ref",
 			Message: fmt.Sprintf(
-				"DO database %q references vpc_ref %q which is not declared in the same plan; either add the VPC resource or remove the vpc_ref",
+				"DO database %q references vpc_ref %q (a plain resource name) which is not declared in the same plan; either add the VPC resource, switch to a UUID or ${vpc.id} template, or remove the vpc_ref",
 				spec.Name, vpcRef,
 			),
 		})
@@ -190,6 +238,17 @@ func appendAppPlatformDiagnostics(
 	if vpcRef == "" || region == "" || !isAppPlatformRegionGroup(region) {
 		return diags
 	}
+	// Copilot review #8 (round 3): App Platform vpc_ref maps to
+	// godo.AppVpcSpec{ID: vpcID} — the DO Apps API expects a VPC UUID
+	// at apply time. ValidatePlan runs at PLAN time before JIT
+	// substitution, so vpc_ref values shaped like a UUID or a wfctl
+	// template (${vpc.id}) cannot be cross-resolved against byName
+	// without false positives. Only the plain-name branch is checked
+	// here; UUID/template values are deferred to apply-time
+	// validation.
+	if !looksLikeResourceName(vpcRef) {
+		return diags
+	}
 	target, ok := byName[vpcRef]
 	if !ok {
 		// vpc_ref points to a name not in the plan; cannot validate
@@ -201,7 +260,7 @@ func appendAppPlatformDiagnostics(
 			Resource: spec.Name,
 			Field:    "vpc_ref",
 			Message: fmt.Sprintf(
-				"App Platform %q references vpc_ref %q which is not declared in the same plan; region-match check skipped",
+				"App Platform %q references vpc_ref %q (a plain resource name) which is not declared in the same plan; region-match check skipped",
 				spec.Name, vpcRef,
 			),
 		})
@@ -299,12 +358,23 @@ func zonesInGroup(group string) []string {
 // classifyRegion returns a short human-readable label for a region slug
 // to help diagnostic messages distinguish bare-group from zone-slug
 // confusion.
+//
+// Copilot review #10 (round 3): zoneToGroup intentionally maps some
+// legacy zones (nyc2, ams2) to an empty group string so they pass
+// is-a-zone-slug validation without claiming App Platform routing.
+// The prior implementation surfaced these as 'a zone slug in group ""'
+// which renders as a confusing empty-name label. The empty-group case
+// is now special-cased.
 func classifyRegion(s string) string {
 	if isAppPlatformRegionGroup(s) {
 		return fmt.Sprintf("a region GROUP (zones: %s)", strings.Join(zonesInGroup(s), ", "))
 	}
 	if isZoneSlug(s) {
-		return fmt.Sprintf("a zone slug in group %q", appPlatformRegionGroupOf(s))
+		group := appPlatformRegionGroupOf(s)
+		if group == "" {
+			return "a zone slug not in any App Platform region group"
+		}
+		return fmt.Sprintf("a zone slug in group %q", group)
 	}
 	return "not a recognized DO region slug"
 }

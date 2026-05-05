@@ -402,6 +402,87 @@ func TestDOProvider_ValidatePlan_AppPlatformVPCRefToNonVPCType(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_VPCRefAsUUIDIsDeferred pins Copilot
+// review #8/#9 (round 3): vpc_ref values that look like a VPC UUID
+// (the canonical DO Apps/Databases API shape at apply time) MUST NOT
+// trigger the in-plan-name-resolution branch — they are deferred to
+// apply-time validation by wfctlhelpers.ApplyPlan after JIT
+// substitution. The test exercises both the database and the App
+// Platform paths with a fixed UUID literal.
+func TestDOProvider_ValidatePlan_VPCRefAsUUIDIsDeferred(t *testing.T) {
+	const vpcUUID = "a1b2c3d4-e5f6-7890-abcd-ef0123456789"
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": vpcUUID},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-app", Type: "infra.container_service",
+			Config: map[string]any{"region": "nyc", "vpc_ref": vpcUUID},
+		}},
+	}}
+	if d := p.ValidatePlan(plan); len(d) != 0 {
+		t.Errorf("expected 0 diagnostics for UUID vpc_ref values; got %+v", d)
+	}
+}
+
+// TestDOProvider_ValidatePlan_VPCRefAsJITTemplateIsDeferred pins
+// Copilot review #8/#9 (round 3): vpc_ref values that contain the
+// wfctl JIT substitution syntax (${MODULE.field} or $(...)) MUST NOT
+// trigger name-based resolution at plan time — they are resolved by
+// wfctlhelpers.ApplyPlan's jitsubst.ResolveSpec at apply time. The
+// test exercises both the database and the App Platform paths with
+// canonical ${vpc.id} templates.
+func TestDOProvider_ValidatePlan_VPCRefAsJITTemplateIsDeferred(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "${some-vpc.id}"},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-app", Type: "infra.container_service",
+			Config: map[string]any{"region": "nyc", "vpc_ref": "$(other-vpc.id)"},
+		}},
+	}}
+	if d := p.ValidatePlan(plan); len(d) != 0 {
+		t.Errorf("expected 0 diagnostics for JIT-template vpc_ref values; got %+v", d)
+	}
+}
+
+// TestDOProvider_ValidatePlan_ClassifyRegionEmptyGroup pins Copilot
+// review #10 (round 3): a Droplet/VPC region set to a zone whose
+// zoneToGroup mapping is the empty string (e.g., legacy nyc2/ams2)
+// must produce a clear human-readable diagnostic, not 'a zone slug in
+// group ""'. This test indirectly verifies via the message content of
+// the bare-group rejection on a Droplet using nyc2.
+//
+// Note: nyc2 IS a valid zone slug (passes isZoneSlug), so a Droplet
+// with region=nyc2 alone would pass validation. We exercise the
+// empty-group branch via the App Platform group-vs-zone mismatch path
+// where classifyRegion is called on a non-AP-routed zone.
+func TestDOProvider_ValidatePlan_ClassifyRegionEmptyGroup(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-app", Type: "infra.container_service",
+			// nyc2 is a valid zone slug but not in any AP group.
+			Config: map[string]any{"region": "nyc2"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	if len(d) != 1 {
+		t.Fatalf("expected 1 diagnostic for AP region=nyc2; got %d: %+v", len(d), d)
+	}
+	if strings.Contains(d[0].Message, `group ""`) {
+		t.Errorf("diagnostic still emits empty-group label; got %q", d[0].Message)
+	}
+	if !strings.Contains(d[0].Message, "not in any App Platform region group") {
+		t.Errorf("expected 'not in any App Platform region group' phrasing; got %q", d[0].Message)
+	}
+}
+
 // TestDOProvider_ValidatePlan_CompileTimeAssertion documents that the
 // compile-time interface assertion in validate_plan.go locks
 // DOProvider's ProviderValidator implementation. If the interface

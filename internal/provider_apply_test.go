@@ -90,8 +90,16 @@ func TestDOProvider_Apply_DeleteAction(t *testing.T) {
 // ResourceRef (the driver is the authority on what an empty ProviderID
 // means — see wfctlhelpers/apply.go::doUpdate's analogous comment). The
 // v1-era pre-flight precondition error has been retired with the v2
-// migration (PR P-DO TP2): drivers that cannot delete by name surface
-// the diagnostic themselves via their typed validation.
+// migration (PR P-DO TP2): the response when ProviderID is empty is now
+// driver-dependent rather than centrally synthesised.
+//
+// Copilot review #11 (round 3): driver behavior on an empty-ProviderID
+// delete varies — FirewallDriver.Delete, for example, resolves by name
+// when ProviderID is empty (uses ListByTag/ListByDroplet to locate the
+// firewall) and may succeed; other drivers (DatabaseDriver,
+// VolumeDriver) require ProviderID and surface a typed error. The v2
+// contract is "the driver knows what an empty ProviderID means for its
+// resource shape", not "all drivers reject empty ProviderID".
 func TestDOProvider_Apply_DeleteAction_MissingCurrent(t *testing.T) {
 	fake := &deleteFakeDriver{}
 	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{"infra.firewall": fake}}
@@ -109,9 +117,9 @@ func TestDOProvider_Apply_DeleteAction_MissingCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply returned top-level error: %v", err)
 	}
-	// v2 contract: the dispatch IS made; the deleteFakeDriver returns nil
-	// because it does not validate ref.ProviderID. A real driver would
-	// reject the empty ProviderID via its typed validator.
+	// v2 contract: the dispatch IS made with an empty ProviderID; this
+	// stub fake accepts it and returns nil. Real drivers handle the
+	// empty case driver-by-driver (some resolve-by-name, some error).
 	if fake.deleteCalls != 1 {
 		t.Errorf("Delete dispatched %d times, want 1 (v2 dispatch contract)", fake.deleteCalls)
 	}
