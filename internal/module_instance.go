@@ -83,6 +83,9 @@ func (m *doModuleInstance) InvokeMethodContext(ctx context.Context, method strin
 	case "IaCProvider.RepairDirtyMigration":
 		return m.invokeProviderRepairDirtyMigration(ctx, args)
 
+	case "IaCProvider.EnumerateByTag":
+		return m.invokeProviderEnumerateByTag(ctx, args)
+
 	case "ResourceDriver.Update":
 		return m.invokeDriverUpdate(args)
 
@@ -240,6 +243,41 @@ func (m *doModuleInstance) invokeProviderBootstrapStateBackend(ctx context.Conte
 		return map[string]any{}, nil
 	}
 	return structToMap(result)
+}
+
+// invokeProviderEnumerateByTag routes the "IaCProvider.EnumerateByTag" method
+// to the underlying provider when it implements the opt-in
+// interfaces.Enumerator. Returns codes.Unimplemented when the provider does
+// not implement Enumerator so wfctl's remoteIaCProvider can fall through to
+// the same skip-with-structured-log path it would take for a non-Enumerator
+// in-process provider (matching infra_cleanup.go's `enum, ok := ...` gate).
+//
+// args contract: {"tag": <string>} — the tag to enumerate. Empty / missing
+// tag falls through to provider.EnumerateByTag's own validation (returns an
+// error) so the same input contract is enforced regardless of dispatch path.
+//
+// response shape: {"refs": [<ResourceRef JSON>, ...]}. Each ref is encoded via
+// structToMap so the host's remoteIaCProvider can decode with anyToStruct
+// (the symmetric helper used elsewhere in this plugin's dispatch surface).
+func (m *doModuleInstance) invokeProviderEnumerateByTag(ctx context.Context, args map[string]any) (map[string]any, error) {
+	enum, ok := m.provider.(interfaces.Enumerator)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "provider does not implement Enumerator")
+	}
+	tag := stringArg(args, "tag")
+	refs, err := enum.EnumerateByTag(ctx, tag)
+	if err != nil {
+		return nil, err
+	}
+	refList := make([]any, len(refs))
+	for i, r := range refs {
+		rm, mErr := structToMap(r)
+		if mErr != nil {
+			return nil, fmt.Errorf("IaCProvider.EnumerateByTag: serialize ref: %w", mErr)
+		}
+		refList[i] = rm
+	}
+	return map[string]any{"refs": refList}, nil
 }
 
 func (m *doModuleInstance) invokeProviderRepairDirtyMigration(ctx context.Context, args map[string]any) (map[string]any, error) {

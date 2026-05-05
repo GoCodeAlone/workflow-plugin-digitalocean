@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -337,7 +338,7 @@ func (p *DOProvider) EnumerateByTag(ctx context.Context, tag string) ([]interfac
 			refs = append(refs, interfaces.ResourceRef{
 				Name:       d.Name,
 				Type:       "infra.droplet",
-				ProviderID: fmt.Sprintf("%d", d.ID),
+				ProviderID: strconv.Itoa(d.ID),
 			})
 		}
 		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
@@ -377,7 +378,18 @@ func (p *DOProvider) EnumerateByTag(ctx context.Context, tag string) ([]interfac
 		volumePage.ListOptions.Page = nextPage + 1
 	}
 
-	// Databases — list all, filter client-side on Tags membership.
+	// Databases + Caches — list all (single endpoint covers both), filter
+	// client-side on Tags membership, and split on EngineSlug.
+	//
+	// godo.Databases.List returns BOTH SQL-style database clusters (postgres,
+	// mysql, mongodb, etc.) AND managed Redis caches in a single response
+	// (DO models them under the same /v2/databases endpoint). The DO plugin
+	// splits these into separate driver types — DatabaseDriver vs
+	// CacheDriver — based on EngineSlug ("redis" → cache; everything else
+	// → database). EnumerateByTag must mirror that split so the cleanup
+	// dispatcher routes Delete to the correct driver and the dry-run /
+	// audit log surfaces the canonical resource type. Emitting every entry
+	// as `infra.database` would silently misclassify caches.
 	dbPage := &godo.ListOptions{Page: 1, PerPage: 200}
 	for {
 		databases, resp, err := p.client.Databases.List(ctx, dbPage)
@@ -388,9 +400,13 @@ func (p *DOProvider) EnumerateByTag(ctx context.Context, tag string) ([]interfac
 			if !stringSliceContains(db.Tags, tag) {
 				continue
 			}
+			resourceType := "infra.database"
+			if db.EngineSlug == "redis" {
+				resourceType = "infra.cache"
+			}
 			refs = append(refs, interfaces.ResourceRef{
 				Name:       db.Name,
-				Type:       "infra.database",
+				Type:       resourceType,
 				ProviderID: db.ID,
 			})
 		}

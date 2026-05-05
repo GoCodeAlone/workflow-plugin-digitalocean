@@ -121,7 +121,7 @@ func writeDatabases(t *testing.T, w http.ResponseWriter, databases []godo.Databa
 	parts := make([]string, 0, len(databases))
 	for _, db := range databases {
 		tags := jsonStringArray(db.Tags)
-		parts = append(parts, fmt.Sprintf(`{"id":%q,"name":%q,"tags":%s}`, db.ID, db.Name, tags))
+		parts = append(parts, fmt.Sprintf(`{"id":%q,"name":%q,"engine":%q,"tags":%s}`, db.ID, db.Name, db.EngineSlug, tags))
 	}
 	_, _ = fmt.Fprintf(w, `{"databases":[%s],"links":{},"meta":{"total":%d}}`, strings.Join(parts, ","), len(databases))
 }
@@ -169,8 +169,14 @@ func TestDOProvider_EnumerateByTag_ReturnsTaggedResources(t *testing.T) {
 			{ID: "vol-bbb", Name: "other-data", Tags: []string{"unrelated"}}, // must be filtered out
 		},
 		databases: []godo.Database{
-			{ID: "db-ccc", Name: "bmw-pg", Tags: []string{"bmw-prod"}},
-			{ID: "db-ddd", Name: "other-pg", Tags: []string{}}, // must be filtered out
+			// SQL-style cluster — must surface as infra.database.
+			{ID: "db-ccc", Name: "bmw-pg", EngineSlug: "pg", Tags: []string{"bmw-prod"}},
+			// Managed Redis on the SAME /v2/databases endpoint — must surface
+			// as infra.cache, not infra.database. Pins the engine-split fix
+			// from PR review finding #2.
+			{ID: "redis-eee", Name: "bmw-cache", EngineSlug: "redis", Tags: []string{"bmw-prod"}},
+			// Off-tag — must be filtered out.
+			{ID: "db-ddd", Name: "other-pg", EngineSlug: "pg", Tags: []string{}},
 		},
 	}
 
@@ -187,6 +193,7 @@ func TestDOProvider_EnumerateByTag_ReturnsTaggedResources(t *testing.T) {
 	want := []interfaces.ResourceRef{
 		{Name: "bmw-app-1", Type: "infra.droplet", ProviderID: "1001"},
 		{Name: "bmw-app-2", Type: "infra.droplet", ProviderID: "1002"},
+		{Name: "bmw-cache", Type: "infra.cache", ProviderID: "redis-eee"},
 		{Name: "bmw-data", Type: "infra.volume", ProviderID: "vol-aaa"},
 		{Name: "bmw-pg", Type: "infra.database", ProviderID: "db-ccc"},
 	}
@@ -236,5 +243,93 @@ func TestDOProvider_EnumerateByTag_EmptyTag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tag") {
 		t.Errorf("error %q should mention the tag argument", err.Error())
+	}
+}
+
+// fakeEnumeratorProvider is an IaCProvider that ALSO implements Enumerator,
+// used by the dispatch-level test below to verify the doModuleInstance
+// InvokeMethod proxy reaches the underlying provider.
+//
+// Embeds fakeIaCProvider (defined in module_instance_test.go) for the bulk
+// of the IaCProvider surface; only EnumerateByTag and call-tracking fields
+// are added here.
+type fakeEnumeratorProvider struct {
+	fakeIaCProvider
+	enumerateCalled bool
+	enumerateTag    string
+	enumerateRefs   []interfaces.ResourceRef
+	enumerateErr    error
+}
+
+func (f *fakeEnumeratorProvider) EnumerateByTag(_ context.Context, tag string) ([]interfaces.ResourceRef, error) {
+	f.enumerateCalled = true
+	f.enumerateTag = tag
+	return f.enumerateRefs, f.enumerateErr
+}
+
+// TestDOModuleInstance_InvokeMethod_EnumerateByTag pins finding #1 of the
+// PR 6b Copilot review: the doModuleInstance.InvokeMethod dispatch table
+// must route "IaCProvider.EnumerateByTag" through to the underlying
+// provider when it implements interfaces.Enumerator. Without this case,
+// the host's remoteIaCProvider would type-assert ok=false and the cleanup
+// dispatcher would silently skip every DO provider — even though
+// DOProvider implements Enumerator directly.
+func TestDOModuleInstance_InvokeMethod_EnumerateByTag(t *testing.T) {
+	prov := &fakeEnumeratorProvider{
+		enumerateRefs: []interfaces.ResourceRef{
+			{Name: "bmw-app", Type: "infra.droplet", ProviderID: "12345"},
+			{Name: "bmw-cache", Type: "infra.cache", ProviderID: "redis-uuid"},
+		},
+	}
+	mi := &doModuleInstance{provider: prov}
+
+	out, err := mi.InvokeMethod("IaCProvider.EnumerateByTag", map[string]any{
+		"tag": "bmw-prod",
+	})
+	if err != nil {
+		t.Fatalf("InvokeMethod: %v", err)
+	}
+	if !prov.enumerateCalled {
+		t.Fatal("provider.EnumerateByTag was not called via dispatch")
+	}
+	if prov.enumerateTag != "bmw-prod" {
+		t.Errorf("enumerateTag = %q, want %q", prov.enumerateTag, "bmw-prod")
+	}
+	rawRefs, ok := out["refs"].([]any)
+	if !ok {
+		t.Fatalf(`out["refs"] type = %T, want []any`, out["refs"])
+	}
+	if len(rawRefs) != 2 {
+		t.Fatalf("refs length = %d, want 2: %+v", len(rawRefs), rawRefs)
+	}
+	// Sample the first ref to confirm structToMap shape — keys match the
+	// JSON tags on interfaces.ResourceRef.
+	first, ok := rawRefs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("ref[0] type = %T, want map[string]any", rawRefs[0])
+	}
+	if first["name"] != "bmw-app" || first["type"] != "infra.droplet" || first["provider_id"] != "12345" {
+		t.Errorf("ref[0] = %+v, want name=bmw-app type=infra.droplet provider_id=12345", first)
+	}
+}
+
+// TestDOModuleInstance_InvokeMethod_EnumerateByTag_NonEnumeratorProvider
+// pins the codes.Unimplemented branch. When the underlying provider does
+// NOT implement interfaces.Enumerator, the dispatch must surface an
+// Unimplemented gRPC error so the host's remoteIaCProvider can interpret
+// it as "skip this provider" (same semantic as the in-process type-assert
+// returning ok=false). Without this branch, callers couldn't distinguish
+// "provider does not support this op" from "provider crashed".
+func TestDOModuleInstance_InvokeMethod_EnumerateByTag_NonEnumeratorProvider(t *testing.T) {
+	mi := &doModuleInstance{provider: &fakeIaCProvider{}}
+
+	_, err := mi.InvokeMethod("IaCProvider.EnumerateByTag", map[string]any{
+		"tag": "bmw-prod",
+	})
+	if err == nil {
+		t.Fatal("expected Unimplemented error from non-Enumerator provider; got nil")
+	}
+	if !strings.Contains(err.Error(), "Enumerator") {
+		t.Errorf("error %q should mention Enumerator", err.Error())
 	}
 }
