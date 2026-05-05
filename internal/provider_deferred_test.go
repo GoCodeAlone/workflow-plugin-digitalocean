@@ -142,3 +142,87 @@ func TestDOProvider_Apply_FlushesDeferred_AfterAllCreates(t *testing.T) {
 		t.Errorf("deferred flush rule = {%s %s}, want {app %s}", rule.Type, rule.Value, appUUID)
 	}
 }
+
+// TestDOProvider_Apply_FlushesDeferred_WhenTypeAbsentFromPlan verifies that
+// the deferred-flush second pass iterates the driver registry (not plan.Actions),
+// so orphaned deferred entries are flushed even when their resource type does
+// not appear in the current plan.
+//
+// Scenario:
+//  1. Seed the database driver with a deferred update by calling Create directly
+//     (simulating a prior Apply run where the flush failed transiently).
+//  2. Run Apply with a plan that has NO infra.database actions.
+//  3. Expect FlushDeferredUpdates to still run and call UpdateFirewallRules.
+func TestDOProvider_Apply_FlushesDeferred_WhenTypeAbsentFromPlan(t *testing.T) {
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+
+	dbMock := &minimalDBMock{db: &godo.Database{
+		ID:   "db-abc",
+		Name: "coredump-staging-db",
+		Connection: &godo.DatabaseConnection{
+			Host: "host.db.ondigitalocean.com",
+			Port: 5432,
+		},
+	}}
+	// First call (Create, called directly below) returns empty — app absent;
+	// subsequent calls (FlushDeferredUpdates, called via Apply) return the app.
+	appSeq := &sequencedAppsForDeferred{
+		apps: []*godo.App{fakeAppForDeferred("coredump-staging", appUUID)},
+	}
+	dbDriver := drivers.NewDatabaseDriverWithClients(dbMock, appSeq, "nyc3")
+
+	// Seed the driver with a deferred update by calling Create directly.
+	// The first Apps.List call returns empty → deferred update queued.
+	_, err := dbDriver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "coredump-staging-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": "coredump-staging"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed Create: %v", err)
+	}
+	if !dbDriver.HasDeferredUpdates() {
+		t.Fatal("expected deferred update queued after seed Create")
+	}
+
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.database": dbDriver,
+		},
+	}
+
+	// Apply with an empty plan — no infra.database actions.
+	// The deferred flush must still run because Apply iterates p.drivers.
+	plan := &interfaces.IaCPlan{
+		ID:      "test-plan-no-db-actions",
+		Actions: []interfaces.PlanAction{},
+	}
+
+	result, err := p.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.Errors) > 0 {
+		t.Fatalf("Apply result errors: %+v", result.Errors)
+	}
+
+	// Flush must have called UpdateFirewallRules with app UUID.
+	if dbMock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules was never called — orphaned deferred entry was not flushed")
+	}
+	if len(dbMock.lastFirewallReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule in deferred flush, got %d: %+v",
+			len(dbMock.lastFirewallReq.Rules), dbMock.lastFirewallReq.Rules)
+	}
+	rule := dbMock.lastFirewallReq.Rules[0]
+	if rule.Type != "app" || rule.Value != appUUID {
+		t.Errorf("deferred flush rule = {%s %s}, want {app %s}", rule.Type, rule.Value, appUUID)
+	}
+	if dbDriver.HasDeferredUpdates() {
+		t.Error("HasDeferredUpdates() should be false after successful flush")
+	}
+}

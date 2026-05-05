@@ -311,3 +311,92 @@ func TestDatabaseDriver_FlushDeferredUpdates_NoopWhenEmpty(t *testing.T) {
 		t.Fatalf("FlushDeferredUpdates on empty driver should return nil; got: %v", err)
 	}
 }
+
+// --- UUID passthrough tests ---
+
+// TestDatabaseDriver_Create_AppUUID_PassedThroughNotDeferred verifies that a
+// type=app trusted_sources entry with a UUID-shaped value is included directly
+// in the create request (not deferred), even when other slug-style entries
+// trigger the deferred path because they cannot be resolved.
+func TestDatabaseDriver_Create_AppUUID_PassedThroughNotDeferred(t *testing.T) {
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	// App client returns empty — slug entry unresolvable; UUID entry must pass through.
+	appMock := &mockAppClient{listApps: []*godo.App{}}
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-db",
+		Config: map[string]any{
+			"engine": "pg",
+			"trusted_sources": []any{
+				map[string]any{"type": "app", "value": appUUID},          // already a UUID — pass through
+				map[string]any{"type": "app", "value": "coredump-staging"}, // slug — deferred
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if dbMock.lastCreateReq == nil {
+		t.Fatal("no create request captured")
+	}
+	// UUID entry must appear in the create request; slug entry is deferred.
+	if len(dbMock.lastCreateReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule in create request (UUID passthrough only), got %d: %+v",
+			len(dbMock.lastCreateReq.Rules), dbMock.lastCreateReq.Rules)
+	}
+	if dbMock.lastCreateReq.Rules[0].Type != "app" || dbMock.lastCreateReq.Rules[0].Value != appUUID {
+		t.Errorf("create rule = {%s %s}, want {app %s}",
+			dbMock.lastCreateReq.Rules[0].Type, dbMock.lastCreateReq.Rules[0].Value, appUUID)
+	}
+	// The slug entry must still be deferred.
+	if !d.HasDeferredUpdates() {
+		t.Error("HasDeferredUpdates() should be true — slug entry must still be deferred")
+	}
+}
+
+// TestDatabaseDriver_Update_AppUUID_PassedThroughNotDeferred verifies that a
+// type=app trusted_sources entry with a UUID-shaped value is included in the
+// immediate partial-update call (not deferred), even when other slug-style
+// entries trigger the deferred path.
+func TestDatabaseDriver_Update_AppUUID_PassedThroughNotDeferred(t *testing.T) {
+	const appUUID = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	dbMock := &mockDatabaseClient{db: testDatabase()}
+	// App client returns empty — slug entry unresolvable; UUID entry must pass through.
+	appMock := &mockAppClient{listApps: []*godo.App{}}
+	d := drivers.NewDatabaseDriverWithClients(dbMock, appMock, "nyc3")
+
+	_, err := d.Update(context.Background(),
+		interfaces.ResourceRef{Name: "my-db", ProviderID: "db-123"},
+		interfaces.ResourceSpec{
+			Name: "my-db",
+			Config: map[string]any{
+				"size": "db-s-1vcpu-1gb",
+				"trusted_sources": []any{
+					map[string]any{"type": "app", "value": appUUID},          // already a UUID — pass through
+					map[string]any{"type": "app", "value": "coredump-staging"}, // slug — deferred
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if dbMock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules should be called with partial rules")
+	}
+	// UUID entry must appear in the partial update; slug entry is deferred.
+	if len(dbMock.lastFirewallReq.Rules) != 1 {
+		t.Fatalf("expected 1 rule in partial update (UUID passthrough only), got %d: %+v",
+			len(dbMock.lastFirewallReq.Rules), dbMock.lastFirewallReq.Rules)
+	}
+	if dbMock.lastFirewallReq.Rules[0].Type != "app" || dbMock.lastFirewallReq.Rules[0].Value != appUUID {
+		t.Errorf("partial update rule = {%s %s}, want {app %s}",
+			dbMock.lastFirewallReq.Rules[0].Type, dbMock.lastFirewallReq.Rules[0].Value, appUUID)
+	}
+	// The slug entry must still be deferred.
+	if !d.HasDeferredUpdates() {
+		t.Error("HasDeferredUpdates() should be true — slug entry must still be deferred")
+	}
+}
