@@ -1140,3 +1140,63 @@ func TestDropletDriver_Diff_IPv6AbsentSkipped(t *testing.T) {
 			r.NeedsReplace, r.Changes)
 	}
 }
+
+// --- Legacy-state regression tests (issue #56 / PR upgrade guard) ---
+
+func TestDropletDriver_Diff_MonitoringLegacyStateNoSpuriousReplace(t *testing.T) {
+	// State written by a plugin version that predates the monitoring/ipv6
+	// Outputs keys will NOT have "monitoring" in Outputs. Diff must NOT
+	// trigger a ForceNew replace just because the key is absent — that
+	// would destroy a live Droplet whose monitoring flag is already correct.
+	// The operator must run a Read (state refresh) to backfill the key,
+	// after which drift detection will work correctly.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			// no "monitoring" key — simulates legacy state
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":       "s-1vcpu-2gb",
+			"monitoring": true, // desired ON, but current has no key
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("legacy state (no monitoring key in Outputs) must NOT trigger spurious replace; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_IPv6LegacyStateNoSpuriousReplace(t *testing.T) {
+	// Same as MonitoringLegacyState: absent "ipv6" key in current Outputs
+	// must not produce a spurious ForceNew replace.
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			// no "ipv6" key — simulates legacy state
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"ipv6": true, // desired ON, but current has no key
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("legacy state (no ipv6 key in Outputs) must NOT trigger spurious replace; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}

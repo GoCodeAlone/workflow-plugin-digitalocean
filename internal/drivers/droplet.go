@@ -198,23 +198,34 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 	// monitoring / ipv6: the DO API surfaces these in droplet.Features
 	// (e.g. "monitoring", "ipv6"). dropletOutput stores them as booleans
 	// in Outputs so Diff can compare desired-vs-current reliably.
+	//
+	// Guard: only compare when the key is present in current.Outputs. If
+	// the key is absent the state was written by a version of the plugin
+	// that predates this PR (dropletOutput didn't emit the field). In that
+	// case, skip the comparison to avoid a spurious ForceNew replace — the
+	// key will be backfilled on the next state refresh (Read) and drift
+	// detection will work correctly from that point on.
 	if _, hasMonitoring := desired.Config["monitoring"]; hasMonitoring {
-		desiredMonitoring := boolFromConfig(desired.Config, "monitoring", false)
-		curMonitoring, _ := current.Outputs["monitoring"].(bool)
-		if desiredMonitoring != curMonitoring {
-			changes = append(changes, interfaces.FieldChange{
-				Path: "monitoring", Old: curMonitoring, New: desiredMonitoring, ForceNew: true,
-			})
+		if _, curKeyExists := current.Outputs["monitoring"]; curKeyExists {
+			desiredMonitoring := boolFromConfig(desired.Config, "monitoring", false)
+			curMonitoring, _ := current.Outputs["monitoring"].(bool)
+			if desiredMonitoring != curMonitoring {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "monitoring", Old: curMonitoring, New: desiredMonitoring, ForceNew: true,
+				})
+			}
 		}
 	}
 
 	if _, hasIPv6 := desired.Config["ipv6"]; hasIPv6 {
-		desiredIPv6 := boolFromConfig(desired.Config, "ipv6", false)
-		curIPv6, _ := current.Outputs["ipv6"].(bool)
-		if desiredIPv6 != curIPv6 {
-			changes = append(changes, interfaces.FieldChange{
-				Path: "ipv6", Old: curIPv6, New: desiredIPv6, ForceNew: true,
-			})
+		if _, curKeyExists := current.Outputs["ipv6"]; curKeyExists {
+			desiredIPv6 := boolFromConfig(desired.Config, "ipv6", false)
+			curIPv6, _ := current.Outputs["ipv6"].(bool)
+			if desiredIPv6 != curIPv6 {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "ipv6", Old: curIPv6, New: desiredIPv6, ForceNew: true,
+				})
+			}
 		}
 	}
 
