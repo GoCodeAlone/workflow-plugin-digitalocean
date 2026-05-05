@@ -10,6 +10,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
+	"golang.org/x/oauth2"
 )
 
 // compile-time interface check
@@ -65,6 +66,67 @@ func TestDOProvider_Initialize_MissingToken(t *testing.T) {
 	err := p.Initialize(t.Context(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing token")
+	}
+}
+
+// TestDOProvider_Initialize_NilCtxRejected pins the nil-ctx guard added in
+// workflow-plugin-digitalocean#62. Initialize must reject nil ctx rather than
+// silently passing it down to oauth2.NewClient.
+func TestDOProvider_Initialize_NilCtxRejected(t *testing.T) {
+	p := NewDOProvider()
+	//nolint:staticcheck // intentional nil ctx for the guard test
+	err := p.Initialize(nil, map[string]any{"token": "fake-token"})
+	if err == nil {
+		t.Fatal("expected error for nil ctx; got nil")
+	}
+	if !strings.Contains(err.Error(), "non-nil ctx") {
+		t.Errorf("error %q should mention non-nil ctx", err.Error())
+	}
+}
+
+// httpClientCapturingTransport records the http.Client that issued a request.
+// Used to verify Initialize threaded ctx-injected oauth2.HTTPClient into the
+// godo client's transport chain.
+type httpClientCapturingTransport struct {
+	called bool
+	resp   *http.Response
+}
+
+func (t *httpClientCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.called = true
+	if t.resp != nil {
+		return t.resp, nil
+	}
+	// Return a minimal 200 with empty JSON body so godo doesn't choke.
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       http.NoBody,
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+// TestDOProvider_Initialize_ThreadsCtxToGodoClient pins workflow-plugin-digitalocean#62.
+// Prior to the fix, Initialize discarded the caller's ctx and constructed the
+// oauth2 client with context.Background(), so any oauth2.HTTPClient injected via
+// ctx (tests, custom transports, proxy configs) was silently dropped. This test
+// injects a capturing transport via oauth2.HTTPClient and verifies it observes a
+// real outbound request after Initialize wires the godo client.
+func TestDOProvider_Initialize_ThreadsCtxToGodoClient(t *testing.T) {
+	transport := &httpClientCapturingTransport{}
+	customClient := &http.Client{Transport: transport}
+	ctx := context.WithValue(t.Context(), oauth2.HTTPClient, customClient)
+
+	p := NewDOProvider()
+	if err := p.Initialize(ctx, map[string]any{"token": "fake-token"}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	// Issue any godo call that hits the transport. Account.Get is the cheapest.
+	_, _, _ = p.client.Account.Get(t.Context())
+
+	if !transport.called {
+		t.Fatal("custom transport injected via oauth2.HTTPClient was never called; ctx was not threaded into godo client")
 	}
 }
 

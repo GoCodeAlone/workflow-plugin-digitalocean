@@ -50,7 +50,19 @@ func (p *DOProvider) Version() string { return Version }
 // Initialize configures the godo client using the provided config map.
 // Required: "token".
 // Optional: "region" (default "nyc3"), "spaces_access_key", "spaces_secret_key".
-func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error {
+//
+// The provided ctx is threaded into oauth2.NewClient so callers that inject a
+// custom *http.Client via oauth2.HTTPClient (tests, custom transports, proxy
+// configurations) flow through to the godo client. Per-request cancellation
+// remains controlled by the ctx passed to each subsequent driver call —
+// godo wraps each request in ctx via http.Request.WithContext.
+//
+// addresses workflow-plugin-digitalocean#62: prior implementation hardcoded
+// context.Background(), silently dropping any HTTPClient injection.
+func (p *DOProvider) Initialize(ctx context.Context, config map[string]any) error {
+	if ctx == nil {
+		return fmt.Errorf("digitalocean: Initialize requires non-nil ctx")
+	}
 	token, _ := config["token"].(string)
 	if token == "" {
 		return fmt.Errorf("digitalocean: missing required config key 'token'")
@@ -64,7 +76,7 @@ func (p *DOProvider) Initialize(_ context.Context, config map[string]any) error 
 	spacesAccessKey, _ := config["spaces_access_key"].(string)
 	spacesSecretKey, _ := config["spaces_secret_key"].(string)
 
-	oauthClient := oauth2.NewClient(context.Background(), &tokenSource{token: token})
+	oauthClient := oauth2.NewClient(ctx, &tokenSource{token: token})
 	p.client = godo.NewClient(oauthClient)
 
 	p.drivers = map[string]interfaces.ResourceDriver{
