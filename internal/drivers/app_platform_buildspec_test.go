@@ -1043,6 +1043,92 @@ func TestBuildAppSpec_Jobs_Termination(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_Jobs_ImageMapShape(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"jobs": []any{
+			map[string]any{
+				"name": "db-reset",
+				"kind": "pre_deploy",
+				"image": map[string]any{
+					"registry_type": "DOCKER_HUB",
+					"repository":    "library/postgres",
+					"tag":           "18",
+				},
+				"run_command": "/usr/local/bin/reset-db",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(spec.Jobs))
+	}
+	job := spec.Jobs[0]
+	if job.Image == nil {
+		t.Fatal("Job.Image is nil; structured map image was silently dropped")
+	}
+	if job.Image.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", job.Image.RegistryType)
+	}
+	if job.Image.Repository != "library/postgres" {
+		t.Errorf("Repository = %q, want library/postgres", job.Image.Repository)
+	}
+	if job.Image.Tag != "18" {
+		t.Errorf("Tag = %q, want 18", job.Image.Tag)
+	}
+}
+
+func TestBuildAppSpec_Jobs_ImageStringShape(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"jobs": []any{
+			map[string]any{
+				"name":        "migrate",
+				"kind":        "pre_deploy",
+				"image":       "docker.io/library/postgres:16",
+				"run_command": "/migrate up",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(spec.Jobs))
+	}
+	job := spec.Jobs[0]
+	if job.Image == nil {
+		t.Fatal("Job.Image is nil; string image was not parsed")
+	}
+	if job.Image.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", job.Image.RegistryType)
+	}
+	if job.Image.Repository != "postgres" {
+		t.Errorf("Repository = %q, want postgres", job.Image.Repository)
+	}
+	if job.Image.Tag != "16" {
+		t.Errorf("Tag = %q, want 16", job.Image.Tag)
+	}
+}
+
+func TestBuildAppSpec_Jobs_ImageEmpty(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"jobs": []any{
+			map[string]any{
+				"name":        "no-image-job",
+				"kind":        "post_deploy",
+				"run_command": "/app/smoke",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(spec.Jobs))
+	}
+	if spec.Jobs[0].Image != nil {
+		t.Errorf("expected Job.Image to be nil when no image is set, got %+v", spec.Jobs[0].Image)
+	}
+}
+
 // ── Workers ──────────────────────────────────────────────────────────────────
 
 func TestBuildAppSpec_Workers(t *testing.T) {
@@ -1131,6 +1217,89 @@ func TestBuildAppSpec_Workers_Termination(t *testing.T) {
 	}
 	if term.GracePeriodSeconds != 90 {
 		t.Errorf("GracePeriodSeconds = %d, want 90", term.GracePeriodSeconds)
+	}
+}
+
+func TestBuildAppSpec_Workers_ImageMapShape(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"workers": []any{
+			map[string]any{
+				"name": "queue-processor",
+				"image": map[string]any{
+					"registry_type": "DOCKER_HUB",
+					"repository":    "library/redis",
+					"tag":           "7",
+				},
+				"run_command": "/app/worker",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(spec.Workers))
+	}
+	w := spec.Workers[0]
+	if w.Image == nil {
+		t.Fatal("Worker.Image is nil; structured map image was silently dropped")
+	}
+	if w.Image.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", w.Image.RegistryType)
+	}
+	if w.Image.Repository != "library/redis" {
+		t.Errorf("Repository = %q, want library/redis", w.Image.Repository)
+	}
+	if w.Image.Tag != "7" {
+		t.Errorf("Tag = %q, want 7", w.Image.Tag)
+	}
+}
+
+func TestBuildAppSpec_Workers_ImageStringShape(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"workers": []any{
+			map[string]any{
+				"name":        "queue-processor",
+				"image":       "docker.io/library/redis:7",
+				"run_command": "/app/worker",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(spec.Workers))
+	}
+	w := spec.Workers[0]
+	if w.Image == nil {
+		t.Fatal("Worker.Image is nil; string image was not parsed")
+	}
+	if w.Image.RegistryType != godo.ImageSourceSpecRegistryType_DockerHub {
+		t.Errorf("RegistryType = %q, want DOCKER_HUB", w.Image.RegistryType)
+	}
+	if w.Image.Repository != "redis" {
+		t.Errorf("Repository = %q, want redis", w.Image.Repository)
+	}
+	if w.Image.Tag != "7" {
+		t.Errorf("Tag = %q, want 7", w.Image.Tag)
+	}
+}
+
+func TestBuildAppSpec_Workers_ImageEmpty(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"workers": []any{
+			map[string]any{
+				"name":        "no-image-worker",
+				"run_command": "/app/worker",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(spec.Workers))
+	}
+	if spec.Workers[0].Image != nil {
+		t.Errorf("expected Worker.Image to be nil when no image is set, got %+v", spec.Workers[0].Image)
 	}
 }
 
