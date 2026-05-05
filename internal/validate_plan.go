@@ -118,22 +118,42 @@ func appendDatabaseDiagnostics(
 	if vpcRef == "" {
 		return diags
 	}
-	if _, ok := byName[vpcRef]; ok {
+	target, ok := byName[vpcRef]
+	if !ok {
+		// vpc_ref names a resource not in the plan. Surface as Error so
+		// the conformance scenario's "at least one Severity=Error"
+		// assertion matches; this is the dangling-cross-resource-
+		// reference case the W-4 design explicitly calls out as a
+		// plan-time validator gap.
+		diags = append(diags, interfaces.PlanDiagnostic{
+			Severity: interfaces.PlanDiagnosticError,
+			Resource: spec.Name,
+			Field:    "vpc_ref",
+			Message: fmt.Sprintf(
+				"DO database %q references vpc_ref %q which is not declared in the same plan; either add the VPC resource or remove the vpc_ref",
+				spec.Name, vpcRef,
+			),
+		})
 		return diags
 	}
-	// vpc_ref names a resource not in the plan. Surface as Error so the
-	// conformance scenario's "at least one Severity=Error" assertion
-	// matches; this is the dangling-cross-resource-reference case the
-	// W-4 design explicitly calls out as a plan-time validator gap.
-	diags = append(diags, interfaces.PlanDiagnostic{
-		Severity: interfaces.PlanDiagnosticError,
-		Resource: spec.Name,
-		Field:    "vpc_ref",
-		Message: fmt.Sprintf(
-			"DO database %q references vpc_ref %q which is not declared in the same plan; either add the VPC resource or remove the vpc_ref",
-			spec.Name, vpcRef,
-		),
-	})
+	// Copilot review #6 (round 2): the resolved-name check above
+	// is necessary but not sufficient — the target must also be an
+	// infra.vpc resource. A vpc_ref pointing to a Droplet, App, or
+	// other non-VPC resource silently passed prior validation;
+	// surface it as a typed Error so the operator catches the
+	// type-mismatch at plan time rather than getting a confusing
+	// 4xx from the DO database API.
+	if target.spec.Type != "infra.vpc" {
+		diags = append(diags, interfaces.PlanDiagnostic{
+			Severity: interfaces.PlanDiagnosticError,
+			Resource: spec.Name,
+			Field:    "vpc_ref",
+			Message: fmt.Sprintf(
+				"DO database %q references vpc_ref %q whose type is %q; vpc_ref must point to an infra.vpc resource",
+				spec.Name, vpcRef, target.spec.Type,
+			),
+		})
+	}
 	return diags
 }
 
@@ -183,6 +203,26 @@ func appendAppPlatformDiagnostics(
 			Message: fmt.Sprintf(
 				"App Platform %q references vpc_ref %q which is not declared in the same plan; region-match check skipped",
 				spec.Name, vpcRef,
+			),
+		})
+		return diags
+	}
+	// Copilot review #7 (round 2): the resolved-name check above is
+	// necessary but not sufficient — the target must also be an
+	// infra.vpc resource. A vpc_ref pointing to a Droplet, App, or
+	// other non-VPC resource would silently bypass the region-match
+	// check (because target.spec.Config["region"] would be a
+	// zone slug for a Droplet, not a VPC region) and the operator
+	// would never see a clear diagnostic. Surface as Error so the
+	// type-mismatch is caught at plan time.
+	if target.spec.Type != "infra.vpc" {
+		diags = append(diags, interfaces.PlanDiagnostic{
+			Severity: interfaces.PlanDiagnosticError,
+			Resource: spec.Name,
+			Field:    "vpc_ref",
+			Message: fmt.Sprintf(
+				"App Platform %q references vpc_ref %q whose type is %q; vpc_ref must point to an infra.vpc resource",
+				spec.Name, vpcRef, target.spec.Type,
 			),
 		})
 		return diags

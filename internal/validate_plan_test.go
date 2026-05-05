@@ -339,6 +339,69 @@ func TestDOProvider_ValidatePlan_DatabaseVPCRefInPlanNoFinding(t *testing.T) {
 	}
 }
 
+// TestDOProvider_ValidatePlan_DatabaseVPCRefToNonVPCType pins
+// Copilot review #6 (round 2): a database vpc_ref pointing to a name
+// that resolves in the plan but to a NON-VPC type (e.g., a droplet)
+// must Error. Type-checking at plan time avoids confusing 4xx errors
+// from the DO database API at apply time.
+func TestDOProvider_ValidatePlan_DatabaseVPCRefToNonVPCType(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-droplet", Type: "infra.droplet",
+			Config: map[string]any{"region": "nyc1"},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "db", Type: "infra.database",
+			Config: map[string]any{"vpc_ref": "core-droplet"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	var hasTypeError bool
+	for _, x := range d {
+		if x.Severity == interfaces.PlanDiagnosticError &&
+			x.Resource == "db" && x.Field == "vpc_ref" &&
+			strings.Contains(x.Message, "infra.droplet") {
+			hasTypeError = true
+		}
+	}
+	if !hasTypeError {
+		t.Errorf("expected Severity=Error with infra.droplet in message; got %+v", d)
+	}
+}
+
+// TestDOProvider_ValidatePlan_AppPlatformVPCRefToNonVPCType pins
+// Copilot review #7 (round 2): same type-checking for App Platform
+// vpc_ref pointing to a non-VPC resource (e.g., another App Platform
+// app). Without this check the region-match logic would silently skip
+// because target.spec.Config["region"] would be a region GROUP for an
+// App Platform target, not a zone.
+func TestDOProvider_ValidatePlan_AppPlatformVPCRefToNonVPCType(t *testing.T) {
+	p := NewDOProvider()
+	plan := &interfaces.IaCPlan{Actions: []interfaces.PlanAction{
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "other-app", Type: "infra.container_service",
+			Config: map[string]any{"region": "nyc"},
+		}},
+		{Action: "create", Resource: interfaces.ResourceSpec{
+			Name: "core-app", Type: "infra.container_service",
+			Config: map[string]any{"region": "nyc", "vpc_ref": "other-app"},
+		}},
+	}}
+	d := p.ValidatePlan(plan)
+	var hasTypeError bool
+	for _, x := range d {
+		if x.Severity == interfaces.PlanDiagnosticError &&
+			x.Resource == "core-app" && x.Field == "vpc_ref" &&
+			strings.Contains(x.Message, "infra.container_service") {
+			hasTypeError = true
+		}
+	}
+	if !hasTypeError {
+		t.Errorf("expected Severity=Error with infra.container_service in message; got %+v", d)
+	}
+}
+
 // TestDOProvider_ValidatePlan_CompileTimeAssertion documents that the
 // compile-time interface assertion in validate_plan.go locks
 // DOProvider's ProviderValidator implementation. If the interface
