@@ -976,3 +976,167 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// --- monitoring / ipv6 drift detection tests (issue #56) ---
+
+func TestDropletDriver_Read_MonitoringAndIPv6FromFeatures(t *testing.T) {
+	// dropletOutput must surface monitoring and ipv6 as booleans derived
+	// from droplet.Features, so Diff can compare desired-vs-current.
+	droplet := testDroplet()
+	droplet.Features = []string{"monitoring", "ipv6"}
+	mock := &mockDropletClient{droplet: droplet}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-droplet", ProviderID: "42",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if monitoring, _ := out.Outputs["monitoring"].(bool); !monitoring {
+		t.Errorf("Outputs[\"monitoring\"] = %v, want true", out.Outputs["monitoring"])
+	}
+	if ipv6, _ := out.Outputs["ipv6"].(bool); !ipv6 {
+		t.Errorf("Outputs[\"ipv6\"] = %v, want true", out.Outputs["ipv6"])
+	}
+}
+
+func TestDropletDriver_Read_MonitoringAndIPv6FalseWhenAbsentFromFeatures(t *testing.T) {
+	// When Features is empty (or doesn't contain "monitoring"/"ipv6"),
+	// Outputs must report false for both flags.
+	droplet := testDroplet()
+	droplet.Features = nil
+	mock := &mockDropletClient{droplet: droplet}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name: "my-droplet", ProviderID: "42",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if monitoring, _ := out.Outputs["monitoring"].(bool); monitoring {
+		t.Errorf("Outputs[\"monitoring\"] = %v, want false", out.Outputs["monitoring"])
+	}
+	if ipv6, _ := out.Outputs["ipv6"].(bool); ipv6 {
+		t.Errorf("Outputs[\"ipv6\"] = %v, want false", out.Outputs["ipv6"])
+	}
+}
+
+func TestDropletDriver_Diff_MonitoringToggleForcesReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	// Current: monitoring OFF; desired: ON — must flag ForceNew.
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":       "s-1vcpu-2gb",
+			"monitoring": false,
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":       "s-1vcpu-2gb",
+			"monitoring": true,
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("monitoring toggle must force replace; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+	var found bool
+	for _, c := range r.Changes {
+		if c.Path == "monitoring" && c.ForceNew {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:\"monitoring\", ForceNew:true} in %+v", r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_MonitoringAbsentSkipped(t *testing.T) {
+	// When "monitoring" is absent from desired config, no diff must be planned
+	// even if current has monitoring=true (backwards-compat for older YAML).
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":       "s-1vcpu-2gb",
+			"monitoring": true,
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size": "s-1vcpu-2gb"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("absent monitoring key must NOT trigger drift; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_IPv6ToggleForcesReplace(t *testing.T) {
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	// Current: ipv6 OFF; desired: ON — must flag ForceNew.
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"ipv6": false,
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"ipv6": true,
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("ipv6 toggle must force replace; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+	var found bool
+	for _, c := range r.Changes {
+		if c.Path == "ipv6" && c.ForceNew {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldChange{Path:\"ipv6\", ForceNew:true} in %+v", r.Changes)
+	}
+}
+
+func TestDropletDriver_Diff_IPv6AbsentSkipped(t *testing.T) {
+	// When "ipv6" is absent from desired config, no diff must be planned
+	// even if current has ipv6=true (backwards-compat for older YAML).
+	mock := &mockDropletClient{}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size": "s-1vcpu-2gb",
+			"ipv6": true,
+		},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size": "s-1vcpu-2gb"},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if r.NeedsReplace || r.NeedsUpdate {
+		t.Errorf("absent ipv6 key must NOT trigger drift; NeedsReplace=%v changes=%+v",
+			r.NeedsReplace, r.Changes)
+	}
+}
