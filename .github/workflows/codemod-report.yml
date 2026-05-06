@@ -3,14 +3,9 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  # Copilot review #14 (round 4): scope to least privilege —
-  # contents:read for checkout, issues:write for the sticky PR
-  # comment (PR comments are issues at the GitHub API layer). The
-  # prior pull-requests:write grant was unused (no PR-state
-  # mutations) and inconsistent with the other workflows in this
-  # repo (ci.yml uses contents:read only).
   contents: read
   issues: write
+  pull-requests: write
 env:
   GOPRIVATE: github.com/GoCodeAlone/*
 jobs:
@@ -60,26 +55,39 @@ jobs:
             const summary = fs.readFileSync('/tmp/codemod-summary.md', 'utf8');
             const marker = '<!-- codemod-report-sticky -->';
             const body = `${marker}\n${summary}`;
-            // Paginate to handle PRs with >30 comments (default page size).
-            const allComments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-            });
-            const existing = allComments.find(c => c.body && c.body.startsWith(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+
+            try {
+              // Paginate to handle PRs with >30 comments (default page size).
+              const allComments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body,
+                per_page: 100,
               });
+              const existing = allComments.find(c => c.body && c.body.startsWith(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body,
+                });
+              }
+            } catch (error) {
+              if (error.status !== 403) {
+                throw error;
+              }
+
+              core.warning(`Could not write codemod PR comment: ${error.message}`);
+              await core.summary
+                .addHeading('iac-codemod report')
+                .addRaw(summary)
+                .write();
             }
