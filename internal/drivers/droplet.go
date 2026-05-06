@@ -115,12 +115,13 @@ func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) 
 // must replace the droplet, not patch it.
 //
 // Detected: size, vpc_uuid, enable_backups, tags, volumes (by NAME after
-// dropletOutput's ID→name resolution).
+// dropletOutput's ID→name resolution), monitoring, ipv6 (via the
+// droplet.Features string slice returned by the DO API).
 //
 // NOT detected (godo Read limitation, tracked in issue #56): user_data,
-// ssh_keys, monitoring, ipv6. Operators must taint the Droplet manually
-// to roll a new value for any of these. See the inline comment near the
-// end of this function for the full rationale.
+// ssh_keys. Operators must taint the Droplet manually to roll a new value
+// for any of these. See the inline comment near the end of this function
+// for the full rationale.
 func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
@@ -194,19 +195,50 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 		}
 	}
 
+	// monitoring / ipv6: the DO API surfaces these in droplet.Features
+	// (e.g. "monitoring", "ipv6"). dropletOutput stores them as booleans
+	// in Outputs so Diff can compare desired-vs-current reliably.
+	//
+	// Guard: only compare when the key is present in current.Outputs. If
+	// the key is absent the state was written by a version of the plugin
+	// that predates this PR (dropletOutput didn't emit the field). In that
+	// case, skip the comparison to avoid a spurious ForceNew replace — the
+	// key will be backfilled on the next state refresh (Read) and drift
+	// detection will work correctly from that point on.
+	if _, hasMonitoring := desired.Config["monitoring"]; hasMonitoring {
+		if _, curKeyExists := current.Outputs["monitoring"]; curKeyExists {
+			desiredMonitoring := boolFromConfig(desired.Config, "monitoring", false)
+			curMonitoring, _ := current.Outputs["monitoring"].(bool)
+			if desiredMonitoring != curMonitoring {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "monitoring", Old: curMonitoring, New: desiredMonitoring, ForceNew: true,
+				})
+			}
+		}
+	}
+
+	if _, hasIPv6 := desired.Config["ipv6"]; hasIPv6 {
+		if _, curKeyExists := current.Outputs["ipv6"]; curKeyExists {
+			desiredIPv6 := boolFromConfig(desired.Config, "ipv6", false)
+			curIPv6, _ := current.Outputs["ipv6"].(bool)
+			if desiredIPv6 != curIPv6 {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "ipv6", Old: curIPv6, New: desiredIPv6, ForceNew: true,
+				})
+			}
+		}
+	}
+
 	// KNOWN LIMITATION (Copilot round-2 finding #8): the following fields
 	// CANNOT be drift-detected here because godo.Droplet (returned by
 	// Droplets.Get) does not surface them post-create:
 	//
-	//   - user_data    — write-only at create; not in Droplet.Get response
-	//   - ssh_keys     — no SSH-key list returned by Droplet.Get
-	//   - monitoring   — no dedicated boolean field on godo.Droplet
-	//   - ipv6         — no dedicated boolean field on godo.Droplet
-	//                    (network-address presence is an unreliable signal)
+	//   - user_data — write-only at create; not in Droplet.Get response
+	//   - ssh_keys  — no SSH-key list returned by Droplet.Get
 	//
 	// Changing any of these in YAML after the Droplet is created will
-	// produce NO plan action — the Droplet keeps the original cloud-init,
-	// SSH key list, etc. Operators must `taint` the Droplet (or delete +
+	// produce NO plan action — the Droplet keeps the original cloud-init
+	// and SSH key list. Operators must `taint` the Droplet (or delete +
 	// re-apply) to roll a new value.
 	//
 	// TODO(workflow-plugin-digitalocean#56): once godo exposes these
@@ -218,9 +250,7 @@ func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec,
 	// dirty plans). Silent no-op is the lesser evil until the upstream
 	// gap is closed; the comment + issue reference make the limitation
 	// discoverable.
-	_ = strFromConfig(desired.Config, "user_data", "")     // see TODO above
-	_ = boolFromConfig(desired.Config, "monitoring", false) // see TODO above
-	_ = boolFromConfig(desired.Config, "ipv6", false)       // see TODO above
+	_ = strFromConfig(desired.Config, "user_data", "") // see TODO above
 	// ssh_keys: parsed in Create; not re-parsed here to avoid wasted work.
 
 	// region: Droplets are regional and DO does not support region change
@@ -337,11 +367,12 @@ func (d *DropletDriver) dropletOutput(ctx context.Context, droplet *godo.Droplet
 		"enable_backups": dropletBackupsEnabled(droplet),
 		"tags":           tags,
 		"volumes":        volumes,
-		// monitoring / ipv6 are not reliably returned on Read by godo
-		// (no dedicated boolean field); operators see drift via
-		// re-apply if the desired flag differs from any stored
-		// expectation. Diff still flags desired-vs-config-snapshot
-		// changes via the desired-only-set check.
+		// monitoring and ipv6 are surfaced via the Features string slice
+		// returned by Droplets.Get. The DO API includes "monitoring" /
+		// "ipv6" in that slice when the feature is enabled, so we can
+		// detect drift without any side-channel state file.
+		"monitoring": dropletHasFeature(droplet, "monitoring"),
+		"ipv6":       dropletHasFeature(droplet, "ipv6"),
 	}
 	if len(resolutionFailures) > 0 {
 		outputs["volumes_resolution"] = map[string]any{
@@ -364,6 +395,19 @@ func (d *DropletDriver) dropletOutput(ctx context.Context, droplet *godo.Droplet
 // presence of BackupIDs is the only reliable read-side signal.
 func dropletBackupsEnabled(droplet *godo.Droplet) bool {
 	return len(droplet.BackupIDs) > 0
+}
+
+// dropletHasFeature returns true when the named feature string is present in
+// droplet.Features. The DO API populates this slice with entries like
+// "monitoring", "ipv6", "private_networking", "backups" for each enabled
+// feature, making it the canonical read-side source for those boolean flags.
+func dropletHasFeature(droplet *godo.Droplet, feature string) bool {
+	for _, f := range droplet.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // providerIDToInt converts a string provider ID to int for godo Droplet API
