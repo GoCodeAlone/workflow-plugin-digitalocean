@@ -125,7 +125,7 @@ func (d *FirewallDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	if err != nil {
 		return nil, fmt.Errorf("firewall update %q: %w", ref.Name, err)
 	}
-	if err := validateFirewallTargets(spec.Name, req); err != nil {
+	if err := validateFirewallTargets(ref.Name, req); err != nil {
 		return nil, err
 	}
 	providerID, err := d.resolveProviderID(ctx, ref)

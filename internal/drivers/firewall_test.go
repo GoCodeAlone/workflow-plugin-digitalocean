@@ -498,6 +498,31 @@ func TestFirewallDriver_Update_NoTargets_Errors(t *testing.T) {
 	}
 }
 
+// TestFirewallDriver_Update_NoTargets_RefNameInError is a regression test for
+// the case where ref.Name and spec.Name diverge. The no-targets error must
+// reference ref.Name (the authoritative identity), not spec.Name.
+func TestFirewallDriver_Update_NoTargets_RefNameInError(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "ref-name", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name:   "spec-name", // intentionally different from ref.Name
+		Config: map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty targets, got nil")
+	}
+	want := fmt.Sprintf(drivers.NoTargetsErrFmt, "ref-name")
+	if got := err.Error(); got != want {
+		t.Errorf("error uses wrong name:\n got: %q\nwant: %q", got, want)
+	}
+	if mock.lastReq != nil {
+		t.Error("FirewallRequest reached godo client despite empty-targets validation")
+	}
+}
+
 // TestFirewallDriver_Create_DropletIDs_AcceptsMixedNumeric verifies the
 // helper accepts the YAML-decoded numeric variants (int, int64, float64) the
 // modular YAML loader can produce.
