@@ -3,6 +3,7 @@ package drivers_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -1270,5 +1271,25 @@ func TestDropletDriver_Diff_IPv6LegacyStateNoSpuriousReplace(t *testing.T) {
 	if r.NeedsReplace || r.NeedsUpdate {
 		t.Errorf("legacy state (no ipv6 key in Outputs) must NOT trigger spurious replace; NeedsReplace=%v changes=%+v",
 			r.NeedsReplace, r.Changes)
+	}
+}
+
+// TestNewDropletDriverWithClient_TypedNilSafe verifies that passing a typed-nil
+// StorageClient to NewDropletDriverWithClient does NOT silently install a
+// nil-method-set dependency that would panic on call — the driver should
+// surface "storage client not configured" when the path that needs storage is
+// exercised, rather than a nil-pointer dereference.
+func TestNewDropletDriverWithClient_TypedNilSafe(t *testing.T) {
+	var nilStorage drivers.StorageClient // typed-nil interface
+	d := drivers.NewDropletDriverWithClient(&mockDropletClient{}, "nyc1", nilStorage)
+	// d.storage must remain nil (not the typed-nil interface).
+	// Trigger the storage-needed path via Create with a volume spec.
+	spec := interfaces.ResourceSpec{
+		Name:   "pg",
+		Config: map[string]any{"volumes": []any{"pg-data"}},
+	}
+	_, err := d.Create(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "storage client not configured") {
+		t.Errorf("typed-nil StorageClient did not surface 'storage client not configured'; got: %v", err)
 	}
 }

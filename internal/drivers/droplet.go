@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -17,26 +18,62 @@ type DropletsClient interface {
 	Delete(ctx context.Context, dropletID int) (*godo.Response, error)
 }
 
+// ActionsClient is the godo ActionsService subset DropletDriver uses for
+// waiting on async actions (volume detach is the canonical case). Subset
+// means: only Get(ctx, actionID) — the pollable status read.
+type ActionsClient interface {
+	Get(ctx context.Context, actionID int) (*godo.Action, *godo.Response, error)
+}
+
 // DropletDriver manages DigitalOcean Droplets (infra.droplet).
 type DropletDriver struct {
-	client  DropletsClient
-	storage StorageClient // optional; required only when spec.Config["volumes"] is non-empty
-	region  string
+	client         DropletsClient
+	storage        StorageClient        // optional; required only when spec.Config["volumes"] is non-empty
+	storageActions StorageActionsClient // required for Replace; nil-safe in non-Replace paths
+	actions        ActionsClient        // required for Replace; nil-safe in non-Replace paths
+	region         string
+	// test-only timeout overrides (zero = use production defaults)
+	replaceTimeout      time.Duration
+	replacePollInterval time.Duration
 }
 
 // NewDropletDriver creates a DropletDriver backed by a real godo client.
-// The Storage client is wired so volumes-by-name resolution works.
+// The Storage, StorageActions, and Actions clients are wired so volumes-by-name
+// resolution and Replace's detach-wait work without additional configuration.
 func NewDropletDriver(c *godo.Client, region string) *DropletDriver {
-	return &DropletDriver{client: c.Droplets, storage: c.Storage, region: region}
+	return &DropletDriver{
+		client:         c.Droplets,
+		storage:        c.Storage,
+		storageActions: c.StorageActions,
+		actions:        c.Actions,
+		region:         region,
+	}
 }
 
-// NewDropletDriverWithClient creates a driver with an injected client (for tests).
-// The optional storage argument is used only when a spec references volumes by
-// name; pass nil if your test does not exercise that path.
-func NewDropletDriverWithClient(c DropletsClient, region string, storage ...StorageClient) *DropletDriver {
+// NewDropletDriverWithClient creates a driver with injected clients (for tests).
+// Optional clients are provided via a variadic interface{} parameter; each value
+// is type-switched to the appropriate field. Typed-nil interface values are
+// rejected (treated as "not provided") to prevent nil-method-set panics at call time.
+//
+// Existing tests that pass (DropletsClient, region) continue to compile unchanged.
+// Tests that exercise Replace must additionally pass StorageActionsClient and ActionsClient.
+func NewDropletDriverWithClient(c DropletsClient, region string, optional ...interface{}) *DropletDriver {
 	d := &DropletDriver{client: c, region: region}
-	if len(storage) > 0 {
-		d.storage = storage[0]
+	for _, o := range optional {
+		switch v := o.(type) {
+		case StorageClient:
+			if v != nil {
+				d.storage = v
+			}
+		case StorageActionsClient:
+			if v != nil {
+				d.storageActions = v
+			}
+		case ActionsClient:
+			if v != nil {
+				d.actions = v
+			}
+		}
 	}
 	return d
 }

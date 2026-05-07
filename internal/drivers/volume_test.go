@@ -29,6 +29,16 @@ func (m *mockStorageActionsClient) Resize(_ context.Context, _ string, sizeGB in
 	return &godo.Action{Status: "completed"}, nil, nil
 }
 
+// DetachByDropletID satisfies StorageActionsClient. VolumeDriver tests
+// never call this; it is required because DropletDriver.Replace uses the
+// same interface. Returns completed action or the configured error.
+func (m *mockStorageActionsClient) DetachByDropletID(_ context.Context, _ string, _ int) (*godo.Action, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return &godo.Action{Status: "completed"}, nil, nil
+}
+
 func testVolume() *godo.Volume {
 	return &godo.Volume{
 		ID:             "vol-aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",

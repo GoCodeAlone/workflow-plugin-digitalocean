@@ -19,10 +19,15 @@ type StorageClient interface {
 }
 
 // StorageActionsClient is the subset of godo.StorageActionsService used by
-// VolumeDriver to execute resize actions (the only mutation DO supports on
-// an existing volume without delete + recreate).
+// VolumeDriver (resize) and DropletDriver.Replace (volume detach before
+// delete). Both operations are on the same godo.StorageActionsService so
+// one interface covers both callers.
 type StorageActionsClient interface {
 	Resize(ctx context.Context, volumeID string, sizeGigabytes int, regionSlug string) (*godo.Action, *godo.Response, error)
+	// DetachByDropletID detaches the volume from the given Droplet. Used by
+	// DropletDriver.Replace before deleting the old Droplet so DO does not
+	// reject the new Droplet's create with "422 storage already associated".
+	DetachByDropletID(ctx context.Context, volumeID string, dropletID int) (*godo.Action, *godo.Response, error)
 }
 
 // VolumeDriver manages DigitalOcean Block Storage volumes (infra.volume).
