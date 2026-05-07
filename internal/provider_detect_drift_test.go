@@ -345,7 +345,7 @@ func TestDetectDriftWithSpecs_DiffErrorPropagates(t *testing.T) {
 }
 
 // TestDetectDriftWithSpecs_NoSpecFallsBackToInSync verifies that when no spec is
-// provided for a ref (empty specs map), the result is DriftClassInSync after a
+// provided for a ref (nil specs map), the result is DriftClassInSync after a
 // successful Read — Diff is not called.
 func TestDetectDriftWithSpecs_NoSpecFallsBackToInSync(t *testing.T) {
 	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
@@ -424,5 +424,100 @@ func TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff(t *testing.T) {
 	}
 	if !driverWithSpec.diffCalled {
 		t.Error("expected Diff to be called for my-vpc")
+	}
+}
+
+func TestDetectDriftWithSpecs_NameCollisionIgnoresWrongTypeSpec(t *testing.T) {
+	vpcDriver := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "shared", Type: "infra.vpc", Status: "active"},
+		// diffResult nil — Diff must not be called with the droplet spec.
+	}
+	dropletDriver := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "shared", Type: "infra.droplet", Status: "active"},
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes:     []interfaces.FieldChange{{Path: "size"}},
+		},
+	}
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.vpc":     vpcDriver,
+			"infra.droplet": dropletDriver,
+		},
+	}
+	refs := []interfaces.ResourceRef{
+		{Name: "shared", Type: "infra.vpc"},
+		{Name: "shared", Type: "infra.droplet"},
+	}
+	specs := map[string]interfaces.ResourceSpec{
+		"shared": {Name: "shared", Type: "infra.droplet", Config: map[string]any{"size": "s-2vcpu-4gb"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Class != interfaces.DriftClassInSync {
+		t.Errorf("vpc: expected Class=%q, got %q", interfaces.DriftClassInSync, results[0].Class)
+	}
+	if results[0].Drifted {
+		t.Error("vpc: expected Drifted=false")
+	}
+	if results[1].Class != interfaces.DriftClassConfig {
+		t.Errorf("droplet: expected Class=%q, got %q", interfaces.DriftClassConfig, results[1].Class)
+	}
+	if !dropletDriver.diffCalled {
+		t.Error("expected Diff to be called for matching droplet spec")
+	}
+}
+
+func TestDetectDriftWithSpecs_CompositeKeyDisambiguatesSharedNames(t *testing.T) {
+	vpcDriver := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "shared", Type: "infra.vpc", Status: "active"},
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes:     []interfaces.FieldChange{{Path: "ip_range"}},
+		},
+	}
+	dropletDriver := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "shared", Type: "infra.droplet", Status: "active"},
+		diffResult: &interfaces.DiffResult{NeedsUpdate: false},
+	}
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.vpc":     vpcDriver,
+			"infra.droplet": dropletDriver,
+		},
+	}
+	refs := []interfaces.ResourceRef{
+		{Name: "shared", Type: "infra.vpc"},
+		{Name: "shared", Type: "infra.droplet"},
+	}
+	specs := map[string]interfaces.ResourceSpec{
+		"infra.vpc/shared":     {Name: "shared", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.0.0.0/8"}},
+		"infra.droplet/shared": {Name: "shared", Type: "infra.droplet", Config: map[string]any{"size": "s-1vcpu-1gb"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Class != interfaces.DriftClassConfig {
+		t.Errorf("vpc: expected Class=%q, got %q", interfaces.DriftClassConfig, results[0].Class)
+	}
+	if results[1].Class != interfaces.DriftClassInSync {
+		t.Errorf("droplet: expected Class=%q, got %q", interfaces.DriftClassInSync, results[1].Class)
+	}
+	if !vpcDriver.diffCalled {
+		t.Error("expected Diff to be called for vpc composite spec")
+	}
+	if !dropletDriver.diffCalled {
+		t.Error("expected Diff to be called for droplet composite spec")
 	}
 }

@@ -198,7 +198,8 @@ type specsDetector interface {
 // spec entry fall back to ghost/InSync classification only.
 //
 // When "specs" is absent or the provider does not implement specsDetector, the
-// call falls through to the standard DetectDrift (ghost + unknown only).
+// call falls through to the standard DetectDrift path. That fallback still
+// reports ghost and InSync results, but it does not detect config drift.
 func (m *doModuleInstance) invokeProviderDetectDrift(ctx context.Context, args map[string]any) (map[string]any, error) {
 	refs, err := refsFromArgs(args)
 	if err != nil {

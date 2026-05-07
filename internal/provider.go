@@ -554,7 +554,7 @@ func (p *DOProvider) DetectDriftWithSpecs(ctx context.Context, resources []inter
 
 		// If the caller provided a desired spec for this ref, run Diff to detect
 		// config-level drift. An empty specs map skips this path entirely.
-		if spec, ok := specs[ref.Name]; ok {
+		if spec, ok := driftSpecForRef(ref, specs); ok {
 			diffResult, diffErr := d.Diff(ctx, spec, out)
 			if diffErr != nil {
 				return nil, fmt.Errorf("detect drift (config) for %s/%s: %w", ref.Type, ref.Name, diffErr)
@@ -583,6 +583,37 @@ func (p *DOProvider) DetectDriftWithSpecs(ctx context.Context, resources []inter
 		})
 	}
 	return results, nil
+}
+
+func driftSpecForRef(ref interfaces.ResourceRef, specs map[string]interfaces.ResourceSpec) (interfaces.ResourceSpec, bool) {
+	if len(specs) == 0 {
+		return interfaces.ResourceSpec{}, false
+	}
+
+	for _, key := range []string{ref.Type + "/" + ref.Name, ref.ProviderID} {
+		if key == "" {
+			continue
+		}
+		if spec, ok := specs[key]; ok && driftSpecMatchesRef(spec, ref) {
+			return spec, true
+		}
+	}
+
+	spec, ok := specs[ref.Name]
+	if !ok || !driftSpecMatchesRef(spec, ref) {
+		return interfaces.ResourceSpec{}, false
+	}
+	return spec, true
+}
+
+func driftSpecMatchesRef(spec interfaces.ResourceSpec, ref interfaces.ResourceRef) bool {
+	if spec.Name != "" && spec.Name != ref.Name {
+		return false
+	}
+	if spec.Type != "" && spec.Type != ref.Type {
+		return false
+	}
+	return true
 }
 
 // Import brings an existing cloud resource under management.
