@@ -371,33 +371,34 @@ func TestDetectDriftWithSpecs_NoSpecFallsBackToInSync(t *testing.T) {
 }
 
 // TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff verifies that when a specs
-// map contains an entry for only one of two refs, Diff is called only for the
-// ref that has a spec; the other is classified InSync from Read alone.
+// map contains an entry for only one of two refs (of different types), Diff is
+// called only for the ref that has a spec; the other is classified InSync from
+// Read alone.
 func TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff(t *testing.T) {
 	driverWithSpec := &fakeDriverForDrift{
-		readOutput: &interfaces.ResourceOutput{Name: "vpc-a", Type: "infra.vpc", Status: "active"},
+		readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
 		diffResult: &interfaces.DiffResult{
 			NeedsUpdate: true,
 			Changes:     []interfaces.FieldChange{{Path: "ip_range"}},
 		},
 	}
 	driverNoSpec := &fakeDriverForDrift{
-		readOutput: &interfaces.ResourceOutput{Name: "vpc-b", Type: "infra.droplet", Status: "active"},
-		// diffResult nil — Diff must not be called for vpc-b.
+		readOutput: &interfaces.ResourceOutput{Name: "my-droplet", Type: "infra.droplet", Status: "active"},
+		// diffResult nil — Diff must not be called for my-droplet.
 	}
 	p := &DOProvider{
 		drivers: map[string]interfaces.ResourceDriver{
-			"infra.vpc":    driverWithSpec,
+			"infra.vpc":     driverWithSpec,
 			"infra.droplet": driverNoSpec,
 		},
 	}
 	refs := []interfaces.ResourceRef{
-		{Name: "vpc-a", Type: "infra.vpc"},
-		{Name: "vpc-b", Type: "infra.droplet"},
+		{Name: "my-vpc", Type: "infra.vpc"},
+		{Name: "my-droplet", Type: "infra.droplet"},
 	}
 	specs := map[string]interfaces.ResourceSpec{
-		"vpc-a": {Name: "vpc-a", Type: "infra.vpc", Config: map[string]any{"ip_range": "192.168.0.0/16"}},
-		// vpc-b intentionally omitted
+		"my-vpc": {Name: "my-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "192.168.0.0/16"}},
+		// my-droplet intentionally omitted — no spec → no Diff
 	}
 
 	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
@@ -407,21 +408,21 @@ func TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	// vpc-a should be DriftClassConfig
+	// my-vpc should be DriftClassConfig
 	if results[0].Class != interfaces.DriftClassConfig {
-		t.Errorf("vpc-a: expected Class=%q, got %q", interfaces.DriftClassConfig, results[0].Class)
+		t.Errorf("my-vpc: expected Class=%q, got %q", interfaces.DriftClassConfig, results[0].Class)
 	}
 	if !results[0].Drifted {
-		t.Errorf("vpc-a: expected Drifted=true")
+		t.Errorf("my-vpc: expected Drifted=true")
 	}
-	// vpc-b should be DriftClassInSync (no spec → no Diff)
+	// my-droplet should be DriftClassInSync (no spec → no Diff)
 	if results[1].Class != interfaces.DriftClassInSync {
-		t.Errorf("vpc-b: expected Class=%q, got %q", interfaces.DriftClassInSync, results[1].Class)
+		t.Errorf("my-droplet: expected Class=%q, got %q", interfaces.DriftClassInSync, results[1].Class)
 	}
 	if results[1].Drifted {
-		t.Errorf("vpc-b: expected Drifted=false")
+		t.Errorf("my-droplet: expected Drifted=false")
 	}
 	if !driverWithSpec.diffCalled {
-		t.Error("expected Diff to be called for vpc-a")
+		t.Error("expected Diff to be called for my-vpc")
 	}
 }
