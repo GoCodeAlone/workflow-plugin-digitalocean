@@ -641,6 +641,38 @@ func (p *DOProvider) Import(ctx context.Context, cloudID string, resourceType st
 	}, nil
 }
 
+// RevokeProviderCredential satisfies interfaces.ProviderCredentialRevoker for
+// source "digitalocean.spaces". credentialID is the access_key_id of the OLD
+// DO Spaces key to revoke. Used by `wfctl infra bootstrap --force-rotate` to
+// invalidate the old key after minting its replacement (see ADR 0012).
+//
+// HTTP response handling:
+//   - 204 No Content → success
+//   - 404 Not Found  → treated as success (key already gone)
+//   - 401/403        → auth error, propagated as fatal
+//   - 5xx            → transient error, propagated to caller (caller logs + continues)
+func (p *DOProvider) RevokeProviderCredential(ctx context.Context, source string, credentialID string) error {
+	if source != "digitalocean.spaces" {
+		return fmt.Errorf("digitalocean: RevokeProviderCredential: unknown source %q (only digitalocean.spaces is supported)", source)
+	}
+	if credentialID == "" {
+		return fmt.Errorf("digitalocean: RevokeProviderCredential: credentialID is required")
+	}
+	if p.client == nil {
+		return fmt.Errorf("digitalocean: RevokeProviderCredential: provider not initialized")
+	}
+
+	resp, err := p.client.SpacesKeys.Delete(ctx, credentialID)
+	if err != nil {
+		// 404 means the key is already gone — treat as success.
+		if resp != nil && resp.StatusCode == 404 {
+			return nil
+		}
+		return fmt.Errorf("digitalocean: revoke spaces key %q: %w", credentialID, err)
+	}
+	return nil
+}
+
 // Close is a no-op; the godo client has no persistent connection to close.
 func (p *DOProvider) Close() error { return nil }
 
