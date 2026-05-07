@@ -77,11 +77,10 @@ func TestConformance(t *testing.T) {
 					t.Fatal("CONFORMANCE_LIVE_CLOUD=1 but DIGITALOCEAN_ACCESS_TOKEN is not set")
 				}
 			}
-			// Pass t.Context() so test-scoped cancellation/deadline
-			// flows into Initialize and the godo HTTP transport.
-			// Fixed in workflow-plugin-digitalocean#62 / PR #68:
-			// Initialize now forwards ctx to oauth2.NewClient so
-			// LiveCloud cancellation reaches the HTTP transport.
+			// Pass t.Context() so Initialize can honor context-scoped
+			// oauth2 HTTPClient injection instead of falling back to
+			// context.Background(). Per-request cancellation is still
+			// controlled by the ctx passed to each later driver/API call.
 			if err := p.Initialize(t.Context(), map[string]any{
 				"token":  token,
 				"region": "nyc3",
