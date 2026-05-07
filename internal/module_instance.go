@@ -181,13 +181,47 @@ func (m *doModuleInstance) invokeProviderStatus(ctx context.Context, args map[st
 	return map[string]any{"statuses": statusList}, nil
 }
 
+// specsDetector is an optional extension of IaCProvider that supports
+// config-drift detection via caller-injected desired specs. When the provider
+// implements this interface and the caller supplies a "specs" map in the args,
+// invokeProviderDetectDrift uses it instead of the base DetectDrift method.
+type specsDetector interface {
+	DetectDriftWithSpecs(ctx context.Context, resources []interfaces.ResourceRef, specs map[string]interfaces.ResourceSpec) ([]interfaces.DriftResult, error)
+}
+
 // invokeProviderDetectDrift decodes refs and calls IaCProvider.DetectDrift.
+//
+// When the args map contains a "specs" key (a map[string]ResourceSpec keyed by
+// ref.Name) and the provider implements specsDetector, the spec-injection path
+// is taken: driver.Diff is called per-ref to detect config-level drift
+// (DriftClassConfig) in addition to ghost detection. Refs without a matching
+// spec entry fall back to ghost/InSync classification only.
+//
+// When "specs" is absent or the provider does not implement specsDetector, the
+// call falls through to the standard DetectDrift path. That fallback still
+// reports ghost and InSync results, but it does not detect config drift.
 func (m *doModuleInstance) invokeProviderDetectDrift(ctx context.Context, args map[string]any) (map[string]any, error) {
 	refs, err := refsFromArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("IaCProvider.DetectDrift: %w", err)
 	}
-	drifts, err := m.provider.DetectDrift(ctx, refs)
+
+	var drifts []interfaces.DriftResult
+	// rawSpecs != nil guards against an explicit "specs": null in the args map,
+	// which should be treated the same as absent (no spec-injection path).
+	if rawSpecs, hasSpecs := args["specs"]; hasSpecs && rawSpecs != nil {
+		if sd, ok := m.provider.(specsDetector); ok {
+			var specs map[string]interfaces.ResourceSpec
+			if err := decodeJSONValue(rawSpecs, &specs); err != nil {
+				return nil, fmt.Errorf("IaCProvider.DetectDrift: decode specs: %w", err)
+			}
+			drifts, err = sd.DetectDriftWithSpecs(ctx, refs, specs)
+		} else {
+			drifts, err = m.provider.DetectDrift(ctx, refs)
+		}
+	} else {
+		drifts, err = m.provider.DetectDrift(ctx, refs)
+	}
 	if err != nil {
 		return nil, err
 	}

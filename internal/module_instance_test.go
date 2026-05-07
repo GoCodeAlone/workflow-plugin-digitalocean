@@ -602,6 +602,86 @@ func TestDoModuleInstance_InvokeMethod_DetectDrift_DispatchesToProvider(t *testi
 	}
 }
 
+// TestDoModuleInstance_InvokeMethod_DetectDrift_WithSpecs_DispatchesToDetectDriftWithSpecs
+// verifies that when the "specs" key is present in the args, invokeProviderDetectDrift
+// routes to DetectDriftWithSpecs (via the specsDetector interface) on a provider
+// that implements it. Here we use a real DOProvider with a fake driver so that
+// the config-drift path (DriftClassConfig) is exercised end-to-end.
+func TestDoModuleInstance_InvokeMethod_DetectDrift_WithSpecs_DispatchesToDetectDriftWithSpecs(t *testing.T) {
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.vpc": &fakeDriverForDrift{
+				readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
+				diffResult: &interfaces.DiffResult{
+					NeedsUpdate: true,
+					Changes:     []interfaces.FieldChange{{Path: "ip_range", Old: "10.0.0.0/8", New: "192.168.0.0/16"}},
+				},
+			},
+		},
+	}
+	mi := &doModuleInstance{provider: p}
+
+	result, err := mi.InvokeMethod("IaCProvider.DetectDrift", map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-vpc", "type": "infra.vpc", "provider_id": "do-001"},
+		},
+		"specs": map[string]any{
+			"my-vpc": map[string]any{
+				"name":   "my-vpc",
+				"type":   "infra.vpc",
+				"config": map[string]any{"ip_range": "192.168.0.0/16"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DetectDrift with specs: %v", err)
+	}
+	drifts, _ := result["drifts"].([]any)
+	if len(drifts) != 1 {
+		t.Fatalf("expected 1 drift, got %d", len(drifts))
+	}
+	d, _ := drifts[0].(map[string]any)
+	if d["drifted"] != true {
+		t.Errorf("expected drifted=true for config drift, got %v", d["drifted"])
+	}
+	if d["class"] != string(interfaces.DriftClassConfig) {
+		t.Errorf("expected class=%q, got %q", interfaces.DriftClassConfig, d["class"])
+	}
+}
+
+// TestDoModuleInstance_InvokeMethod_DetectDrift_WithSpecs_FallsBackWhenNoSpecsDetector
+// verifies that when the "specs" key is present but the provider does not implement
+// specsDetector, invokeProviderDetectDrift gracefully falls back to DetectDrift.
+func TestDoModuleInstance_InvokeMethod_DetectDrift_WithSpecs_FallsBackWhenNoSpecsDetector(t *testing.T) {
+	fake := &fakeIaCProvider{driftResult: []interfaces.DriftResult{
+		{Name: "my-vpc", Type: "infra.vpc", Drifted: false, Class: interfaces.DriftClassInSync},
+	}}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.DetectDrift", map[string]any{
+		"refs": []any{
+			map[string]any{"name": "my-vpc", "type": "infra.vpc", "provider_id": "do-001"},
+		},
+		"specs": map[string]any{
+			"my-vpc": map[string]any{
+				"name":   "my-vpc",
+				"type":   "infra.vpc",
+				"config": map[string]any{"ip_range": "10.0.0.0/8"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DetectDrift fallback: %v", err)
+	}
+	if !fake.detectDriftCalled {
+		t.Error("expected fallback DetectDrift to be called on provider")
+	}
+	drifts, _ := result["drifts"].([]any)
+	if len(drifts) != 1 {
+		t.Fatalf("expected 1 drift, got %d", len(drifts))
+	}
+}
+
 func TestDoModuleInstance_InvokeMethod_Import_DispatchesToProvider(t *testing.T) {
 	fake := &fakeIaCProvider{importResult: &interfaces.ResourceState{
 		ID: "do-555", Name: "imported-db", Type: "infra.database", Provider: "digitalocean",
