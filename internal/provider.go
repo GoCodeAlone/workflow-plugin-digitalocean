@@ -658,6 +658,9 @@ func (p *DOProvider) RevokeProviderCredential(ctx context.Context, source string
 	if credentialID == "" {
 		return fmt.Errorf("digitalocean: RevokeProviderCredential: credentialID is required")
 	}
+	if p.client == nil {
+		return fmt.Errorf("digitalocean: RevokeProviderCredential: provider not initialized")
+	}
 
 	resp, err := p.client.SpacesKeys.Delete(ctx, credentialID)
 	if err != nil {
