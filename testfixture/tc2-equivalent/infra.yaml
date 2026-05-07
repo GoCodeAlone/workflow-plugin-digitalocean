@@ -1,0 +1,54 @@
+# TC2-equivalent fixture for runtime-launch validation.
+# Tests that wfctl infra plan sees "no changes" when vpc_uuid is resolved
+# from state at plan time (JIT resolver, workflow v0.23.0 PR-1).
+#
+# This fixture mirrors the structural shape of core-dump's infra.yaml
+# without cloud-specific secrets or actual credentials.
+
+infra:
+  auto_bootstrap: false
+
+secrets:
+  provider: env
+  generate:
+    - key: STAGING_VPC_UUID
+      type: infra_output
+      source: core-dump-vpc.id
+
+modules:
+  - name: do-provider
+    type: iac.provider
+    config:
+      provider: digitalocean
+      plugin_path: /tmp/do-plugin
+
+  - name: iac-state
+    type: iac.state
+    config:
+      backend: filesystem
+      path: testfixture/tc2-equivalent/state.json
+
+  - name: core-dump-vpc
+    type: infra.vpc
+    config:
+      provider: do-provider
+    environments:
+      staging:
+        config:
+          name: core-dump-vpc
+          region: nyc1
+          ip_range: 10.20.0.0/16
+
+  - name: coredump-staging-pg
+    type: infra.droplet
+    config:
+      provider: do-provider
+    environments:
+      staging:
+        config:
+          name: coredump-staging-pg
+          region: nyc1
+          size: s-1vcpu-2gb
+          image: ubuntu-24-04-x64
+          vpc_uuid: ${STAGING_VPC_UUID}
+          monitoring: true

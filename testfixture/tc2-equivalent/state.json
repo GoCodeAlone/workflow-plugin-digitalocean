@@ -1,0 +1,37 @@
+{
+  "resources": {
+    "core-dump-vpc": {
+      "name": "core-dump-vpc",
+      "type": "infra.vpc",
+      "provider_id": "14badc41-1234-5678-abcd-test000000001",
+      "outputs": {
+        "id": "14badc41-1234-5678-abcd-test000000001",
+        "name": "core-dump-vpc",
+        "region": "nyc1",
+        "ip_range": "10.20.0.0/16",
+        "status": "active"
+      },
+      "status": "active"
+    },
+    "coredump-staging-pg": {
+      "name": "coredump-staging-pg",
+      "type": "infra.droplet",
+      "provider_id": "999999",
+      "outputs": {
+        "id": 999999,
+        "public_ip": "1.2.3.4",
+        "private_ip": "10.20.0.10",
+        "size": "s-1vcpu-2gb",
+        "region": "nyc1",
+        "status": "active",
+        "vpc_uuid": "14badc41-1234-5678-abcd-test000000001",
+        "enable_backups": false,
+        "monitoring": true,
+        "tags": [],
+        "volumes": [],
+        "ipv6": false
+      },
+      "status": "active"
+    }
+  }
+}
