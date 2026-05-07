@@ -382,7 +382,7 @@ func TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff(t *testing.T) {
 		},
 	}
 	driverNoSpec := &fakeDriverForDrift{
-		readOutput: &interfaces.ResourceOutput{Name: "vpc-b", Type: "infra.vpc", Status: "active"},
+		readOutput: &interfaces.ResourceOutput{Name: "vpc-b", Type: "infra.droplet", Status: "active"},
 		// diffResult nil — Diff must not be called for vpc-b.
 	}
 	p := &DOProvider{

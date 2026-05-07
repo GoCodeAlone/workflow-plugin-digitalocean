@@ -206,6 +206,8 @@ func (m *doModuleInstance) invokeProviderDetectDrift(ctx context.Context, args m
 	}
 
 	var drifts []interfaces.DriftResult
+	// rawSpecs != nil guards against an explicit "specs": null in the args map,
+	// which should be treated the same as absent (no spec-injection path).
 	if rawSpecs, hasSpecs := args["specs"]; hasSpecs && rawSpecs != nil {
 		if sd, ok := m.provider.(specsDetector); ok {
 			var specs map[string]interfaces.ResourceSpec
