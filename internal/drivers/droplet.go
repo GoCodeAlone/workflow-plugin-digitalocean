@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -644,4 +645,95 @@ func (d *DropletDriver) SensitiveKeys() []string { return nil }
 // UUIDs. We declare Freeform; providerIDToInt performs strict local validation
 // and rejects any non-integer ProviderID with an explicit error before any
 // API call is made — no UUID-based state-heal needed for Droplet.
-func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }
+func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatFreeform
+}
+
+// Compile-time assertion: DropletDriver implements interfaces.ResourceReplacer.
+var _ interfaces.ResourceReplacer = (*DropletDriver)(nil)
+
+// Replace implements interfaces.ResourceReplacer for DigitalOcean Droplets.
+// Orchestration: read old → DetachByDropletID per attached Volume → wait for
+// each detach action → delete old Droplet → create new Droplet with the same
+// resolved Volume IDs (bypassing the name-resolution race in Create's
+// resolveDropletVolumes path).
+//
+// On 404 from the initial Get(oldID), Replace falls through with
+// detach-skipped + delete-skipped; Create still fires (orphan-state recovery
+// — same as engine-default Delete-then-Create when the old Droplet is gone).
+//
+// Error wrapping: every sub-step wraps with "droplet replace %q: <step>: %w"
+// so the workflow engine's error-prefix backstop sees the recognized
+// "<resource-type> replace " family and passes the error through unchanged.
+func (d *DropletDriver) Replace(ctx context.Context, oldRef interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	oldID, err := providerIDToInt(oldRef.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("droplet replace %q: invalid old ProviderID %q: %w", oldRef.Name, oldRef.ProviderID, err)
+	}
+
+	old, _, err := d.client.Get(ctx, oldID)
+	if err != nil {
+		wrapped := WrapGodoError(err)
+		if !isResourceNotFound(wrapped) {
+			return nil, fmt.Errorf("droplet replace %q: read old: %w", oldRef.Name, wrapped)
+		}
+		// Old Droplet is already gone — skip detach + delete, proceed to create.
+		old = nil
+	}
+
+	var detachedVolumeIDs []string
+	if old != nil && len(old.VolumeIDs) > 0 {
+		if d.storageActions == nil {
+			return nil, fmt.Errorf("droplet replace %q: storage_actions client not configured; cannot detach %d volume(s)", oldRef.Name, len(old.VolumeIDs))
+		}
+		if d.actions == nil {
+			return nil, fmt.Errorf("droplet replace %q: actions client not configured; cannot wait for detach completion", oldRef.Name)
+		}
+		timeout, pollInterval := d.replaceTimeouts()
+		for _, volID := range old.VolumeIDs {
+			action, _, err := d.storageActions.DetachByDropletID(ctx, volID, oldID)
+			if err != nil {
+				return nil, fmt.Errorf("droplet replace %q: detach volume %q: %w", oldRef.Name, volID, WrapGodoError(err))
+			}
+			if err := waitForActionComplete(ctx, d.actions, action.ID, timeout, pollInterval); err != nil {
+				return nil, fmt.Errorf("droplet replace %q: wait detach action %d: %w", oldRef.Name, action.ID, err)
+			}
+			detachedVolumeIDs = append(detachedVolumeIDs, volID)
+		}
+	}
+
+	if old != nil {
+		if _, err := d.client.Delete(ctx, oldID); err != nil {
+			return nil, fmt.Errorf("droplet replace %q: delete old: %w", oldRef.Name, WrapGodoError(err))
+		}
+	}
+
+	out, err := d.createWithResolvedVolumes(ctx, spec, detachedVolumeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("droplet replace %q: create new: %w", oldRef.Name, err)
+	}
+	return out, nil
+}
+
+// replaceTimeouts returns the production timeout + poll interval, or the
+// test-overridden values when SetReplaceTimeoutsForTest has been called.
+func (d *DropletDriver) replaceTimeouts() (time.Duration, time.Duration) {
+	if d.replaceTimeout != 0 {
+		return d.replaceTimeout, d.replacePollInterval
+	}
+	return defaultActionWaitTimeout, defaultActionWaitPollInterval
+}
+
+// SetReplaceTimeoutsForTest is a test-only seam to override the production
+// 60s/2s detach-wait bounds. Production code MUST NOT call this.
+func (d *DropletDriver) SetReplaceTimeoutsForTest(timeout, pollInterval time.Duration) {
+	d.replaceTimeout = timeout
+	d.replacePollInterval = pollInterval
+}
+
+// isResourceNotFound returns true when the error is (or wraps)
+// interfaces.ErrResourceNotFound — the sentinel WrapGodoError injects for
+// HTTP 404 / 405 responses from the DO API.
+func isResourceNotFound(err error) bool {
+	return errors.Is(err, interfaces.ErrResourceNotFound)
+}

@@ -114,10 +114,12 @@ func newRecordingStorageActionsClient() *recordingStorageActionsClient {
 }
 
 // recordingActionsClient: programmable Get-status sequence. callCount
-// indexes into statusSequence; out-of-bounds returns "completed" by
-// default (so tests don't need to enumerate exhaustively).
+// indexes into statusSequence; out-of-bounds returns defaultStatus
+// ("completed" for happy-path tests; override via withDefaultStatus for
+// timeout tests that need perpetual "in-progress").
 type recordingActionsClient struct {
 	statusSequence []string
+	defaultStatus  string
 	callCount      int
 }
 
@@ -126,12 +128,19 @@ func (m *recordingActionsClient) Get(_ context.Context, _ int) (*godo.Action, *g
 	if m.callCount < len(m.statusSequence) {
 		status = m.statusSequence[m.callCount]
 	} else {
-		status = "completed"
+		status = m.defaultStatus
 	}
 	m.callCount++
 	return &godo.Action{Status: status}, nil, nil
 }
 
 func newRecordingActionsClient(seq ...string) *recordingActionsClient {
-	return &recordingActionsClient{statusSequence: seq}
+	return &recordingActionsClient{statusSequence: seq, defaultStatus: "completed"}
+}
+
+// withDefaultStatus returns a copy of c with the given default status for
+// out-of-sequence polls. Use "in-progress" for timeout-boundary tests.
+func (c *recordingActionsClient) withDefaultStatus(status string) *recordingActionsClient {
+	c.defaultStatus = status
+	return c
 }
