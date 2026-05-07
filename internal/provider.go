@@ -488,19 +488,37 @@ func (p *DOProvider) Status(ctx context.Context, resources []interfaces.Resource
 //   - Read succeeds → DriftClassInSync (Drifted=false).
 //   - driver registry lookup fails → DriftClassUnknown (Drifted=true; operator must investigate).
 //
-// Config-drift detection (DriftClassConfig) is out of scope here: the
-// IaCProvider interface receives only refs, not the parsed declared config, so
-// passing an empty ResourceSpec to driver Diff methods causes false positives
-// (e.g. VPC reads ip_range from spec.Config; AppPlatform canonicalExpose
-// defaults to "public" on an empty spec). Use `wfctl infra plan` for
-// config-drift detection — it has access to the full declared spec and surfaces
-// config drift as update actions.
+// Config-drift detection (DriftClassConfig) requires the desired spec and is
+// available via DetectDriftWithSpecs, which is called by invokeProviderDetectDrift
+// when the workflow caller injects specs from state's recorded outputs.
 //
 // Production-safety invariant: only genuine 404s (wrapped with
 // interfaces.ErrResourceNotFound) trigger the ghost path. Rate-limit, auth,
 // or network errors propagate unchanged so callers cannot accidentally prune
 // state on transient failures.
 func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.ResourceRef) ([]interfaces.DriftResult, error) {
+	return p.DetectDriftWithSpecs(ctx, resources, nil)
+}
+
+// DetectDriftWithSpecs is the spec-injection variant of DetectDrift. It runs
+// the same ghost/transient/unknown classification as DetectDrift, and when the
+// caller supplies a desired ResourceSpec for a ref (keyed by ref.Name), it
+// additionally calls driver.Diff to detect config-level drift (DriftClassConfig).
+//
+// Classification rules (per ref):
+//   - driver lookup fails → DriftClassUnknown (Drifted=true).
+//   - Read returns ErrResourceNotFound → DriftClassGhost (Drifted=true); spec is
+//     ignored because the resource does not exist in the cloud.
+//   - Read returns any other error → propagate; discard accumulated results.
+//   - Read succeeds and no spec provided → DriftClassInSync (Drifted=false).
+//   - Read succeeds and spec provided:
+//   - Diff error → propagate; discard accumulated results.
+//   - Diff reports NeedsUpdate → DriftClassConfig (Drifted=true); Fields lists
+//     the changed config paths.
+//   - Diff reports no changes → DriftClassInSync (Drifted=false).
+//
+// A nil or empty specs map is equivalent to calling DetectDrift.
+func (p *DOProvider) DetectDriftWithSpecs(ctx context.Context, resources []interfaces.ResourceRef, specs map[string]interfaces.ResourceSpec) ([]interfaces.DriftResult, error) {
 	var results []interfaces.DriftResult
 	for _, ref := range resources {
 		d, err := p.ResourceDriver(ref.Type)
@@ -515,7 +533,7 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 			continue
 		}
 
-		_, err = d.Read(ctx, ref)
+		out, err := d.Read(ctx, ref)
 		if err != nil {
 			if errors.Is(err, interfaces.ErrResourceNotFound) {
 				// Ghost in state — cloud reports the resource does not exist.
@@ -534,8 +552,29 @@ func (p *DOProvider) DetectDrift(ctx context.Context, resources []interfaces.Res
 			return nil, fmt.Errorf("detect drift for %s/%s: %w", ref.Type, ref.Name, err)
 		}
 
-		// Read succeeded — classify as InSync. Config-drift detection routes
-		// through `wfctl infra plan` which has access to the declared spec.
+		// If the caller provided a desired spec for this ref, run Diff to detect
+		// config-level drift. An empty specs map skips this path entirely.
+		if spec, ok := specs[ref.Name]; ok {
+			diffResult, diffErr := d.Diff(ctx, spec, out)
+			if diffErr != nil {
+				return nil, fmt.Errorf("detect drift (config) for %s/%s: %w", ref.Type, ref.Name, diffErr)
+			}
+			if diffResult != nil && diffResult.NeedsUpdate {
+				fields := make([]string, 0, len(diffResult.Changes))
+				for _, c := range diffResult.Changes {
+					fields = append(fields, c.Path)
+				}
+				results = append(results, interfaces.DriftResult{
+					Name:    ref.Name,
+					Type:    ref.Type,
+					Drifted: true,
+					Class:   interfaces.DriftClassConfig,
+					Fields:  fields,
+				})
+				continue
+			}
+		}
+
 		results = append(results, interfaces.DriftResult{
 			Name:    ref.Name,
 			Type:    ref.Type,

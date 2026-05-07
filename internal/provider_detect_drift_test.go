@@ -11,11 +11,22 @@ import (
 )
 
 // fakeDriverForDrift implements interfaces.ResourceDriver with configurable
-// Read behavior for DetectDrift unit tests. No live API calls are made.
-// DetectDrift does not call Diff, so no diffResult/diffErr fields are needed.
+// Read and Diff behavior for DetectDrift / DetectDriftWithSpecs unit tests.
+// No live API calls are made.
+//
+// When diffResult and diffErr are both nil (the zero value), Diff panics to
+// ensure tests that should NOT call Diff fail loudly if they accidentally do.
+// Set at least one of diffResult or diffErr to opt in to Diff support.
 type fakeDriverForDrift struct {
 	readErr    error
 	readOutput *interfaces.ResourceOutput
+
+	// diffResult / diffErr control Diff's return value.
+	// If both are nil, Diff panics (guards tests that must not call Diff).
+	diffResult *interfaces.DiffResult
+	diffErr    error
+	// diffCalled records whether Diff was invoked.
+	diffCalled bool
 }
 
 func (f *fakeDriverForDrift) Read(_ context.Context, _ interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
@@ -23,9 +34,14 @@ func (f *fakeDriverForDrift) Read(_ context.Context, _ interfaces.ResourceRef) (
 }
 
 func (f *fakeDriverForDrift) Diff(_ context.Context, _ interfaces.ResourceSpec, _ *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
-	// DetectDrift must never call Diff. If this method is called during a
-	// DetectDrift test, panic so the test fails with a clear message.
-	panic("fakeDriverForDrift.Diff called — DetectDrift must not call Diff (empty-spec causes false positives)")
+	if f.diffResult == nil && f.diffErr == nil {
+		// DetectDrift must never call Diff when no spec is provided. If this
+		// method is called during a no-spec DetectDrift test, panic so the test
+		// fails with a clear message.
+		panic("fakeDriverForDrift.Diff called — DetectDrift must not call Diff when no spec is provided (empty-spec causes false positives)")
+	}
+	f.diffCalled = true
+	return f.diffResult, f.diffErr
 }
 
 // Minimal stubs for the remaining ResourceDriver methods.
@@ -84,11 +100,11 @@ func TestDetectDrift_NotFoundReturnsGhost(t *testing.T) {
 
 // TestDetectDrift_ReadOkReturnsInSync verifies that when Read succeeds, the result
 // is classified as DriftClassInSync with Drifted=false — even when Diff would
-// return a NeedsUpdate result. DetectDrift must NOT call Diff; config-drift
-// detection is deferred to wfctl infra plan which has access to the declared spec.
+// return a NeedsUpdate result. DetectDrift (without specs) must NOT call Diff;
+// config-drift detection requires injected specs via DetectDriftWithSpecs.
 //
-// The fakeDriverForDrift.Diff method panics if called, so any invocation from
-// DetectDrift will cause this test to fail with an explicit panic message.
+// The fakeDriverForDrift.Diff method panics when diffResult/diffErr are both nil,
+// so any invocation from DetectDrift will cause this test to fail with a clear message.
 func TestDetectDrift_ReadOkReturnsInSync(t *testing.T) {
 	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
 		readOutput: &interfaces.ResourceOutput{Name: "test-vpc", Type: "infra.vpc", Status: "active"},
@@ -104,7 +120,7 @@ func TestDetectDrift_ReadOkReturnsInSync(t *testing.T) {
 	}
 	r := results[0]
 	if r.Drifted {
-		t.Errorf("expected Drifted=false: DetectDrift must not call Diff (empty-spec Diff causes false positives)")
+		t.Errorf("expected Drifted=false: DetectDrift must not call Diff when no spec is provided (empty-spec Diff causes false positives)")
 	}
 	if r.Class != interfaces.DriftClassInSync {
 		t.Errorf("expected Class=%q, got %q (Diff was called — must not be)", interfaces.DriftClassInSync, r.Class)
@@ -202,5 +218,210 @@ func TestErrResourceNotFound_AliasedToInterfacesSentinel(t *testing.T) {
 	// Also verify the identity (same pointer).
 	if drivers.ErrResourceNotFound != interfaces.ErrResourceNotFound {
 		t.Error("drivers.ErrResourceNotFound is not the same value as interfaces.ErrResourceNotFound")
+	}
+}
+
+// ── DetectDriftWithSpecs tests ────────────────────────────────────────────────
+
+// TestDetectDriftWithSpecs_ConfigDriftDetected verifies that when a spec is
+// provided for a ref and driver.Diff reports NeedsUpdate, DetectDriftWithSpecs
+// classifies the result as DriftClassConfig with Drifted=true and populates
+// Fields with the changed config paths.
+func TestDetectDriftWithSpecs_ConfigDriftDetected(t *testing.T) {
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes: []interfaces.FieldChange{
+				{Path: "ip_range", Old: "10.0.0.0/8", New: "192.168.0.0/16"},
+			},
+		},
+	})
+	refs := []interfaces.ResourceRef{{Name: "my-vpc", Type: "infra.vpc"}}
+	specs := map[string]interfaces.ResourceSpec{
+		"my-vpc": {Name: "my-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "192.168.0.0/16"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if !r.Drifted {
+		t.Errorf("expected Drifted=true for config drift, got false")
+	}
+	if r.Class != interfaces.DriftClassConfig {
+		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassConfig, r.Class)
+	}
+	if len(r.Fields) != 1 || r.Fields[0] != "ip_range" {
+		t.Errorf("expected Fields=[ip_range], got %v", r.Fields)
+	}
+}
+
+// TestDetectDriftWithSpecs_SpecProvidedNoChanges verifies that when a spec is
+// provided but driver.Diff reports no changes, the result is DriftClassInSync.
+func TestDetectDriftWithSpecs_SpecProvidedNoChanges(t *testing.T) {
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
+		diffResult: &interfaces.DiffResult{NeedsUpdate: false},
+	})
+	refs := []interfaces.ResourceRef{{Name: "my-vpc", Type: "infra.vpc"}}
+	specs := map[string]interfaces.ResourceSpec{
+		"my-vpc": {Name: "my-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.0.0.0/8"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Drifted {
+		t.Errorf("expected Drifted=false when Diff reports no changes, got true")
+	}
+	if r.Class != interfaces.DriftClassInSync {
+		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassInSync, r.Class)
+	}
+}
+
+// TestDetectDriftWithSpecs_GhostOverridesSpec verifies that when a ref maps to a
+// ghost (Read returns ErrResourceNotFound), the result is DriftClassGhost even
+// when a spec is provided — the spec is irrelevant for a missing resource.
+func TestDetectDriftWithSpecs_GhostOverridesSpec(t *testing.T) {
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readErr: fmt.Errorf("vpc: %w", interfaces.ErrResourceNotFound),
+		// diffResult left nil: Diff must NOT be called for a ghost resource.
+	})
+	refs := []interfaces.ResourceRef{{Name: "ghost-vpc", Type: "infra.vpc"}}
+	specs := map[string]interfaces.ResourceSpec{
+		"ghost-vpc": {Name: "ghost-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.0.0.0/8"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if !r.Drifted {
+		t.Errorf("expected Drifted=true for ghost-in-state, got false")
+	}
+	if r.Class != interfaces.DriftClassGhost {
+		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassGhost, r.Class)
+	}
+}
+
+// TestDetectDriftWithSpecs_DiffErrorPropagates verifies that when driver.Diff
+// returns an error, DetectDriftWithSpecs propagates it and discards accumulated
+// results (same safety invariant as Read errors).
+func TestDetectDriftWithSpecs_DiffErrorPropagates(t *testing.T) {
+	diffErr := errors.New("DO API internal error")
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
+		diffErr:    diffErr,
+	})
+	refs := []interfaces.ResourceRef{{Name: "my-vpc", Type: "infra.vpc"}}
+	specs := map[string]interfaces.ResourceSpec{
+		"my-vpc": {Name: "my-vpc", Type: "infra.vpc", Config: map[string]any{"ip_range": "10.0.0.0/8"}},
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err == nil {
+		t.Fatal("expected Diff error to propagate, got nil")
+	}
+	if !errors.Is(err, diffErr) {
+		t.Errorf("expected error chain to include Diff error, got: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil results on Diff error, got %v", results)
+	}
+}
+
+// TestDetectDriftWithSpecs_NoSpecFallsBackToInSync verifies that when no spec is
+// provided for a ref (empty specs map), the result is DriftClassInSync after a
+// successful Read — Diff is not called.
+func TestDetectDriftWithSpecs_NoSpecFallsBackToInSync(t *testing.T) {
+	p := newProviderWithFakeDriver("infra.vpc", &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "my-vpc", Type: "infra.vpc", Status: "active"},
+		// diffResult left nil: Diff must NOT be called when no spec is in the map.
+	})
+	refs := []interfaces.ResourceRef{{Name: "my-vpc", Type: "infra.vpc"}}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Drifted {
+		t.Errorf("expected Drifted=false when no spec provided, got true")
+	}
+	if r.Class != interfaces.DriftClassInSync {
+		t.Errorf("expected Class=%q, got %q", interfaces.DriftClassInSync, r.Class)
+	}
+}
+
+// TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff verifies that when a specs
+// map contains an entry for only one of two refs, Diff is called only for the
+// ref that has a spec; the other is classified InSync from Read alone.
+func TestDetectDriftWithSpecs_MixedRefsOnlySpecRefsDiff(t *testing.T) {
+	driverWithSpec := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "vpc-a", Type: "infra.vpc", Status: "active"},
+		diffResult: &interfaces.DiffResult{
+			NeedsUpdate: true,
+			Changes:     []interfaces.FieldChange{{Path: "ip_range"}},
+		},
+	}
+	driverNoSpec := &fakeDriverForDrift{
+		readOutput: &interfaces.ResourceOutput{Name: "vpc-b", Type: "infra.vpc", Status: "active"},
+		// diffResult nil — Diff must not be called for vpc-b.
+	}
+	p := &DOProvider{
+		drivers: map[string]interfaces.ResourceDriver{
+			"infra.vpc":    driverWithSpec,
+			"infra.droplet": driverNoSpec,
+		},
+	}
+	refs := []interfaces.ResourceRef{
+		{Name: "vpc-a", Type: "infra.vpc"},
+		{Name: "vpc-b", Type: "infra.droplet"},
+	}
+	specs := map[string]interfaces.ResourceSpec{
+		"vpc-a": {Name: "vpc-a", Type: "infra.vpc", Config: map[string]any{"ip_range": "192.168.0.0/16"}},
+		// vpc-b intentionally omitted
+	}
+
+	results, err := p.DetectDriftWithSpecs(context.Background(), refs, specs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	// vpc-a should be DriftClassConfig
+	if results[0].Class != interfaces.DriftClassConfig {
+		t.Errorf("vpc-a: expected Class=%q, got %q", interfaces.DriftClassConfig, results[0].Class)
+	}
+	if !results[0].Drifted {
+		t.Errorf("vpc-a: expected Drifted=true")
+	}
+	// vpc-b should be DriftClassInSync (no spec → no Diff)
+	if results[1].Class != interfaces.DriftClassInSync {
+		t.Errorf("vpc-b: expected Class=%q, got %q", interfaces.DriftClassInSync, results[1].Class)
+	}
+	if results[1].Drifted {
+		t.Errorf("vpc-b: expected Drifted=false")
+	}
+	if !driverWithSpec.diffCalled {
+		t.Error("expected Diff to be called for vpc-a")
 	}
 }
