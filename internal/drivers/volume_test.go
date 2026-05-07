@@ -438,6 +438,51 @@ func TestVolumeDriver_Diff_RegionForcesReplace(t *testing.T) {
 	}
 }
 
+// TestVolumeDriver_Diff_EmptyCurrentRegion_ForceNew tests that a newly
+// provisioned volume with no "region" in Outputs (empty curRegion) is still
+// detected as needing replace when the desired region is set. The previous
+// guard `if curRegion != "" && curRegion != region` silently ignored this
+// case (Bug 1).
+func TestVolumeDriver_Diff_EmptyCurrentRegion_ForceNew(t *testing.T) {
+	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
+	cur := &interfaces.ResourceOutput{
+		// Outputs deliberately missing "region" — simulates a volume whose
+		// state record did not capture region at creation time.
+		Outputs: map[string]any{"size_gb": float64(100)},
+	}
+	r, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{"size_gb": 100, "region": "nyc3"},
+	}, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !r.NeedsReplace {
+		t.Errorf("empty curRegion with non-empty desired region must force replace")
+	}
+	if len(r.Changes) == 0 {
+		t.Fatalf("expected at least one change entry, got none")
+	}
+	var regionChange *interfaces.FieldChange
+	for i := range r.Changes {
+		if r.Changes[i].Path == "region" {
+			regionChange = &r.Changes[i]
+			break
+		}
+	}
+	if regionChange == nil {
+		t.Fatalf("expected FieldChange for 'region'; changes: %+v", r.Changes)
+	}
+	if regionChange.Old != "" {
+		t.Errorf("Old: got %q, want empty string", regionChange.Old)
+	}
+	if regionChange.New != "nyc3" {
+		t.Errorf("New: got %q, want %q", regionChange.New, "nyc3")
+	}
+	if !regionChange.ForceNew {
+		t.Errorf("ForceNew must be true for region change")
+	}
+}
+
 func TestVolumeDriver_Diff_FilesystemTypeForcesReplace(t *testing.T) {
 	d := drivers.NewVolumeDriverWithClient(&mockStorageClient{}, nil, "nyc3")
 	cur := &interfaces.ResourceOutput{

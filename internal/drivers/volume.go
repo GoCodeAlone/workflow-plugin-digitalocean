@@ -164,7 +164,7 @@ func (d *VolumeDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, 
 
 	if region := strFromConfig(desired.Config, "region", ""); region != "" {
 		curRegion, _ := current.Outputs["region"].(string)
-		if curRegion != "" && curRegion != region {
+		if curRegion != region {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "region", Old: curRegion, New: region, ForceNew: true,
 			})

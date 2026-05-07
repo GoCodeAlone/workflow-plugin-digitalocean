@@ -41,6 +41,7 @@ type DOProvider struct {
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
 var _ interfaces.ProviderMigrationRepairer = (*DOProvider)(nil)
 var _ interfaces.Enumerator = (*DOProvider)(nil)
+var _ interfaces.DriftConfigDetector = (*DOProvider)(nil)
 
 // NewDOProvider creates an uninitialised DOProvider.
 func NewDOProvider() *DOProvider {
