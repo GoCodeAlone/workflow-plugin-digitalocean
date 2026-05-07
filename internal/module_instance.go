@@ -86,6 +86,9 @@ func (m *doModuleInstance) InvokeMethodContext(ctx context.Context, method strin
 	case "IaCProvider.EnumerateByTag":
 		return m.invokeProviderEnumerateByTag(ctx, args)
 
+	case "IaCProvider.RevokeProviderCredential":
+		return m.invokeProviderRevokeCredential(ctx, args)
+
 	case "ResourceDriver.Update":
 		return m.invokeDriverUpdate(args)
 
@@ -328,6 +331,26 @@ func (m *doModuleInstance) invokeProviderRepairDirtyMigration(ctx context.Contex
 		return structToMap(result)
 	}
 	if err != nil {
+		return nil, err
+	}
+	return map[string]any{}, nil
+}
+
+// invokeProviderRevokeCredential routes "IaCProvider.RevokeProviderCredential"
+// to the underlying provider when it implements the opt-in
+// interfaces.ProviderCredentialRevoker. Returns codes.Unimplemented when the
+// provider doesn't support the interface, matching the opt-in pattern used by
+// EnumerateByTag and RepairDirtyMigration.
+//
+// args contract: {"source": <string>, "credential_id": <string>}
+func (m *doModuleInstance) invokeProviderRevokeCredential(ctx context.Context, args map[string]any) (map[string]any, error) {
+	revoker, ok := m.provider.(interfaces.ProviderCredentialRevoker)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "provider does not implement ProviderCredentialRevoker")
+	}
+	source := stringArg(args, "source")
+	credentialID := stringArg(args, "credential_id")
+	if err := revoker.RevokeProviderCredential(ctx, source, credentialID); err != nil {
 		return nil, err
 	}
 	return map[string]any{}, nil
