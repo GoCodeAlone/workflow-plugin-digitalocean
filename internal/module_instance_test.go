@@ -976,6 +976,83 @@ func TestDoModuleInstance_InvokeMethodContext_RepairDirtyMigration_PropagatesCon
 	}
 }
 
+// ── IaCProvider.RevokeProviderCredential dispatch tests ───────────────────────
+
+func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_HappyPath(t *testing.T) {
+	fake := &fakeRevokerProvider{}
+	mi := &doModuleInstance{provider: fake}
+
+	result, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
+		"source":       "digitalocean.spaces",
+		"credentialID": "AKID123",
+	})
+	if err != nil {
+		t.Fatalf("RevokeProviderCredential dispatch: %v", err)
+	}
+	if !fake.revokeCalled {
+		t.Fatal("RevokeProviderCredential was not called on provider")
+	}
+	if fake.revokeSource != "digitalocean.spaces" {
+		t.Errorf("source = %q, want %q", fake.revokeSource, "digitalocean.spaces")
+	}
+	if fake.revokeCredentialID != "AKID123" {
+		t.Errorf("credentialID = %q, want %q", fake.revokeCredentialID, "AKID123")
+	}
+	if result == nil {
+		t.Error("expected non-nil result map")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_Unsupported(t *testing.T) {
+	// fakeIaCProvider does NOT implement ProviderCredentialRevoker.
+	mi := &doModuleInstance{provider: &fakeIaCProvider{}}
+
+	_, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
+		"source":       "digitalocean.spaces",
+		"credentialID": "AKID_UNSUP",
+	})
+	if err == nil {
+		t.Fatal("expected Unimplemented error when provider lacks ProviderCredentialRevoker")
+	}
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("code = %s, want %s", status.Code(err), codes.Unimplemented)
+	}
+}
+
+func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_PropagatesError(t *testing.T) {
+	fake := &fakeRevokerProvider{revokeErr: errors.New("DO API: 403 forbidden")}
+	mi := &doModuleInstance{provider: fake}
+
+	_, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
+		"source":       "digitalocean.spaces",
+		"credentialID": "AKID_FAIL",
+	})
+	if err == nil {
+		t.Fatal("expected error to propagate from provider")
+	}
+	if err.Error() != "DO API: 403 forbidden" {
+		t.Errorf("error = %q, want %q", err.Error(), "DO API: 403 forbidden")
+	}
+}
+
+func TestDoModuleInstance_InvokeMethodContext_RevokeProviderCredential_PropagatesContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fake := &fakeRevokerProvider{}
+	mi := &doModuleInstance{provider: fake}
+
+	_, err := mi.InvokeMethodContext(ctx, "IaCProvider.RevokeProviderCredential", map[string]any{
+		"source":       "digitalocean.spaces",
+		"credentialID": "AKID_CTX",
+	})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if fake.revokeContextErr == nil {
+		t.Fatal("expected canceled context to reach provider")
+	}
+}
+
 // ── stub driver ───────────────────────────────────────────────────────────────
 
 type stubResourceDriver struct {
@@ -1148,4 +1225,25 @@ func (f *fakeRepairProvider) RepairDirtyMigration(ctx context.Context, req inter
 		return nil, err
 	}
 	return f.repairResult, f.repairErr
+}
+
+// fakeRevokerProvider embeds fakeIaCProvider and adds ProviderCredentialRevoker.
+type fakeRevokerProvider struct {
+	fakeIaCProvider
+	revokeCalled       bool
+	revokeSource       string
+	revokeCredentialID string
+	revokeContextErr   error
+	revokeErr          error
+}
+
+func (f *fakeRevokerProvider) RevokeProviderCredential(ctx context.Context, source string, credentialID string) error {
+	f.revokeCalled = true
+	f.revokeSource = source
+	f.revokeCredentialID = credentialID
+	f.revokeContextErr = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.revokeErr
 }
