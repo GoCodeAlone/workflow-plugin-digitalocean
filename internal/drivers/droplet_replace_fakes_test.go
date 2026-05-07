@@ -1,0 +1,137 @@
+package drivers_test
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/digitalocean/godo"
+)
+
+// recordingDropletsClient records every method call and lets tests
+// program per-method responses. Replaces mockDropletClient for tests
+// that need ordering / request-inspection guarantees.
+type recordingDropletsClient struct {
+	// Programmable responses
+	getResponse *godo.Droplet
+	getErr      error
+	createResp  *godo.Droplet
+	createErr   error
+	deleteErr   error
+
+	// Call recording
+	getCalled    bool
+	deleteCalled bool
+	createCalled bool
+	createReq    *godo.DropletCreateRequest // most-recent create request (nil before first call)
+}
+
+func (m *recordingDropletsClient) Get(_ context.Context, _ int) (*godo.Droplet, *godo.Response, error) {
+	m.getCalled = true
+	return m.getResponse, nil, m.getErr
+}
+func (m *recordingDropletsClient) Create(_ context.Context, req *godo.DropletCreateRequest) (*godo.Droplet, *godo.Response, error) {
+	m.createCalled = true
+	m.createReq = req
+	return m.createResp, nil, m.createErr
+}
+func (m *recordingDropletsClient) Delete(_ context.Context, _ int) (*godo.Response, error) {
+	m.deleteCalled = true
+	return nil, m.deleteErr
+}
+
+// newRecordingDropletsClient defaults to: Get returning nil (caller programs
+// explicitly); Create returning a nominal new Droplet; Delete success.
+func newRecordingDropletsClient() *recordingDropletsClient {
+	return &recordingDropletsClient{
+		createResp: &godo.Droplet{
+			ID:     200,
+			Name:   "new-droplet",
+			Status: "active",
+			Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
+			Region: &godo.Region{Slug: "nyc1"},
+		},
+	}
+}
+
+// recordingStorageClient: only ListVolumes and GetVolume are exercised by
+// Replace's supporting paths. ListVolumes filtering is not needed by Replace
+// (it bypasses name lookup via resolved IDs), but GetVolume is used by
+// dropletOutput to resolve VolumeIDs to names.
+type recordingStorageClient struct {
+	listResponse []godo.Volume
+	listErr      error
+	listCalls    int
+}
+
+func (m *recordingStorageClient) CreateVolume(_ context.Context, _ *godo.VolumeCreateRequest) (*godo.Volume, *godo.Response, error) {
+	return nil, nil, fmt.Errorf("not implemented in this fake")
+}
+func (m *recordingStorageClient) GetVolume(_ context.Context, id string) (*godo.Volume, *godo.Response, error) {
+	for _, v := range m.listResponse {
+		if v.ID == id {
+			return &v, nil, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("volume %q not in fake", id)
+}
+func (m *recordingStorageClient) DeleteVolume(_ context.Context, _ string) (*godo.Response, error) {
+	return nil, nil
+}
+func (m *recordingStorageClient) ListVolumes(_ context.Context, _ *godo.ListVolumeParams) ([]godo.Volume, *godo.Response, error) {
+	m.listCalls++
+	return m.listResponse, nil, m.listErr
+}
+
+func newRecordingStorageClient() *recordingStorageClient {
+	return &recordingStorageClient{}
+}
+
+// recordingStorageActionsClient records DetachByDropletID calls
+// (volume + droplet IDs in invocation order). Returns programmable
+// action ID (incrementing) so subsequent Actions.Get can match.
+type recordingStorageActionsClient struct {
+	detachCalls  []struct{ VolumeID string; DropletID int }
+	detachErr    error
+	nextActionID int
+}
+
+func (m *recordingStorageActionsClient) DetachByDropletID(_ context.Context, vol string, drop int) (*godo.Action, *godo.Response, error) {
+	m.detachCalls = append(m.detachCalls, struct{ VolumeID string; DropletID int }{vol, drop})
+	if m.detachErr != nil {
+		return nil, nil, m.detachErr
+	}
+	m.nextActionID++
+	return &godo.Action{ID: m.nextActionID, Status: "in-progress"}, nil, nil
+}
+
+// Resize satisfies StorageActionsClient — not used in Replace tests.
+func (m *recordingStorageActionsClient) Resize(_ context.Context, _ string, _ int, _ string) (*godo.Action, *godo.Response, error) {
+	return nil, nil, fmt.Errorf("not implemented in this fake")
+}
+
+func newRecordingStorageActionsClient() *recordingStorageActionsClient {
+	return &recordingStorageActionsClient{}
+}
+
+// recordingActionsClient: programmable Get-status sequence. callCount
+// indexes into statusSequence; out-of-bounds returns "completed" by
+// default (so tests don't need to enumerate exhaustively).
+type recordingActionsClient struct {
+	statusSequence []string
+	callCount      int
+}
+
+func (m *recordingActionsClient) Get(_ context.Context, _ int) (*godo.Action, *godo.Response, error) {
+	var status string
+	if m.callCount < len(m.statusSequence) {
+		status = m.statusSequence[m.callCount]
+	} else {
+		status = "completed"
+	}
+	m.callCount++
+	return &godo.Action{Status: status}, nil, nil
+}
+
+func newRecordingActionsClient(seq ...string) *recordingActionsClient {
+	return &recordingActionsClient{statusSequence: seq}
+}
