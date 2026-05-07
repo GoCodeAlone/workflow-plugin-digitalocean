@@ -79,6 +79,17 @@ func NewDropletDriverWithClient(c DropletsClient, region string, optional ...int
 }
 
 func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return d.createWithResolvedVolumes(ctx, spec, nil) // nil → existing name-based resolution
+}
+
+// createWithResolvedVolumes is the shared body of Create + Replace's
+// post-detach create step. When resolvedIDs is non-nil, it is used
+// verbatim as the godo.DropletCreateVolume IDs and spec.Config["volumes"]
+// (names) is IGNORED. When nil, the existing name-resolution path runs
+// (resolveDropletVolumes calls Storage.ListVolumes by name).
+func (d *DropletDriver) createWithResolvedVolumes(
+	ctx context.Context, spec interfaces.ResourceSpec, resolvedIDs []string,
+) (*interfaces.ResourceOutput, error) {
 	size := strFromConfig(spec.Config, "size", "s-1vcpu-2gb")
 	image := strFromConfig(spec.Config, "image", "ubuntu-24-04-x64")
 	region := strFromConfig(spec.Config, "region", d.region)
@@ -102,11 +113,21 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 	}
 	req.SSHKeys = sshKeys
 
-	volumes, err := d.resolveDropletVolumes(ctx, spec.Config, region)
-	if err != nil {
-		return nil, fmt.Errorf("droplet create %q: %w", spec.Name, err)
+	if resolvedIDs != nil {
+		// Replace path: bypass name lookup; use the IDs the caller
+		// resolved pre-detach.
+		req.Volumes = make([]godo.DropletCreateVolume, len(resolvedIDs))
+		for i, id := range resolvedIDs {
+			req.Volumes[i] = godo.DropletCreateVolume{ID: id}
+		}
+	} else {
+		// Default Create path: existing name-based resolution.
+		volumes, err := d.resolveDropletVolumes(ctx, spec.Config, region)
+		if err != nil {
+			return nil, fmt.Errorf("droplet create %q: %w", spec.Name, err)
+		}
+		req.Volumes = volumes
 	}
-	req.Volumes = volumes
 
 	droplet, _, err := d.client.Create(ctx, req)
 	if err != nil {
