@@ -984,7 +984,7 @@ func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_HappyPath(t *tes
 
 	result, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
 		"source":       "digitalocean.spaces",
-		"credentialID": "AKID123",
+		"credential_id": "AKID123",
 	})
 	if err != nil {
 		t.Fatalf("RevokeProviderCredential dispatch: %v", err)
@@ -1009,7 +1009,7 @@ func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_Unsupported(t *t
 
 	_, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
 		"source":       "digitalocean.spaces",
-		"credentialID": "AKID_UNSUP",
+		"credential_id": "AKID_UNSUP",
 	})
 	if err == nil {
 		t.Fatal("expected Unimplemented error when provider lacks ProviderCredentialRevoker")
@@ -1025,7 +1025,7 @@ func TestDoModuleInstance_InvokeMethod_RevokeProviderCredential_PropagatesError(
 
 	_, err := mi.InvokeMethod("IaCProvider.RevokeProviderCredential", map[string]any{
 		"source":       "digitalocean.spaces",
-		"credentialID": "AKID_FAIL",
+		"credential_id": "AKID_FAIL",
 	})
 	if err == nil {
 		t.Fatal("expected error to propagate from provider")
@@ -1043,7 +1043,7 @@ func TestDoModuleInstance_InvokeMethodContext_RevokeProviderCredential_Propagate
 
 	_, err := mi.InvokeMethodContext(ctx, "IaCProvider.RevokeProviderCredential", map[string]any{
 		"source":       "digitalocean.spaces",
-		"credentialID": "AKID_CTX",
+		"credential_id": "AKID_CTX",
 	})
 	if err == nil {
 		t.Fatal("expected context cancellation error")

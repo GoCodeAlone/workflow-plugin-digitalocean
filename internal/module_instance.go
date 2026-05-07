@@ -342,14 +342,14 @@ func (m *doModuleInstance) invokeProviderRepairDirtyMigration(ctx context.Contex
 // provider doesn't support the interface, matching the opt-in pattern used by
 // EnumerateByTag and RepairDirtyMigration.
 //
-// args contract: {"source": <string>, "credentialID": <string>}
+// args contract: {"source": <string>, "credential_id": <string>}
 func (m *doModuleInstance) invokeProviderRevokeCredential(ctx context.Context, args map[string]any) (map[string]any, error) {
 	revoker, ok := m.provider.(interfaces.ProviderCredentialRevoker)
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "provider does not implement ProviderCredentialRevoker")
 	}
 	source := stringArg(args, "source")
-	credentialID := stringArg(args, "credentialID")
+	credentialID := stringArg(args, "credential_id")
 	if err := revoker.RevokeProviderCredential(ctx, source, credentialID); err != nil {
 		return nil, err
 	}
