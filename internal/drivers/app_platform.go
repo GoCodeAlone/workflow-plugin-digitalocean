@@ -49,21 +49,34 @@ type appPlatformMigrationRepairClient interface {
 
 // AppPlatformDriver manages DigitalOcean App Platform (infra.container_service).
 type AppPlatformDriver struct {
-	client AppPlatformClient
-	region string
+	client    AppPlatformClient
+	regClient RegistryClient // NEW: image-presence pre-flight; nil-safe (skips check if nil)
+	region    string
 }
 
 // NewAppPlatformDriver creates an AppPlatformDriver backed by a real godo client.
 func NewAppPlatformDriver(c *godo.Client, region string) *AppPlatformDriver {
-	return &AppPlatformDriver{client: c.Apps, region: region}
+	return &AppPlatformDriver{client: c.Apps, regClient: c.Registry, region: region}
 }
 
-// NewAppPlatformDriverWithClient creates a driver with an injected client (for tests).
+// NewAppPlatformDriverWithClient creates a driver with an injected apps client (for tests).
+// regClient is nil; image-presence check is skipped.
 func NewAppPlatformDriverWithClient(c AppPlatformClient, region string) *AppPlatformDriver {
 	return &AppPlatformDriver{client: c, region: region}
 }
 
+// NewAppPlatformDriverWithClients creates a driver with both clients injected (for tests).
+func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, region string) *AppPlatformDriver {
+	return &AppPlatformDriver{client: c, regClient: r, region: region}
+}
+
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	if d.regClient != nil {
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
+			return nil, err
+		}
+	}
+
 	region, _ := spec.Config["region"].(string)
 	if region == "" {
 		region = d.region
@@ -123,6 +136,12 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	if d.regClient != nil {
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
+			return nil, err
+		}
+	}
+
 	providerID, err := d.resolveProviderID(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -174,7 +193,13 @@ func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interface
 	return out.ProviderID, nil
 }
 
-func (d *AppPlatformDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	if d.regClient != nil {
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, desired.Config); err != nil {
+			return nil, err
+		}
+	}
+
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
