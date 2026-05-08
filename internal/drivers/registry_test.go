@@ -11,8 +11,11 @@ import (
 )
 
 type mockRegistryClient struct {
-	reg *godo.Registry
-	err error
+	reg     *godo.Registry
+	err     error
+	// tags maps repository name -> tag list; used by ListRepositoryTags.
+	tags    map[string][]*godo.RepositoryTag
+	tagsErr error
 }
 
 func (m *mockRegistryClient) Create(_ context.Context, _ *godo.RegistryCreateRequest) (*godo.Registry, *godo.Response, error) {
@@ -23,6 +26,12 @@ func (m *mockRegistryClient) Get(_ context.Context) (*godo.Registry, *godo.Respo
 }
 func (m *mockRegistryClient) Delete(_ context.Context) (*godo.Response, error) {
 	return nil, m.err
+}
+func (m *mockRegistryClient) ListRepositoryTags(_ context.Context, _ string, repo string, _ *godo.ListOptions) ([]*godo.RepositoryTag, *godo.Response, error) {
+	if m.tagsErr != nil {
+		return nil, nil, m.tagsErr
+	}
+	return m.tags[repo], &godo.Response{}, nil
 }
 
 func testRegistry() *godo.Registry {
@@ -163,5 +172,22 @@ func TestRegistryDriver_HealthCheck_Unhealthy(t *testing.T) {
 	}
 	if result.Healthy {
 		t.Errorf("expected unhealthy when get fails")
+	}
+}
+
+// TestMockRegistryClient_ListRepositoryTags verifies the mock correctly
+// returns canned tags for the image-presence pre-flight tests.
+func TestMockRegistryClient_ListRepositoryTags(t *testing.T) {
+	mock := &mockRegistryClient{
+		tags: map[string][]*godo.RepositoryTag{
+			"core-dump-server": {{Tag: "abc123"}, {Tag: "def456"}},
+		},
+	}
+	tags, _, err := mock.ListRepositoryTags(context.Background(), "coredump-registry", "core-dump-server", nil)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if len(tags) != 2 || tags[0].Tag != "abc123" {
+		t.Fatalf("unexpected tags: %#v", tags)
 	}
 }

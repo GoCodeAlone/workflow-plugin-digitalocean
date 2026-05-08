@@ -13,6 +13,9 @@ type RegistryClient interface {
 	Create(ctx context.Context, req *godo.RegistryCreateRequest) (*godo.Registry, *godo.Response, error)
 	Get(ctx context.Context) (*godo.Registry, *godo.Response, error)
 	Delete(ctx context.Context) (*godo.Response, error)
+	// ListRepositoryTags lists tags for a repository under the named registry.
+	// Used by AppPlatformDriver image-presence pre-flight.
+	ListRepositoryTags(ctx context.Context, registry, repository string, opts *godo.ListOptions) ([]*godo.RepositoryTag, *godo.Response, error)
 }
 
 // RegistryDriver manages the DigitalOcean Container Registry (infra.registry).
