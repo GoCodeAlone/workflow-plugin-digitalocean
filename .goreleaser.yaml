@@ -63,3 +63,4 @@ release:
   github:
     owner: GoCodeAlone
     name: workflow-plugin-digitalocean
+  draft: true
