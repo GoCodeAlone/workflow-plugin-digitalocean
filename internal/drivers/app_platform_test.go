@@ -375,20 +375,24 @@ func TestAppPlatformDriver_Diff_NoChanges(t *testing.T) {
 // App Platform region is a Create-only field on godo.AppSpec — UpdateApp
 // does not accept region changes. Region drift must surface as ForceNew so
 // dependents (vpc_ref to a region-locked VPC) get correctly recreated too.
+//
+// Region values use App Platform regional slugs ("nyc", "sfo") rather than
+// Droplet/VPC datacenter slugs ("nyc1", "nyc3", "sfo3"); the latter now fail
+// validateAppPlatformRegion at plan-time.
 func TestAppPlatformDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
 	mock := &mockAppClient{}
-	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
 
 	current := &interfaces.ResourceOutput{
 		Outputs: map[string]any{
 			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
-			"region": "nyc3",
+			"region": "nyc",
 		},
 	}
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
 		Config: map[string]any{
 			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
-			"region": "nyc1",
+			"region": "sfo",
 		},
 	}, current)
 	if err != nil {
@@ -399,13 +403,13 @@ func TestAppPlatformDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
 	}
 	var found bool
 	for _, c := range result.Changes {
-		if c.Path == "region" && c.Old == "nyc3" && c.New == "nyc1" && c.ForceNew {
+		if c.Path == "region" && c.Old == "nyc" && c.New == "sfo" && c.ForceNew {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected FieldChange{Path:region, Old:nyc3, New:nyc1, ForceNew:true}; got %+v", result.Changes)
+		t.Errorf("expected FieldChange{Path:region, Old:nyc, New:sfo, ForceNew:true}; got %+v", result.Changes)
 	}
 }
 
@@ -415,7 +419,7 @@ func TestAppPlatformDriver_Diff_RegionChangeForcesReplace(t *testing.T) {
 // plan after upgrade — they'll Read on next apply to populate the field.
 func TestAppPlatformDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
 	mock := &mockAppClient{}
-	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
 
 	current := &interfaces.ResourceOutput{
 		Outputs: map[string]any{
@@ -426,7 +430,7 @@ func TestAppPlatformDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
 		Config: map[string]any{
 			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
-			"region": "nyc1",
+			"region": "sfo",
 		},
 	}, current)
 	if err != nil {
@@ -1818,5 +1822,79 @@ func TestAppHealthResult_AllSlotsNilListDeploymentsError(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "no deployment found") {
 		t.Errorf("Message = %q, want 'no deployment found'", result.Message)
+	}
+}
+
+// TestAppPlatformDriver_Diff_RejectsInvalidRegionAtPlanTime confirms the
+// validator is wired into Diff() so an invalid App Platform region surfaces
+// during plan (NOT apply). User-facing fix for the "App platform 'nyc1'"
+// case where the DO API returns a misleading "404 Image tag or digest not
+// found" instead of an actionable validation error.
+func TestAppPlatformDriver_Diff_RejectsInvalidRegionAtPlanTime(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	_, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "my-app",
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc1", // datacenter slug — invalid for App Platform
+		},
+	}, nil)
+	if err == nil {
+		t.Fatal("Diff with invalid App Platform region must error at plan time")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "nyc1") {
+		t.Errorf("error must name the offending region: %s", msg)
+	}
+	if !strings.Contains(msg, "my-app") {
+		t.Errorf("error must name the resource: %s", msg)
+	}
+	if !strings.Contains(strings.ToLower(msg), "datacenter") {
+		t.Errorf("error must explain datacenter-slug confusion: %s", msg)
+	}
+}
+
+// TestAppPlatformDriver_Create_RejectsInvalidRegion gives symmetric Create-
+// path coverage so a direct caller (not via Plan) gets the same protection,
+// before the request hits the DO API.
+func TestAppPlatformDriver_Create_RejectsInvalidRegion(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "my-app",
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "sfo3",
+		},
+	})
+	if err == nil {
+		t.Fatal("Create with invalid App Platform region must error")
+	}
+	if !strings.Contains(err.Error(), "sfo3") {
+		t.Errorf("error must name the offending region: %v", err)
+	}
+	if mock.lastCreateReq != nil {
+		t.Error("Create API must not be called when region validation fails")
+	}
+}
+
+// TestAppPlatformDriver_Diff_AcceptsValidRegion confirms the validation
+// only rejects bad inputs — a valid region passes through cleanly.
+func TestAppPlatformDriver_Diff_AcceptsValidRegion(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	_, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "my-app",
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "fra",
+		},
+	}, nil)
+	if err != nil {
+		t.Errorf("Diff with valid App Platform region must not error: %v", err)
 	}
 }
