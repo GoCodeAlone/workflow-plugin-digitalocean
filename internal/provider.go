@@ -81,6 +81,12 @@ func (p *DOProvider) Initialize(ctx context.Context, config map[string]any) erro
 	spacesSecretKey, _ := config["spaces_secret_key"].(string)
 
 	oauthClient := oauth2.NewClient(ctx, &tokenSource{token: token})
+	if debugAPIEnabled() {
+		// Wrap the transport so every DigitalOcean API call is logged to
+		// stderr. The oauth2 client owns the transport; we replace it with a
+		// loggingRoundTripper that delegates to the existing transport.
+		oauthClient.Transport = newLoggingRoundTripper(oauthClient.Transport)
+	}
 	p.client = godo.NewClient(oauthClient)
 
 	p.drivers = map[string]interfaces.ResourceDriver{
