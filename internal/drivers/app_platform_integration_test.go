@@ -12,12 +12,15 @@ import (
 )
 
 // bmwSpec is a minimal valid ResourceSpec that mirrors BMW staging config.
+// Region uses the App Platform regional slug "nyc" (NOT the Droplet/VPC
+// datacenter slug "nyc3" — those are invalid for App Platform's AppSpec.Region
+// and now rejected at plan time by validateAppPlatformRegion).
 func bmwSpec(name string) interfaces.ResourceSpec {
 	return interfaces.ResourceSpec{
 		Name: name,
 		Type: "infra.app_platform",
 		Config: map[string]any{
-			"region": "nyc3",
+			"region": "nyc",
 			"image":  "docker.io/myorg/bmw:latest",
 		},
 	}

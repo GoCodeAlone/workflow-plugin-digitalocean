@@ -71,6 +71,12 @@ func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, regi
 }
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	if region, _ := spec.Config["region"].(string); region != "" {
+		if err := validateAppPlatformRegion(region); err != nil {
+			return nil, fmt.Errorf("app platform create %q: %w", spec.Name, err)
+		}
+	}
+
 	if d.regClient != nil {
 		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
 			return nil, err
@@ -136,6 +142,12 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 }
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	if region, _ := spec.Config["region"].(string); region != "" {
+		if err := validateAppPlatformRegion(region); err != nil {
+			return nil, fmt.Errorf("app platform update %q: %w", spec.Name, err)
+		}
+	}
+
 	if d.regClient != nil {
 		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
 			return nil, err
@@ -194,6 +206,16 @@ func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interface
 }
 
 func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	// Plan-time region validation: surface invalid App Platform region slugs
+	// (e.g. Droplet datacenter "nyc1" used where regional "nyc" is required)
+	// here, BEFORE Apply forwards the request to the DO API and gets back a
+	// misleading "404 Image tag or digest not found".
+	if region, _ := desired.Config["region"].(string); region != "" {
+		if err := validateAppPlatformRegion(region); err != nil {
+			return nil, fmt.Errorf("app platform diff %q: %w", desired.Name, err)
+		}
+	}
+
 	if d.regClient != nil {
 		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, desired.Config); err != nil {
 			return nil, err
