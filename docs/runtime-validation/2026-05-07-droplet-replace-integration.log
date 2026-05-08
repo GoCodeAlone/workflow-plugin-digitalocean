@@ -1,0 +1,4 @@
+=== RUN   TestReplaceTC2ScenarioReplay
+--- PASS: TestReplaceTC2ScenarioReplay (0.00s)
+PASS
+ok  	github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers	(cached)

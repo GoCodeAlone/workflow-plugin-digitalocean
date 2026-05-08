@@ -1,0 +1,15 @@
+Task 13: workflow pin bump smoke-test — 2026-05-07
+
+workflow version: github.com/GoCodeAlone/workflow v0.23.0
+DO plugin binary: /tmp/do-plugin-pin-test
+
+Build: GOWORK=off go build -o /tmp/do-plugin-pin-test ./cmd/plugin/ => exit 0
+Tests: GOWORK=off go test ./...
+
+ok  	github.com/GoCodeAlone/workflow-plugin-digitalocean	2.181s
+?   	github.com/GoCodeAlone/workflow-plugin-digitalocean/cmd/plugin	[no test files]
+ok  	github.com/GoCodeAlone/workflow-plugin-digitalocean/internal	0.874s
+ok  	github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers	6.885s
+?   	github.com/GoCodeAlone/workflow-plugin-digitalocean/proto	[no test files]
+
+All PASS. ResourceReplacer interface available at github.com/GoCodeAlone/workflow/interfaces.ResourceReplacer.

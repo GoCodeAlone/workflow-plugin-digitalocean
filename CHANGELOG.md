@@ -4,6 +4,24 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`DropletDriver.Replace` implements `interfaces.ResourceReplacer`** (workflow v0.23.0+). Replaces use detach-before-create orchestration: read old → DetachByDropletID per attached Block Storage Volume → wait for each detach action completion (60s/2s bounds) → delete old Droplet → create new Droplet with the resolved volume IDs (bypassing the name-resolution race in `resolveDropletVolumes`). Fixes the "422 storage already associated with another droplet" failure class when replacing Droplets with attached Volumes.
+
+- **`ActionsClient` interface** for the godo Actions service subset (Get only). Enables testing of action wait-polling without live API.
+
+- **`waitForActionComplete` helper** — bounded async-action polling with immediate context-cancellation propagation, "errored" status detection, and configurable timeout/poll-interval bounds (parameterized for testability; 60s/2s production defaults).
+
+- **`createWithResolvedVolumes` unexported helper** — shared Create/Replace request builder. When `resolvedIDs` is non-nil (Replace path), volume IDs are used verbatim, bypassing name-lookup. When nil (Create path), existing `resolveDropletVolumes` runs unchanged.
+
+### Changed
+
+- **`DropletDriver` constructors now wire `c.StorageActions` + `c.Actions`** into the driver automatically. `NewDropletDriverWithClient` gains a variadic optional-clients parameter (type-switched) preserving existing test call sites.
+
+- **`StorageActionsClient` now includes `DetachByDropletID`** alongside `Resize`. The godo `StorageActionsService` implements both; one interface covers VolumeDriver (resize) and DropletDriver.Replace (detach).
+
+- **Replace operations on Droplets with attached Block Storage Volumes no longer fail with `422 storage already associated`**. Recovery sequence after partial Replace failure is: retry `wfctl infra apply --refresh-outputs` to sync state from cloud truth before the next plan; without refresh, persisted state may still claim the Volume is attached.
+
 ### Fixed
 
 - **VPCDriver / DropletDriver / AppPlatformDriver `Diff` now compares `region`** (#70) — previously only `VolumeDriver.Diff` checked region drift; the other three drivers silently no-op'd on region changes despite DO having no in-place region update on those resources. Region change now correctly emits `FieldChange{ForceNew: true}` and sets `NeedsReplace=true`. Surfaced by core-dump's TC2 cutover plan-shape assertion which expected a 5-resource cascade replace but got 1 (Volume only); without the assertion gate the partial cutover would have left VPC + Droplet in nyc3 while the App + Volume moved to nyc1, producing a half-migrated state requiring manual cleanup. Includes upgrade-safe guard: `vpcOutput` and `dropletOutput` already populated `region`, and this PR adds `region` to `appOutput.Outputs` so AppPlatformDriver.Diff has a current-side value to compare; the new check then skips when `current.Outputs["region"]` is empty so state from earlier plugin versions doesn't false-positive — the next Read populates it without spurious drift. Regression tests cover both the change-detection and empty-current-skip paths for all three drivers.

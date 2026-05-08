@@ -3,6 +3,7 @@ package drivers_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -1270,5 +1271,45 @@ func TestDropletDriver_Diff_IPv6LegacyStateNoSpuriousReplace(t *testing.T) {
 	if r.NeedsReplace || r.NeedsUpdate {
 		t.Errorf("legacy state (no ipv6 key in Outputs) must NOT trigger spurious replace; NeedsReplace=%v changes=%+v",
 			r.NeedsReplace, r.Changes)
+	}
+}
+
+// TestNewDropletDriverWithClient_TypedNilSafe verifies that passing either
+// a nil-interface OR a typed-nil-pointer wrapped in StorageClient to
+// NewDropletDriverWithClient does NOT silently install a nil-method-set
+// dependency that would panic on call.
+//
+// The TYPED-NIL case is the dangerous one: in Go, an interface holding a
+// nil concrete pointer is a non-nil interface (its type word is set, value
+// word is nil). A naive `if v != nil` check passes; calling a method on
+// such an interface dereferences the nil receiver inside the method body.
+// isNilLike's reflection check handles both forms.
+func TestNewDropletDriverWithClient_TypedNilSafe(t *testing.T) {
+	cases := []struct {
+		name    string
+		storage drivers.StorageClient
+	}{
+		{
+			name:    "nil interface (var without assignment)",
+			storage: drivers.StorageClient(nil),
+		},
+		{
+			name:    "typed-nil pointer wrapped in interface",
+			storage: (*mockStorageClient)(nil), // satisfies StorageClient via *mockStorageClient
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := drivers.NewDropletDriverWithClient(&mockDropletClient{}, "nyc1", tc.storage)
+			spec := interfaces.ResourceSpec{
+				Name:   "pg",
+				Config: map[string]any{"volumes": []any{"pg-data"}},
+			}
+			// Must not panic; must return a config error (not nil-pointer deref).
+			_, err := d.Create(context.Background(), spec)
+			if err == nil || !strings.Contains(err.Error(), "storage client not configured") {
+				t.Errorf("expected 'storage client not configured'; got: %v", err)
+			}
+		})
 	}
 }

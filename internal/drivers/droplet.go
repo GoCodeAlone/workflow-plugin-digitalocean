@@ -2,9 +2,12 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -17,31 +20,98 @@ type DropletsClient interface {
 	Delete(ctx context.Context, dropletID int) (*godo.Response, error)
 }
 
+// ActionsClient is the godo ActionsService subset DropletDriver uses for
+// waiting on async actions (volume detach is the canonical case). Subset
+// means: only Get(ctx, actionID) — the pollable status read.
+type ActionsClient interface {
+	Get(ctx context.Context, actionID int) (*godo.Action, *godo.Response, error)
+}
+
 // DropletDriver manages DigitalOcean Droplets (infra.droplet).
 type DropletDriver struct {
-	client  DropletsClient
-	storage StorageClient // optional; required only when spec.Config["volumes"] is non-empty
-	region  string
+	client         DropletsClient
+	storage        StorageClient        // optional; required only when spec.Config["volumes"] is non-empty
+	storageActions StorageActionsClient // required for Replace; nil-safe in non-Replace paths
+	actions        ActionsClient        // required for Replace; nil-safe in non-Replace paths
+	region         string
+	// test-only timeout overrides (zero = use production defaults)
+	replaceTimeout      time.Duration
+	replacePollInterval time.Duration
 }
 
 // NewDropletDriver creates a DropletDriver backed by a real godo client.
-// The Storage client is wired so volumes-by-name resolution works.
+// The Storage, StorageActions, and Actions clients are wired so volumes-by-name
+// resolution and Replace's detach-wait work without additional configuration.
 func NewDropletDriver(c *godo.Client, region string) *DropletDriver {
-	return &DropletDriver{client: c.Droplets, storage: c.Storage, region: region}
+	return &DropletDriver{
+		client:         c.Droplets,
+		storage:        c.Storage,
+		storageActions: c.StorageActions,
+		actions:        c.Actions,
+		region:         region,
+	}
 }
 
-// NewDropletDriverWithClient creates a driver with an injected client (for tests).
-// The optional storage argument is used only when a spec references volumes by
-// name; pass nil if your test does not exercise that path.
-func NewDropletDriverWithClient(c DropletsClient, region string, storage ...StorageClient) *DropletDriver {
+// NewDropletDriverWithClient creates a driver with injected clients (for tests).
+// Optional clients are provided via a variadic interface{} parameter; each value
+// is type-switched to the appropriate field. Typed-nil interface values are
+// rejected (treated as "not provided") to prevent nil-method-set panics at call time.
+//
+// Existing tests that pass (DropletsClient, region) continue to compile unchanged.
+// Tests that exercise Replace must additionally pass StorageActionsClient and ActionsClient.
+func NewDropletDriverWithClient(c DropletsClient, region string, optional ...interface{}) *DropletDriver {
 	d := &DropletDriver{client: c, region: region}
-	if len(storage) > 0 {
-		d.storage = storage[0]
+	for _, o := range optional {
+		// Skip both nil interface values AND typed-nil interface values (e.g.,
+		// `var sc *someStorage; StorageClient(sc)` is a non-nil interface
+		// wrapping a nil concrete pointer; assigning that to d.storage would
+		// pass nil-checks downstream then panic on method call). isNilLike
+		// uses reflection to detect the underlying-nil case the type-assertion
+		// nil-check misses.
+		if isNilLike(o) {
+			continue
+		}
+		switch v := o.(type) {
+		case StorageClient:
+			d.storage = v
+		case StorageActionsClient:
+			d.storageActions = v
+		case ActionsClient:
+			d.actions = v
+		}
 	}
 	return d
 }
 
+// isNilLike returns true when v is either a nil interface OR a non-nil
+// interface wrapping a nil pointer/map/slice/chan/func/interface. The
+// type-assertion `v != nil` check alone misses the typed-nil case — Go's
+// interface holds (type, value) and is non-nil whenever type is set, even
+// when value is a nil pointer. Detecting this reliably requires reflection.
+func isNilLike(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
+
 func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return d.createWithResolvedVolumes(ctx, spec, nil) // nil → existing name-based resolution
+}
+
+// createWithResolvedVolumes is the shared body of Create + Replace's
+// post-detach create step. When resolvedIDs is non-nil, it is used
+// verbatim as the godo.DropletCreateVolume IDs and spec.Config["volumes"]
+// (names) is IGNORED. When nil, the existing name-resolution path runs
+// (resolveDropletVolumes calls Storage.ListVolumes by name).
+func (d *DropletDriver) createWithResolvedVolumes(
+	ctx context.Context, spec interfaces.ResourceSpec, resolvedIDs []string,
+) (*interfaces.ResourceOutput, error) {
 	size := strFromConfig(spec.Config, "size", "s-1vcpu-2gb")
 	image := strFromConfig(spec.Config, "image", "ubuntu-24-04-x64")
 	region := strFromConfig(spec.Config, "region", d.region)
@@ -65,11 +135,21 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 	}
 	req.SSHKeys = sshKeys
 
-	volumes, err := d.resolveDropletVolumes(ctx, spec.Config, region)
-	if err != nil {
-		return nil, fmt.Errorf("droplet create %q: %w", spec.Name, err)
+	if resolvedIDs != nil {
+		// Replace path: bypass name lookup; use the IDs the caller
+		// resolved pre-detach.
+		req.Volumes = make([]godo.DropletCreateVolume, len(resolvedIDs))
+		for i, id := range resolvedIDs {
+			req.Volumes[i] = godo.DropletCreateVolume{ID: id}
+		}
+	} else {
+		// Default Create path: existing name-based resolution.
+		volumes, err := d.resolveDropletVolumes(ctx, spec.Config, region)
+		if err != nil {
+			return nil, fmt.Errorf("droplet create %q: %w", spec.Name, err)
+		}
+		req.Volumes = volumes
 	}
-	req.Volumes = volumes
 
 	droplet, _, err := d.client.Create(ctx, req)
 	if err != nil {
@@ -586,4 +666,95 @@ func (d *DropletDriver) SensitiveKeys() []string { return nil }
 // UUIDs. We declare Freeform; providerIDToInt performs strict local validation
 // and rejects any non-integer ProviderID with an explicit error before any
 // API call is made — no UUID-based state-heal needed for Droplet.
-func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatFreeform }
+func (d *DropletDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatFreeform
+}
+
+// Compile-time assertion: DropletDriver implements interfaces.ResourceReplacer.
+var _ interfaces.ResourceReplacer = (*DropletDriver)(nil)
+
+// Replace implements interfaces.ResourceReplacer for DigitalOcean Droplets.
+// Orchestration: read old → DetachByDropletID per attached Volume → wait for
+// each detach action → delete old Droplet → create new Droplet with the same
+// resolved Volume IDs (bypassing the name-resolution race in Create's
+// resolveDropletVolumes path).
+//
+// On 404 from the initial Get(oldID), Replace falls through with
+// detach-skipped + delete-skipped; Create still fires (orphan-state recovery
+// — same as engine-default Delete-then-Create when the old Droplet is gone).
+//
+// Error wrapping: every sub-step wraps with "droplet replace %q: <step>: %w"
+// so the workflow engine's error-prefix backstop sees the recognized
+// "<resource-type> replace " family and passes the error through unchanged.
+func (d *DropletDriver) Replace(ctx context.Context, oldRef interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	oldID, err := providerIDToInt(oldRef.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("droplet replace %q: invalid old ProviderID %q: %w", oldRef.Name, oldRef.ProviderID, err)
+	}
+
+	old, _, err := d.client.Get(ctx, oldID)
+	if err != nil {
+		wrapped := WrapGodoError(err)
+		if !isResourceNotFound(wrapped) {
+			return nil, fmt.Errorf("droplet replace %q: read old: %w", oldRef.Name, wrapped)
+		}
+		// Old Droplet is already gone — skip detach + delete, proceed to create.
+		old = nil
+	}
+
+	var detachedVolumeIDs []string
+	if old != nil && len(old.VolumeIDs) > 0 {
+		if d.storageActions == nil {
+			return nil, fmt.Errorf("droplet replace %q: storage_actions client not configured; cannot detach %d volume(s)", oldRef.Name, len(old.VolumeIDs))
+		}
+		if d.actions == nil {
+			return nil, fmt.Errorf("droplet replace %q: actions client not configured; cannot wait for detach completion", oldRef.Name)
+		}
+		timeout, pollInterval := d.replaceTimeouts()
+		for _, volID := range old.VolumeIDs {
+			action, _, err := d.storageActions.DetachByDropletID(ctx, volID, oldID)
+			if err != nil {
+				return nil, fmt.Errorf("droplet replace %q: detach volume %q: %w", oldRef.Name, volID, WrapGodoError(err))
+			}
+			if err := waitForActionComplete(ctx, d.actions, action.ID, timeout, pollInterval); err != nil {
+				return nil, fmt.Errorf("droplet replace %q: wait detach action %d: %w", oldRef.Name, action.ID, err)
+			}
+			detachedVolumeIDs = append(detachedVolumeIDs, volID)
+		}
+	}
+
+	if old != nil {
+		if _, err := d.client.Delete(ctx, oldID); err != nil {
+			return nil, fmt.Errorf("droplet replace %q: delete old: %w", oldRef.Name, WrapGodoError(err))
+		}
+	}
+
+	out, err := d.createWithResolvedVolumes(ctx, spec, detachedVolumeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("droplet replace %q: create new: %w", oldRef.Name, err)
+	}
+	return out, nil
+}
+
+// replaceTimeouts returns the production timeout + poll interval, or the
+// test-overridden values when SetReplaceTimeoutsForTest has been called.
+func (d *DropletDriver) replaceTimeouts() (time.Duration, time.Duration) {
+	if d.replaceTimeout != 0 {
+		return d.replaceTimeout, d.replacePollInterval
+	}
+	return defaultActionWaitTimeout, defaultActionWaitPollInterval
+}
+
+// SetReplaceTimeoutsForTest is a test-only seam to override the production
+// 60s/2s detach-wait bounds. Production code MUST NOT call this.
+func (d *DropletDriver) SetReplaceTimeoutsForTest(timeout, pollInterval time.Duration) {
+	d.replaceTimeout = timeout
+	d.replacePollInterval = pollInterval
+}
+
+// isResourceNotFound returns true when the error is (or wraps)
+// interfaces.ErrResourceNotFound — the sentinel WrapGodoError injects for
+// HTTP 404 / 405 responses from the DO API.
+func isResourceNotFound(err error) bool {
+	return errors.Is(err, interfaces.ErrResourceNotFound)
+}

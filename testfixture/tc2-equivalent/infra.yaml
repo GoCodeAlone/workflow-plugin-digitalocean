@@ -1,0 +1,62 @@
+# TC2-equivalent fixture for runtime-launch validation (smoke / wiring only).
+# This fixture mirrors the STRUCTURAL shape of core-dump's infra.yaml without
+# cloud credentials. It exercises:
+#   - wfctl plugin discovery + gRPC handshake against the local DO plugin binary
+#   - wfctl infra plan invocation end-to-end (no panic / SDK-version mismatch)
+#
+# It does NOT validate the JIT resolver's "no changes" outcome: that requires a
+# matching pre-populated state.json discovered by the filesystem state backend,
+# and the path resolution for that backend is operator-environment dependent.
+# The full "0 actions on Droplet because state.vpc_uuid matches resolved
+# config.vpc_uuid" assertion is exercised at the actual TC2 cutover time
+# (core-dump's tc2-cutover.yml Phase 1 plan), where state is populated via
+# tc2-state-import.yml. See docs/runtime-validation/2026-05-07-tc2-equivalent-launch.log
+# for the smoke-validation transcript captured at PR-3 land time.
+
+infra:
+  auto_bootstrap: false
+
+secrets:
+  provider: env
+  generate:
+    - key: STAGING_VPC_UUID
+      type: infra_output
+      source: core-dump-vpc.id
+
+modules:
+  - name: do-provider
+    type: iac.provider
+    config:
+      provider: digitalocean
+      plugin_path: /tmp/do-plugin
+
+  - name: iac-state
+    type: iac.state
+    config:
+      backend: filesystem
+      path: testfixture/tc2-equivalent/state.json
+
+  - name: core-dump-vpc
+    type: infra.vpc
+    config:
+      provider: do-provider
+    environments:
+      staging:
+        config:
+          name: core-dump-vpc
+          region: nyc1
+          ip_range: 10.20.0.0/16
+
+  - name: coredump-staging-pg
+    type: infra.droplet
+    config:
+      provider: do-provider
+    environments:
+      staging:
+        config:
+          name: coredump-staging-pg
+          region: nyc1
+          size: s-1vcpu-2gb
+          image: ubuntu-24-04-x64
+          vpc_uuid: ${STAGING_VPC_UUID}
+          monitoring: true
