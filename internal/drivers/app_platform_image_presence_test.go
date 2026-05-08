@@ -251,3 +251,31 @@ func TestAppPlatformDriver_Update_RejectsAbsentDOCRImage(t *testing.T) {
 		t.Fatalf("Update must reject absent DOCR image; got %v", err)
 	}
 }
+
+// TestAppPlatformDriver_Diff_MapFormImageConfig verifies that structured image
+// config (map[string]any) is also checked by the image-presence pre-flight.
+// This covers the Copilot finding that only string-form images were checked.
+func TestAppPlatformDriver_Diff_MapFormImageConfig_RejectsAbsent(t *testing.T) {
+	appsMock := &internalMockAppClient{}
+	regMock := &internalMockRegistryClient{
+		reg:  &godo.Registry{Name: "coredump-registry"},
+		tags: map[string][]*godo.RepositoryTag{"core-dump-server": {}}, // empty: all tags absent
+	}
+	d := NewAppPlatformDriverWithClients(appsMock, regMock, "nyc3")
+
+	desired := interfaces.ResourceSpec{
+		Type: "infra.container_service", Name: "test-app",
+		Config: map[string]any{
+			"image": map[string]any{
+				"registry_type": "DOCR",
+				"repository":    "core-dump-server",
+				"tag":           "gone",
+			},
+		},
+	}
+	current := &interfaces.ResourceOutput{Outputs: map[string]any{}}
+	_, err := d.Diff(context.Background(), desired, current)
+	if !errors.Is(err, interfaces.ErrImageNotInRegistry) {
+		t.Fatalf("Diff must reject absent DOCR image in map-form config; got %v", err)
+	}
+}

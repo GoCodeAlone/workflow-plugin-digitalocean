@@ -28,6 +28,26 @@ func verifyImagePresentInDOCR(ctx context.Context, regClient RegistryClient, ima
 	if err != nil || spec == nil {
 		return nil // unparseable: skip
 	}
+	return verifyImageSpecPresentInDOCR(ctx, regClient, spec, imageRef)
+}
+
+// verifyImageConfigPresentInDOCR accepts spec.Config and checks image presence
+// for both string and map[string]any image config forms. This covers the full
+// config surface that imageSpecFromConfig handles (see app_platform_buildspec.go).
+// Returns nil for non-DOCR images, config parse errors, and DOCR API errors
+// (conservative / fail-open).
+func verifyImageConfigPresentInDOCR(ctx context.Context, regClient RegistryClient, cfg map[string]any) error {
+	spec, err := imageSpecFromConfig(cfg)
+	if err != nil || spec == nil {
+		return nil // no parseable image config: skip
+	}
+	return verifyImageSpecPresentInDOCR(ctx, regClient, spec, "")
+}
+
+// verifyImageSpecPresentInDOCR performs the actual DOCR tag-list lookup for a
+// pre-parsed godo.ImageSourceSpec. imageRef is used only for the error message
+// (pass "" when imageRef is unavailable; the repo+tag context is still surfaced).
+func verifyImageSpecPresentInDOCR(ctx context.Context, regClient RegistryClient, spec *godo.ImageSourceSpec, imageRef string) error {
 	if spec.RegistryType != godo.ImageSourceSpecRegistryType_DOCR {
 		return nil // only DOCR is checked
 	}
@@ -58,6 +78,10 @@ func verifyImagePresentInDOCR(ctx context.Context, regClient RegistryClient, ima
 			return nil
 		}
 	}
+	label := imageRef
+	if label == "" {
+		label = fmt.Sprintf("%s:%s", spec.Repository, spec.Tag)
+	}
 	return fmt.Errorf("image %q not found in DOCR repo %q: %w",
-		imageRef, spec.Repository, interfaces.ErrImageNotInRegistry)
+		label, spec.Repository, interfaces.ErrImageNotInRegistry)
 }

@@ -72,10 +72,8 @@ func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, regi
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	if d.regClient != nil {
-		if img, _ := spec.Config["image"].(string); img != "" {
-			if err := verifyImagePresentInDOCR(ctx, d.regClient, img); err != nil {
-				return nil, err
-			}
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
+			return nil, err
 		}
 	}
 
@@ -139,10 +137,8 @@ func (d *AppPlatformDriver) findAppByName(ctx context.Context, name string) (*in
 
 func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	if d.regClient != nil {
-		if img, _ := spec.Config["image"].(string); img != "" {
-			if err := verifyImagePresentInDOCR(ctx, d.regClient, img); err != nil {
-				return nil, err
-			}
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, spec.Config); err != nil {
+			return nil, err
 		}
 	}
 
@@ -199,10 +195,8 @@ func (d *AppPlatformDriver) resolveProviderID(ctx context.Context, ref interface
 
 func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	if d.regClient != nil {
-		if img, _ := desired.Config["image"].(string); img != "" {
-			if err := verifyImagePresentInDOCR(ctx, d.regClient, img); err != nil {
-				return nil, err
-			}
+		if err := verifyImageConfigPresentInDOCR(ctx, d.regClient, desired.Config); err != nil {
+			return nil, err
 		}
 	}
 
