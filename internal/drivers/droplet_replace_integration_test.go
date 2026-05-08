@@ -5,6 +5,7 @@ package drivers_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -23,21 +24,24 @@ import (
 //  5. Create(req)                   → {ID:200}
 //
 // Asserts:
-// - No 422: Delete fires BEFORE Create (detach → delete → create order enforced).
+// - Exact ordering via shared callLog (cross-fake): the load-bearing 422-fix
+//   invariant. A regression that swapped Delete↔Create or skipped detach
+//   shows up as a different events slice.
 // - New Droplet gets ProviderID "200".
-// - Full call sequence recorded: get+detach+wait+delete+create.
+// - DetachByDropletID args are correct (volume + droplet IDs).
 func TestReplaceTC2ScenarioReplay(t *testing.T) {
-	droplets := newRecordingDropletsClient()
+	log := &callLog{}
+	droplets := newRecordingDropletsClient().withCallLog(log)
 	droplets.getResponse = &godo.Droplet{
-		ID:     100,
-		Name:   "coredump-staging-pg",
-		Status: "active",
+		ID:        100,
+		Name:      "coredump-staging-pg",
+		Status:    "active",
 		VolumeIDs: []string{"vol-a"},
-		Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
-		Region: &godo.Region{Slug: "nyc1"},
+		Size:      &godo.Size{Slug: "s-1vcpu-2gb"},
+		Region:    &godo.Region{Slug: "nyc1"},
 	}
-	sa := newRecordingStorageActionsClient()
-	actions := newRecordingActionsClient("completed")
+	sa := newRecordingStorageActionsClient().withCallLog(log)
+	actions := newRecordingActionsClient("completed").withCallLog(log)
 
 	d := drivers.NewDropletDriverWithClient(droplets, "nyc1",
 		drivers.StorageActionsClient(sa),
@@ -61,10 +65,22 @@ func TestReplaceTC2ScenarioReplay(t *testing.T) {
 		t.Errorf("expected new ProviderID=200, got %q", out.ProviderID)
 	}
 
-	// Assert full call sequence.
-	if !droplets.getCalled {
-		t.Error("Get must be called (phase 1: read old)")
+	// Exact-ordering assertion — strongest defense against the 422 regression.
+	// If a future change swaps Delete↔Create or skips DetachByDropletID, this
+	// slice differs and the test fails. Per-method booleans alone cannot
+	// detect Create-before-Delete.
+	want := []string{
+		"Droplets.Get",
+		"StorageActions.DetachByDropletID",
+		"Actions.Get",
+		"Droplets.Delete",
+		"Droplets.Create",
 	}
+	if !reflect.DeepEqual(log.events, want) {
+		t.Errorf("call sequence wrong:\n  got:  %v\n  want: %v", log.events, want)
+	}
+
+	// Detach call args (the ordering log doesn't carry per-call args).
 	if len(sa.detachCalls) != 1 {
 		t.Errorf("DetachByDropletID: got %d calls, want 1", len(sa.detachCalls))
 	}
@@ -74,17 +90,4 @@ func TestReplaceTC2ScenarioReplay(t *testing.T) {
 	if sa.detachCalls[0].DropletID != 100 {
 		t.Errorf("DetachByDropletID: DropletID=%d, want 100", sa.detachCalls[0].DropletID)
 	}
-	if actions.callCount < 1 {
-		t.Error("Actions.Get must be called at least once (wait for detach)")
-	}
-	if !droplets.deleteCalled {
-		t.Error("Delete must be called (phase 3: delete old); absence means 422 risk")
-	}
-	if !droplets.createCalled {
-		t.Error("Create must be called (phase 4: create new)")
-	}
-	// Assert no 422: Delete fired BEFORE Create (sequence enforced by the
-	// implementation; this test verifies it via call recording, not real API).
-	// Success here implies the sequence completed without the 422 that would
-	// occur if Create were attempted while the old Droplet still held the volume.
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -61,22 +62,42 @@ func NewDropletDriver(c *godo.Client, region string) *DropletDriver {
 func NewDropletDriverWithClient(c DropletsClient, region string, optional ...interface{}) *DropletDriver {
 	d := &DropletDriver{client: c, region: region}
 	for _, o := range optional {
+		// Skip both nil interface values AND typed-nil interface values (e.g.,
+		// `var sc *someStorage; StorageClient(sc)` is a non-nil interface
+		// wrapping a nil concrete pointer; assigning that to d.storage would
+		// pass nil-checks downstream then panic on method call). isNilLike
+		// uses reflection to detect the underlying-nil case the type-assertion
+		// nil-check misses.
+		if isNilLike(o) {
+			continue
+		}
 		switch v := o.(type) {
 		case StorageClient:
-			if v != nil {
-				d.storage = v
-			}
+			d.storage = v
 		case StorageActionsClient:
-			if v != nil {
-				d.storageActions = v
-			}
+			d.storageActions = v
 		case ActionsClient:
-			if v != nil {
-				d.actions = v
-			}
+			d.actions = v
 		}
 	}
 	return d
+}
+
+// isNilLike returns true when v is either a nil interface OR a non-nil
+// interface wrapping a nil pointer/map/slice/chan/func/interface. The
+// type-assertion `v != nil` check alone misses the typed-nil case — Go's
+// interface holds (type, value) and is non-nil whenever type is set, even
+// when value is a nil pointer. Detecting this reliably requires reflection.
+func isNilLike(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
 }
 
 func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {

@@ -7,6 +7,22 @@ import (
 	"github.com/digitalocean/godo"
 )
 
+// callLog is a shared ordered log of method calls across all recording fakes.
+// Tests assert the cross-fake call sequence (Get → Detach → Wait → Delete →
+// Create) — the load-bearing invariant for avoiding the 422 failure class.
+// Per-fake booleans are kept for backwards-compat with tests that don't need
+// ordering.
+type callLog struct {
+	events []string
+}
+
+func (l *callLog) record(s string) {
+	if l == nil {
+		return
+	}
+	l.events = append(l.events, s)
+}
+
 // recordingDropletsClient records every method call and lets tests
 // program per-method responses. Replaces mockDropletClient for tests
 // that need ordering / request-inspection guarantees.
@@ -23,19 +39,31 @@ type recordingDropletsClient struct {
 	deleteCalled bool
 	createCalled bool
 	createReq    *godo.DropletCreateRequest // most-recent create request (nil before first call)
+
+	// log: optional shared call log (set via withCallLog) for cross-fake
+	// ordering assertions. nil-safe via callLog.record's nil-receiver check.
+	log *callLog
+}
+
+func (m *recordingDropletsClient) withCallLog(log *callLog) *recordingDropletsClient {
+	m.log = log
+	return m
 }
 
 func (m *recordingDropletsClient) Get(_ context.Context, _ int) (*godo.Droplet, *godo.Response, error) {
 	m.getCalled = true
+	m.log.record("Droplets.Get")
 	return m.getResponse, nil, m.getErr
 }
 func (m *recordingDropletsClient) Create(_ context.Context, req *godo.DropletCreateRequest) (*godo.Droplet, *godo.Response, error) {
 	m.createCalled = true
 	m.createReq = req
+	m.log.record("Droplets.Create")
 	return m.createResp, nil, m.createErr
 }
 func (m *recordingDropletsClient) Delete(_ context.Context, _ int) (*godo.Response, error) {
 	m.deleteCalled = true
+	m.log.record("Droplets.Delete")
 	return nil, m.deleteErr
 }
 
@@ -93,10 +121,18 @@ type recordingStorageActionsClient struct {
 	detachCalls  []struct{ VolumeID string; DropletID int }
 	detachErr    error
 	nextActionID int
+
+	log *callLog
+}
+
+func (m *recordingStorageActionsClient) withCallLog(log *callLog) *recordingStorageActionsClient {
+	m.log = log
+	return m
 }
 
 func (m *recordingStorageActionsClient) DetachByDropletID(_ context.Context, vol string, drop int) (*godo.Action, *godo.Response, error) {
 	m.detachCalls = append(m.detachCalls, struct{ VolumeID string; DropletID int }{vol, drop})
+	m.log.record("StorageActions.DetachByDropletID")
 	if m.detachErr != nil {
 		return nil, nil, m.detachErr
 	}
@@ -121,6 +157,13 @@ type recordingActionsClient struct {
 	statusSequence []string
 	defaultStatus  string
 	callCount      int
+
+	log *callLog
+}
+
+func (c *recordingActionsClient) withCallLog(log *callLog) *recordingActionsClient {
+	c.log = log
+	return c
 }
 
 func (m *recordingActionsClient) Get(_ context.Context, _ int) (*godo.Action, *godo.Response, error) {
@@ -131,6 +174,7 @@ func (m *recordingActionsClient) Get(_ context.Context, _ int) (*godo.Action, *g
 		status = m.defaultStatus
 	}
 	m.callCount++
+	m.log.record("Actions.Get")
 	return &godo.Action{Status: status}, nil, nil
 }
 
@@ -138,8 +182,8 @@ func newRecordingActionsClient(seq ...string) *recordingActionsClient {
 	return &recordingActionsClient{statusSequence: seq, defaultStatus: "completed"}
 }
 
-// withDefaultStatus returns a copy of c with the given default status for
-// out-of-sequence polls. Use "in-progress" for timeout-boundary tests.
+// withDefaultStatus returns the receiver after setting the given default
+// status for out-of-sequence polls. Use "in-progress" for timeout tests.
 func (c *recordingActionsClient) withDefaultStatus(status string) *recordingActionsClient {
 	c.defaultStatus = status
 	return c

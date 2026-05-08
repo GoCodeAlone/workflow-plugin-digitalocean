@@ -3,6 +3,7 @@ package drivers_test
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,15 +14,16 @@ import (
 )
 
 func TestDropletDriver_Replace_DetachesVolumesBeforeDelete(t *testing.T) {
-	droplets := newRecordingDropletsClient()
+	log := &callLog{}
+	droplets := newRecordingDropletsClient().withCallLog(log)
 	droplets.getResponse = &godo.Droplet{
 		ID: 100, VolumeIDs: []string{"vol-a", "vol-b"},
 		Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
 		Region: &godo.Region{Slug: "nyc1"},
 		Status: "active",
 	}
-	sa := newRecordingStorageActionsClient()
-	actions := newRecordingActionsClient("completed", "completed")
+	sa := newRecordingStorageActionsClient().withCallLog(log)
+	actions := newRecordingActionsClient("completed", "completed").withCallLog(log)
 
 	d := drivers.NewDropletDriverWithClient(droplets, "nyc1",
 		drivers.StorageClient(newRecordingStorageClient()),
@@ -39,9 +41,20 @@ func TestDropletDriver_Replace_DetachesVolumesBeforeDelete(t *testing.T) {
 	if len(sa.detachCalls) != 2 {
 		t.Errorf("expected 2 detach calls, got %d", len(sa.detachCalls))
 	}
-	// Assert ordering: Get → 2× DetachByDropletID → 2× Actions.Get → Delete → Create.
-	if !droplets.getCalled || !droplets.deleteCalled || !droplets.createCalled {
-		t.Error("expected Get + Delete + Create on droplet client")
+	// Exact-ordering assertion via cross-fake call log. Replaces the prior
+	// boolean-based check that couldn't distinguish Create-before-Delete from
+	// Delete-before-Create — the load-bearing 422-fix invariant.
+	want := []string{
+		"Droplets.Get",
+		"StorageActions.DetachByDropletID",
+		"Actions.Get",
+		"StorageActions.DetachByDropletID",
+		"Actions.Get",
+		"Droplets.Delete",
+		"Droplets.Create",
+	}
+	if !reflect.DeepEqual(log.events, want) {
+		t.Errorf("call sequence wrong:\n  got:  %v\n  want: %v", log.events, want)
 	}
 	if out.ProviderID == "" {
 		t.Error("expected new ProviderID")

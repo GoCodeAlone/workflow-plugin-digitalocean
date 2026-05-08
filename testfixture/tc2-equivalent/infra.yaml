@@ -1,9 +1,17 @@
-# TC2-equivalent fixture for runtime-launch validation.
-# Tests that wfctl infra plan sees "no changes" when vpc_uuid is resolved
-# from state at plan time (JIT resolver, workflow v0.23.0 PR-1).
+# TC2-equivalent fixture for runtime-launch validation (smoke / wiring only).
+# This fixture mirrors the STRUCTURAL shape of core-dump's infra.yaml without
+# cloud credentials. It exercises:
+#   - wfctl plugin discovery + gRPC handshake against the local DO plugin binary
+#   - wfctl infra plan invocation end-to-end (no panic / SDK-version mismatch)
 #
-# This fixture mirrors the structural shape of core-dump's infra.yaml
-# without cloud-specific secrets or actual credentials.
+# It does NOT validate the JIT resolver's "no changes" outcome: that requires a
+# matching pre-populated state.json discovered by the filesystem state backend,
+# and the path resolution for that backend is operator-environment dependent.
+# The full "0 actions on Droplet because state.vpc_uuid matches resolved
+# config.vpc_uuid" assertion is exercised at the actual TC2 cutover time
+# (core-dump's tc2-cutover.yml Phase 1 plan), where state is populated via
+# tc2-state-import.yml. See docs/runtime-validation/2026-05-07-tc2-equivalent-launch.log
+# for the smoke-validation transcript captured at PR-3 land time.
 
 infra:
   auto_bootstrap: false
