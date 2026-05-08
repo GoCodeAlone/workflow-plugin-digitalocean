@@ -2,6 +2,11 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## v0.12.0 — 2026-05-08
+
+- **feat(drivers/app_platform)**: image-presence pre-flight for DOCR-typed images. `Diff`, `Create`, and `Update` now call `verifyImagePresentInDOCR(ctx, regClient, imageRef)` before mutating the AppSpec. On absence, returns wrapping `interfaces.ErrImageNotInRegistry`. Conservative behavior: any DOCR API error (rate-limit, 5xx, parse failure) returns nil so the underlying `apps.update` surfaces the real issue.
+- **chore(deps)**: bump workflow to v0.24.0; bump godo to v1.189.0.
+
 ## [Unreleased]
 
 ### Added

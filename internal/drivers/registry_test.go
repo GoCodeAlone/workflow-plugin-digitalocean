@@ -11,8 +11,8 @@ import (
 )
 
 type mockRegistryClient struct {
-	reg     *godo.Registry
-	err     error
+	reg *godo.Registry
+	err error
 	// tags maps repository name -> tag list; used by ListRepositoryTags.
 	tags    map[string][]*godo.RepositoryTag
 	tagsErr error

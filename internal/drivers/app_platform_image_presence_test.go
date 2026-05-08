@@ -14,8 +14,8 @@ import (
 // It is intentionally minimal — only Create and Update are called by the image-presence
 // path; the other methods are no-ops that return empty results.
 type internalMockAppClient struct {
-	app    *godo.App
-	appErr error
+	app      *godo.App
+	appErr   error
 	listApps []*godo.App
 }
 
@@ -73,7 +73,7 @@ func (m *internalMockRegistryClient) ListRepositoryTags(_ context.Context, _ str
 
 func TestVerifyImagePresentInDOCR_PresentTag(t *testing.T) {
 	mock := &internalMockRegistryClient{
-		reg:  &godo.Registry{Name: "coredump-registry"},
+		reg: &godo.Registry{Name: "coredump-registry"},
 		tags: map[string][]*godo.RepositoryTag{
 			"core-dump-server": {{Tag: "abc123"}, {Tag: "def456"}},
 		},
@@ -87,7 +87,7 @@ func TestVerifyImagePresentInDOCR_PresentTag(t *testing.T) {
 
 func TestVerifyImagePresentInDOCR_AbsentTag(t *testing.T) {
 	mock := &internalMockRegistryClient{
-		reg:  &godo.Registry{Name: "coredump-registry"},
+		reg: &godo.Registry{Name: "coredump-registry"},
 		tags: map[string][]*godo.RepositoryTag{
 			"core-dump-server": {{Tag: "def456"}},
 		},
