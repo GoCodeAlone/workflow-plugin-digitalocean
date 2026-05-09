@@ -679,6 +679,98 @@ func (p *DOProvider) RevokeProviderCredential(ctx context.Context, source string
 	return nil
 }
 
+// EnumerateAll lists every resource of resourceType in the DO account,
+// regardless of tag. Used for resource types that don't support tags
+// (e.g. spaces_key, where the DO API has no tag surface). Paginates
+// transparently using godo.Response.Links so callers don't have to.
+//
+// Returns []*ResourceOutput per the workflow EnumeratorAll contract
+// (interfaces/iac_provider.go) — full metadata is populated so
+// downstream callers (wfctl infra audit-keys, prune, rotate-and-prune)
+// can filter without re-reading each resource individually.
+//
+// Implements interfaces.EnumeratorAll (workflow v0.26.0+; opt-in
+// interface, type-asserted by the host's IaCProvider proxy).
+func (p *DOProvider) EnumerateAll(ctx context.Context, resourceType string) ([]*interfaces.ResourceOutput, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("digitalocean: EnumerateAll called on provider that is not initialized — call Initialize first")
+	}
+	switch resourceType {
+	case "infra.spaces_key":
+		return p.enumerateAllSpacesKeys(ctx)
+	default:
+		return nil, fmt.Errorf("digitalocean: EnumerateAll: resource type %q not supported", resourceType)
+	}
+}
+
+// enumerateAllSpacesKeys paginates GET /v2/spaces/keys via godo's SpacesKeys.List
+// using ListOptions{Page,PerPage:200}; loop terminates when godo signals the
+// last page (Links.Pages == nil || Pages.Next == ""). Each *ResourceOutput
+// carries the name + access_key + created_at + grants so the audit/prune CLIs
+// can filter by age or grant scope without an extra Get per key.
+//
+// ProviderID is set to AccessKey to match SpacesKeyDriver.Create's contract
+// (sister driver in internal/drivers/spaces_key.go) — keeps Read/Delete
+// dispatch consistent across the lifecycle.
+func (p *DOProvider) enumerateAllSpacesKeys(ctx context.Context) ([]*interfaces.ResourceOutput, error) {
+	var all []*interfaces.ResourceOutput
+	opt := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		keys, resp, err := p.client.SpacesKeys.List(ctx, opt)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: EnumerateAll spaces_key: list page=%d: %w", opt.Page, err)
+		}
+		for _, k := range keys {
+			if k == nil {
+				continue
+			}
+			all = append(all, &interfaces.ResourceOutput{
+				Name:       k.Name,
+				Type:       "infra.spaces_key",
+				ProviderID: k.AccessKey, // godo identifier — used by Read/Delete
+				Outputs: map[string]any{
+					"name":       k.Name,
+					"access_key": k.AccessKey,
+					"created_at": k.CreatedAt,
+					"grants":     grantsToMaps(k.Grants),
+				},
+				Sensitive: map[string]bool{"access_key": true},
+				Status:    "running",
+			})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.Pages == nil || resp.Links.Pages.Next == "" {
+			break
+		}
+		page, err := resp.Links.CurrentPage()
+		if err != nil {
+			// godo couldn't parse the next-page link — bail rather than loop forever.
+			break
+		}
+		opt.Page = page + 1
+	}
+	return all, nil
+}
+
+// grantsToMaps converts a []*godo.Grant to []map[string]any so it can live in
+// ResourceOutput.Outputs (which is map[string]any, not a typed grants slice).
+// Returns nil for empty/nil input so the Outputs entry is omitted-rather-than-empty.
+func grantsToMaps(grants []*godo.Grant) []map[string]any {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(grants))
+	for _, g := range grants {
+		if g == nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"bucket":     g.Bucket,
+			"permission": string(g.Permission),
+		})
+	}
+	return out
+}
+
 // Close is a no-op; the godo client has no persistent connection to close.
 func (p *DOProvider) Close() error { return nil }
 
