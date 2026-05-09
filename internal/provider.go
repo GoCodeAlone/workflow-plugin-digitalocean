@@ -99,6 +99,7 @@ func (p *DOProvider) Initialize(ctx context.Context, config map[string]any) erro
 		"infra.firewall":          drivers.NewFirewallDriver(p.client),
 		"infra.dns":               drivers.NewDNSDriver(p.client),
 		"infra.storage":           drivers.NewSpacesDriver(p.client, p.region, spacesAccessKey, spacesSecretKey),
+		"infra.spaces_key":        drivers.NewSpacesKeyDriver(p.client),
 		"infra.registry":          drivers.NewRegistryDriver(p.client),
 		"infra.certificate":       drivers.NewCertificateDriver(p.client),
 		"infra.droplet":           drivers.NewDropletDriver(p.client, p.region),
@@ -123,6 +124,7 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.firewall", Tier: 1, Operations: ops},
 		{ResourceType: "infra.dns", Tier: 1, Operations: ops},
 		{ResourceType: "infra.storage", Tier: 1, Operations: ops},
+		{ResourceType: "infra.spaces_key", Tier: 1, Operations: noScale},
 		{ResourceType: "infra.registry", Tier: 2, Operations: ops},
 		{ResourceType: "infra.certificate", Tier: 1, Operations: ops},
 		{ResourceType: "infra.droplet", Tier: 1, Operations: ops},
@@ -724,18 +726,25 @@ func (p *DOProvider) enumerateAllSpacesKeys(ctx context.Context) ([]*interfaces.
 			if k == nil {
 				continue
 			}
+			outputs := map[string]any{
+				"name":       k.Name,
+				"access_key": k.AccessKey,
+				"created_at": k.CreatedAt,
+			}
+			// grantsToMaps returns nil for empty/nil input — omit the key
+			// entirely in that case so the docstring matches reality and
+			// downstream consumers can use map-presence as the "has any
+			// grants" signal.
+			if g := grantsToMaps(k.Grants); g != nil {
+				outputs["grants"] = g
+			}
 			all = append(all, &interfaces.ResourceOutput{
 				Name:       k.Name,
 				Type:       "infra.spaces_key",
 				ProviderID: k.AccessKey, // godo identifier — used by Read/Delete
-				Outputs: map[string]any{
-					"name":       k.Name,
-					"access_key": k.AccessKey,
-					"created_at": k.CreatedAt,
-					"grants":     grantsToMaps(k.Grants),
-				},
-				Sensitive: map[string]bool{"access_key": true},
-				Status:    "running",
+				Outputs:    outputs,
+				Sensitive:  map[string]bool{"access_key": true},
+				Status:     "running",
 			})
 		}
 		if resp == nil || resp.Links == nil || resp.Links.Pages == nil || resp.Links.Pages.Next == "" {
