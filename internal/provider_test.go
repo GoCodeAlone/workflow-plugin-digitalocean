@@ -1101,19 +1101,21 @@ func TestDOProvider_Apply_UpsertAllDrivers(t *testing.T) {
 }
 
 // newDOProviderForTest builds a *DOProvider whose godo client points at the
-// given httptest server URL. Mirrors newProviderForEnumeratorTest in
-// provider_enumerator_test.go but takes a raw URL instead of a typed mock so
-// the EnumeratorAll spaces_key test can drive its own paginated handler.
+// given httptest server. Mirrors newProviderForEnumeratorTest in
+// provider_enumerator_test.go but takes the server (not just a URL) so the
+// EnumeratorAll spaces_key test can drive its own paginated handler while
+// still using the server's hermetic http client.
 //
-// godo.NewClient + BaseURL override is the standard hermetic pattern used
-// elsewhere in this package (see provider_enumerator_test.go:144 and
-// internal/drivers/spaces_key_test.go:118).
-func newDOProviderForTest(t *testing.T, serverURL string) *DOProvider {
+// Why srv.Client() and not http.DefaultClient: matches the sister helpers
+// at provider_enumerator_test.go:149 and internal/drivers/spaces_key_test.go
+// (post-f203b15). srv.Client() trusts the server's TLS cert if/when the
+// test moves to TLS, and never mutates the global http.DefaultClient state.
+func newDOProviderForTest(t *testing.T, srv *httptest.Server) *DOProvider {
 	t.Helper()
-	client := godo.NewClient(http.DefaultClient)
-	base, err := url.Parse(serverURL + "/")
+	client := godo.NewClient(srv.Client())
+	base, err := url.Parse(srv.URL + "/")
 	if err != nil {
-		t.Fatalf("parse httptest URL %q: %v", serverURL, err)
+		t.Fatalf("parse httptest URL %q: %v", srv.URL, err)
 	}
 	client.BaseURL = base
 	return &DOProvider{client: client, region: "nyc3"}
@@ -1171,7 +1173,7 @@ func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := newDOProviderForTest(t, srv.URL)
+	p := newDOProviderForTest(t, srv)
 	enumerator, ok := interfaces.IaCProvider(p).(interfaces.EnumeratorAll)
 	if !ok {
 		t.Fatalf("Provider must implement EnumeratorAll")
@@ -1187,6 +1189,13 @@ func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
 	// Each *ResourceOutput must have Name + Type + ProviderID populated, plus
 	// the full Outputs map (name, access_key, created_at, ...) so downstream
 	// filter use cases (wfctl infra audit-keys, prune) don't have to re-read.
+	//
+	// access_key + created_at are asserted as non-empty STRINGS rather than
+	// just non-nil interface{}: ResourceOutput.Outputs is map[string]any but
+	// the gRPC-side proto roundtrip (structpb) only accepts string/number/
+	// bool/list/map values. A regression that stored time.Time would pass a
+	// bare nil-check but fail the proto marshal — type-assert to string here
+	// to lock the structpb-safe shape.
 	for _, o := range outs {
 		if o.Type != "infra.spaces_key" {
 			t.Errorf("expected Type=infra.spaces_key, got %q", o.Type)
@@ -1194,11 +1203,11 @@ func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
 		if o.ProviderID == "" {
 			t.Errorf("ProviderID must be populated (= access_key); got empty for %q", o.Name)
 		}
-		if o.Outputs["access_key"] == nil {
-			t.Errorf("Outputs.access_key must be populated for %q", o.Name)
+		if got, _ := o.Outputs["access_key"].(string); got == "" {
+			t.Errorf("Outputs.access_key must be populated as non-empty string for %q; got %T %v", o.Name, o.Outputs["access_key"], o.Outputs["access_key"])
 		}
-		if o.Outputs["created_at"] == nil {
-			t.Errorf("Outputs.created_at must be populated for %q", o.Name)
+		if got, _ := o.Outputs["created_at"].(string); got == "" {
+			t.Errorf("Outputs.created_at must be populated as non-empty string for %q; got %T %v", o.Name, o.Outputs["created_at"], o.Outputs["created_at"])
 		}
 	}
 }

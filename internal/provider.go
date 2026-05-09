@@ -743,8 +743,13 @@ func (p *DOProvider) enumerateAllSpacesKeys(ctx context.Context) ([]*interfaces.
 		}
 		page, err := resp.Links.CurrentPage()
 		if err != nil {
-			// godo couldn't parse the next-page link — bail rather than loop forever.
-			break
+			// Propagate the error rather than break-with-partial-result.
+			// Silent break would cause prune/audit-keys to miss orphan keys
+			// past the failed page boundary, leaving valid credentials in
+			// place against DO indefinitely. Sister paginators (droplets,
+			// volumes, databases) in EnumerateByTag take this same return-
+			// on-error stance — match that contract.
+			return nil, fmt.Errorf("digitalocean: EnumerateAll spaces_key: parse next page: %w", err)
 		}
 		opt.Page = page + 1
 	}
