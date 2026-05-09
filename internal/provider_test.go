@@ -1170,7 +1170,12 @@ func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
 			})
 			return
 		}
+		// Unexpected path — return 500 so godo surfaces it as an HTTP error
+		// rather than the test silently observing an empty 200 body. Mirrors
+		// the same hermetic-handler pattern in
+		// internal/drivers/spaces_key_test.go.
 		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected path", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 

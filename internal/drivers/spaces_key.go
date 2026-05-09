@@ -11,13 +11,21 @@
 //     `secret_ref://...` placeholders before persisting state. The driver
 //     itself NEVER touches secrets.Provider — it stays platform-agnostic.
 //
-//   - Read returns Outputs WITHOUT secret_key (the DO API doesn't return it
-//     on List/Get; the secret value lives in the secrets.Provider after
-//     Create routed it). Audit/refresh paths reconcile against access_key,
-//     name, created_at, grants — the only fields the API can re-read.
+//   - Read and Update return Outputs WITHOUT secret_key (the DO API only
+//     exposes secret_key on Create; Get/List/Update never re-emit it).
+//     The secret value lives in the secrets.Provider after Create routed
+//     it. Audit/refresh paths reconcile against access_key, name,
+//     created_at, grants — the only fields the API can re-read.
 //
-//   - Diff compares mutable fields (grants). Spaces keys can't be renamed
-//     server-side, so name divergence sets NeedsReplace=true.
+//   - Delete is idempotent on 404: when the underlying DELETE responds
+//     404 (key already gone), the driver returns nil so reapply / cleanup
+//     pipelines don't error on prior partial success. Sister provider
+//     RevokeProviderCredential takes the same stance.
+//
+//   - Diff compares mutable fields (name, grants). godo's
+//     SpacesKeysService.Update accepts both Name and Grants, so name
+//     divergence is a NeedsUpdate (in-place rename), NOT NeedsReplace.
+//     A FieldChange entry is appended for each differing field.
 //
 //   - SensitiveKeys() returns access_key + secret_key for plan/diff display
 //     masking; this is independent from the per-call routing trigger above.
@@ -295,7 +303,13 @@ func spacesKeyOutput(k *godo.SpacesKey, includeSecret bool) *interfaces.Resource
 		"name":       k.Name,
 		"access_key": k.AccessKey,
 		"created_at": k.CreatedAt,
-		"grants":     grantsToMaps(k.Grants),
+	}
+	// grantsToMaps returns nil for empty/nil input — omit the key entirely
+	// in that case so this output shape matches enumerateAllSpacesKeys (in
+	// internal/provider.go) and downstream consumers can use map-presence
+	// as the "has any grants" signal symmetrically across both code paths.
+	if g := grantsToMaps(k.Grants); g != nil {
+		outputs["grants"] = g
 	}
 	sensitive := map[string]bool{
 		"access_key": true,

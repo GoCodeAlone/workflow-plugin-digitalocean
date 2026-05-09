@@ -744,7 +744,11 @@ func (p *DOProvider) enumerateAllSpacesKeys(ctx context.Context) ([]*interfaces.
 				ProviderID: k.AccessKey, // godo identifier — used by Read/Delete
 				Outputs:    outputs,
 				Sensitive:  map[string]bool{"access_key": true},
-				Status:     "running",
+				// Spaces keys don't have a lifecycle status in the godo API;
+				// use "active" as the canonical "exists and usable" marker
+				// to match SpacesKeyDriver.Create (internal/drivers/spaces_key.go)
+				// and the sister bucket driver (internal/drivers/spaces.go).
+				Status: "active",
 			})
 		}
 		if resp == nil || resp.Links == nil || resp.Links.Pages == nil || resp.Links.Pages.Next == "" {
