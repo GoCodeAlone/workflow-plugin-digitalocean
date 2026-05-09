@@ -333,3 +333,115 @@ func TestDOModuleInstance_InvokeMethod_EnumerateByTag_NonEnumeratorProvider(t *t
 		t.Errorf("error %q should mention Enumerator", err.Error())
 	}
 }
+
+// fakeEnumeratorAllProvider is an IaCProvider that ALSO implements
+// EnumeratorAll, used by the dispatch-level test to verify the
+// doModuleInstance.InvokeMethod proxy reaches the provider's typed
+// EnumerateAll(ctx, resourceType) method. Embeds fakeIaCProvider for the
+// bulk of the IaCProvider surface.
+type fakeEnumeratorAllProvider struct {
+	fakeIaCProvider
+	enumerateAllCalled       bool
+	enumerateAllResourceType string
+	enumerateAllOuts         []*interfaces.ResourceOutput
+	enumerateAllErr          error
+}
+
+func (f *fakeEnumeratorAllProvider) EnumerateAll(_ context.Context, resourceType string) ([]*interfaces.ResourceOutput, error) {
+	f.enumerateAllCalled = true
+	f.enumerateAllResourceType = resourceType
+	return f.enumerateAllOuts, f.enumerateAllErr
+}
+
+// TestDOModuleInstance_InvokeMethod_EnumerateAll pins the dispatcher case
+// added in v0.14.2 fixing the runtime "unknown method
+// IaCProvider.EnumerateAll" failure that surfaced against staging. The
+// doModuleInstance.InvokeMethod dispatch table must route
+// "IaCProvider.EnumerateAll" through to the underlying provider's typed
+// EnumerateAll(ctx, resourceType) when it implements interfaces.EnumeratorAll.
+//
+// This complements TestDispatcherCoversEveryProviderInterfaceMethod (the
+// CI-time strict-coverage test): coverage asserts the case exists; this test
+// asserts the case behavior matches the wfctl-side bridge contract
+// (deploy_providers.go's remoteIaCProvider.EnumerateAll).
+func TestDOModuleInstance_InvokeMethod_EnumerateAll(t *testing.T) {
+	prov := &fakeEnumeratorAllProvider{
+		enumerateAllOuts: []*interfaces.ResourceOutput{
+			{
+				Name:       "bmw-deploy-key",
+				Type:       "infra.spaces_key",
+				ProviderID: "DOACCESS123",
+				Status:     "active",
+				Outputs: map[string]any{
+					"name":       "bmw-deploy-key",
+					"access_key": "DOACCESS123",
+				},
+				Sensitive: map[string]bool{"access_key": true},
+			},
+			{
+				Name:       "bmw-state-key",
+				Type:       "infra.spaces_key",
+				ProviderID: "DOACCESS456",
+				Status:     "active",
+			},
+		},
+	}
+	mi := &doModuleInstance{provider: prov}
+
+	out, err := mi.InvokeMethod("IaCProvider.EnumerateAll", map[string]any{
+		"resource_type": "infra.spaces_key",
+	})
+	if err != nil {
+		t.Fatalf("InvokeMethod EnumerateAll: %v", err)
+	}
+	if !prov.enumerateAllCalled {
+		t.Fatal("provider.EnumerateAll was not called via dispatch — case missing or routed to wrong impl")
+	}
+	if prov.enumerateAllResourceType != "infra.spaces_key" {
+		t.Errorf("enumerateAllResourceType = %q, want %q",
+			prov.enumerateAllResourceType, "infra.spaces_key")
+	}
+	// Response shape MUST be {"outputs": [<map>, ...]} so wfctl's
+	// remoteIaCProvider.EnumerateAll (deploy_providers.go) can decode via
+	// res["outputs"] + anyToStruct. Mismatch here is the runtime symptom
+	// against staging the v0.14.2 fix closed.
+	rawOuts, ok := out["outputs"].([]any)
+	if !ok {
+		t.Fatalf(`out["outputs"] type = %T, want []any`, out["outputs"])
+	}
+	if len(rawOuts) != 2 {
+		t.Fatalf("outputs length = %d, want 2: %+v", len(rawOuts), rawOuts)
+	}
+	// Sample the first output — keys match interfaces.ResourceOutput JSON tags.
+	first, ok := rawOuts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("outputs[0] type = %T, want map[string]any", rawOuts[0])
+	}
+	if first["name"] != "bmw-deploy-key" ||
+		first["type"] != "infra.spaces_key" ||
+		first["provider_id"] != "DOACCESS123" {
+		t.Errorf("outputs[0] = %+v, want name=bmw-deploy-key type=infra.spaces_key provider_id=DOACCESS123",
+			first)
+	}
+}
+
+// TestDOModuleInstance_InvokeMethod_EnumerateAll_NonEnumeratorAllProvider
+// pins the codes.Unimplemented branch for EnumerateAll. When the underlying
+// provider does NOT implement interfaces.EnumeratorAll, the dispatcher must
+// surface an Unimplemented gRPC error so wfctl's remoteIaCProvider.EnumerateAll
+// can translate it into interfaces.ErrProviderMethodUnimplemented (preserving
+// the iterate-and-skip semantics in cmd/wfctl/infra_audit_keys.go and
+// infra_prune.go).
+func TestDOModuleInstance_InvokeMethod_EnumerateAll_NonEnumeratorAllProvider(t *testing.T) {
+	mi := &doModuleInstance{provider: &fakeIaCProvider{}}
+
+	_, err := mi.InvokeMethod("IaCProvider.EnumerateAll", map[string]any{
+		"resource_type": "infra.spaces_key",
+	})
+	if err == nil {
+		t.Fatal("expected Unimplemented error from non-EnumeratorAll provider; got nil")
+	}
+	if !strings.Contains(err.Error(), "EnumeratorAll") {
+		t.Errorf("error %q should mention EnumeratorAll", err.Error())
+	}
+}

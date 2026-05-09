@@ -86,6 +86,9 @@ func (m *doModuleInstance) InvokeMethodContext(ctx context.Context, method strin
 	case "IaCProvider.EnumerateByTag":
 		return m.invokeProviderEnumerateByTag(ctx, args)
 
+	case "IaCProvider.EnumerateAll":
+		return m.invokeProviderEnumerateAll(ctx, args)
+
 	case "IaCProvider.RevokeProviderCredential":
 		return m.invokeProviderRevokeCredential(ctx, args)
 
@@ -315,6 +318,49 @@ func (m *doModuleInstance) invokeProviderEnumerateByTag(ctx context.Context, arg
 		refList[i] = rm
 	}
 	return map[string]any{"refs": refList}, nil
+}
+
+// invokeProviderEnumerateAll routes the "IaCProvider.EnumerateAll" method to
+// the underlying provider when it implements the opt-in
+// interfaces.EnumeratorAll (workflow v0.26.0+). Mirrors invokeProviderEnumerateByTag
+// in shape: codes.Unimplemented when the provider doesn't satisfy the
+// interface, so wfctl's remoteIaCProvider.EnumerateAll bridge can translate
+// it into interfaces.ErrProviderMethodUnimplemented (cmd/wfctl/deploy_providers.go).
+//
+// args contract: {"resource_type": <string>} — the resource type to enumerate
+// (e.g. "infra.spaces_key"). Empty / missing falls through to provider's own
+// validation.
+//
+// response shape: {"outputs": [<ResourceOutput JSON>, ...]}. Each output is
+// encoded via structToMap so the host's remoteIaCProvider can decode with
+// anyToStruct (the symmetric helper used in deploy_providers.go).
+//
+// Without this dispatch case, wfctl's IaCProvider.EnumerateAll calls hit the
+// default branch of InvokeMethod and return an "unknown method" error, which
+// the wfctl-side bridge then surfaces as a generic dispatch failure rather
+// than the expected EnumeratorAll proxy. Type-assertion against EnumeratorAll
+// at the wfctl level cannot catch this because the bridge is compile-time
+// satisfied; only the runtime InvokeMethod switch decides whether the call
+// reaches the provider.
+func (m *doModuleInstance) invokeProviderEnumerateAll(ctx context.Context, args map[string]any) (map[string]any, error) {
+	enum, ok := m.provider.(interfaces.EnumeratorAll)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "provider does not implement EnumeratorAll")
+	}
+	resourceType := stringArg(args, "resource_type")
+	outs, err := enum.EnumerateAll(ctx, resourceType)
+	if err != nil {
+		return nil, err
+	}
+	outList := make([]any, len(outs))
+	for i, o := range outs {
+		om, mErr := structToMap(o)
+		if mErr != nil {
+			return nil, fmt.Errorf("IaCProvider.EnumerateAll: serialize output: %w", mErr)
+		}
+		outList[i] = om
+	}
+	return map[string]any{"outputs": outList}, nil
 }
 
 func (m *doModuleInstance) invokeProviderRepairDirtyMigration(ctx context.Context, args map[string]any) (map[string]any, error) {
