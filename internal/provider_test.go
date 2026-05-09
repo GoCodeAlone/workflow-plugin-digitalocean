@@ -1141,9 +1141,10 @@ func newDOProviderForTest(t *testing.T, srv *httptest.Server) *DOProvider {
 //     Outputs.access_key + Outputs.created_at populated so audit-keys / prune
 //     can filter by age without re-reading every key.
 //
-// Until Task 15 lands the EnumerateAll method on *DOProvider, this test
-// fails with `Provider must implement EnumeratorAll` — which is the
-// failing-side signal Task 14 is supposed to produce.
+// Pins the contract post Tasks 14+15: DOProvider implements EnumeratorAll
+// and enumerateAllSpacesKeys returns the full paginated set with the same
+// ProviderID convention (access_key) and Outputs shape that
+// SpacesKeyDriver.Read produces.
 func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
