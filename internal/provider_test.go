@@ -2,9 +2,12 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -1093,6 +1096,124 @@ func TestDOProvider_Apply_UpsertAllDrivers(t *testing.T) {
 		// Verify the discovered ProviderID from Read was propagated into Update.
 		if f.updatedProviderID != r.providerID {
 			t.Errorf("%s: Update called with ProviderID %q, want %q", r.rtype, f.updatedProviderID, r.providerID)
+		}
+	}
+}
+
+// newDOProviderForTest builds a *DOProvider whose godo client points at the
+// given httptest server. Mirrors newProviderForEnumeratorTest in
+// provider_enumerator_test.go but takes the server (not just a URL) so the
+// EnumeratorAll spaces_key test can drive its own paginated handler while
+// still using the server's hermetic http client.
+//
+// Why srv.Client() and not http.DefaultClient: matches the sister helpers
+// at provider_enumerator_test.go:149 and internal/drivers/spaces_key_test.go
+// (post-f203b15). srv.Client() trusts the server's TLS cert if/when the
+// test moves to TLS, and never mutates the global http.DefaultClient state.
+func newDOProviderForTest(t *testing.T, srv *httptest.Server) *DOProvider {
+	t.Helper()
+	client := godo.NewClient(srv.Client())
+	base, err := url.Parse(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("parse httptest URL %q: %v", srv.URL, err)
+	}
+	client.BaseURL = base
+	return &DOProvider{client: client, region: "nyc3"}
+}
+
+// TestProvider_EnumerateAll_SpacesKeys is the contract test for the
+// EnumeratorAll interface implementation on the DO provider, scoped to the
+// "infra.spaces_key" resource type. Spaces keys live outside the DO tag
+// system so the existing EnumerateByTag path cannot reach them; the audit /
+// prune CLIs (Tasks 17, 19, 21) need a tag-free enumeration path that
+// returns every key in the account, paginated transparently.
+//
+// The test fakes a paginated DO API response (page 1 returns 2 keys with a
+// next-page link; page 2 returns 1 key) and asserts:
+//
+//   - DOProvider implements interfaces.EnumeratorAll (added in workflow
+//     v0.26.0; see iac_provider.go).
+//   - EnumerateAll(ctx, "infra.spaces_key") returns 3 *ResourceOutput
+//     entries — pagination must be handled inside the provider, not punted
+//     to the caller.
+//   - Each output has Type="infra.spaces_key", non-empty ProviderID
+//     (= access_key, matching the SpacesKeyDriver.Create contract), and
+//     Outputs.access_key + Outputs.created_at populated so audit-keys / prune
+//     can filter by age without re-reading every key.
+//
+// Pins the contract post Tasks 14+15: DOProvider implements EnumeratorAll
+// and enumerateAllSpacesKeys returns the full paginated set with the same
+// ProviderID convention (access_key) and Outputs shape that
+// SpacesKeyDriver.Read produces.
+func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v2/spaces/keys" {
+			w.Header().Set("Content-Type", "application/json")
+			page := r.URL.Query().Get("page")
+			if page == "" || page == "1" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"keys": []any{
+						map[string]any{"name": "key-a", "access_key": "AK_A", "created_at": "2026-05-01T00:00:00Z"},
+						map[string]any{"name": "key-b", "access_key": "AK_B", "created_at": "2026-05-02T00:00:00Z"},
+					},
+					"links": map[string]any{
+						"pages": map[string]any{"next": srv.URL + "/v2/spaces/keys?page=2"},
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"keys": []any{
+					map[string]any{"name": "key-c", "access_key": "AK_C", "created_at": "2026-05-03T00:00:00Z"},
+				},
+			})
+			return
+		}
+		// Unexpected path — return 500 so godo surfaces it as an HTTP error
+		// rather than the test silently observing an empty 200 body. Mirrors
+		// the same hermetic-handler pattern in
+		// internal/drivers/spaces_key_test.go.
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected path", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	p := newDOProviderForTest(t, srv)
+	enumerator, ok := interfaces.IaCProvider(p).(interfaces.EnumeratorAll)
+	if !ok {
+		t.Fatalf("Provider must implement EnumeratorAll")
+	}
+
+	outs, err := enumerator.EnumerateAll(context.Background(), "infra.spaces_key")
+	if err != nil {
+		t.Fatalf("EnumerateAll: %v", err)
+	}
+	if len(outs) != 3 {
+		t.Fatalf("expected 3 keys (paginated), got %d: %+v", len(outs), outs)
+	}
+	// Each *ResourceOutput must have Name + Type + ProviderID populated, plus
+	// the full Outputs map (name, access_key, created_at, ...) so downstream
+	// filter use cases (wfctl infra audit-keys, prune) don't have to re-read.
+	//
+	// access_key + created_at are asserted as non-empty STRINGS rather than
+	// just non-nil interface{}: ResourceOutput.Outputs is map[string]any but
+	// the gRPC-side proto roundtrip (structpb) only accepts string/number/
+	// bool/list/map values. A regression that stored time.Time would pass a
+	// bare nil-check but fail the proto marshal — type-assert to string here
+	// to lock the structpb-safe shape.
+	for _, o := range outs {
+		if o.Type != "infra.spaces_key" {
+			t.Errorf("expected Type=infra.spaces_key, got %q", o.Type)
+		}
+		if o.ProviderID == "" {
+			t.Errorf("ProviderID must be populated (= access_key); got empty for %q", o.Name)
+		}
+		if got, _ := o.Outputs["access_key"].(string); got == "" {
+			t.Errorf("Outputs.access_key must be populated as non-empty string for %q; got %T %v", o.Name, o.Outputs["access_key"], o.Outputs["access_key"])
+		}
+		if got, _ := o.Outputs["created_at"].(string); got == "" {
+			t.Errorf("Outputs.created_at must be populated as non-empty string for %q; got %T %v", o.Name, o.Outputs["created_at"], o.Outputs["created_at"])
 		}
 	}
 }
