@@ -50,7 +50,7 @@ func TestSpacesKeyDriver_Create_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := godoClientForTest(t, srv.URL)
+	client := godoClientForTest(t, srv)
 	fakeGHSecrets := &fakeSecretsProvider{stored: map[string]string{}}
 
 	driver := NewSpacesKeyDriver(client, fakeGHSecrets)
@@ -112,15 +112,18 @@ func TestSpacesKeyDriver_Create_HappyPath(t *testing.T) {
 }
 
 // godoClientForTest builds a godo client whose BaseURL points at the given
-// httptest server. Mirrors the pattern in `internal/provider_enumerator_test.go`
-// (`newProviderForEnumeratorTest`) — godo uses BaseURL for every request, so
-// rewriting it is the standard hermetic test stub.
-func godoClientForTest(t *testing.T, serverURL string) *godo.Client {
+// httptest server and whose underlying http.Client is the test server's own
+// client. Mirrors `internal/provider_enumerator_test.go::newProviderForEnumeratorTest`
+// (line 149: `godo.NewClient(srv.Client())`). Using `srv.Client()` rather than
+// `http.DefaultClient` keeps the test hermetic — every request rides the
+// test server's transport, so an ambient transport mutation in another test
+// can't leak in. Standard httptest discipline.
+func godoClientForTest(t *testing.T, srv *httptest.Server) *godo.Client {
 	t.Helper()
-	client := godo.NewClient(http.DefaultClient)
-	base, err := url.Parse(serverURL + "/")
+	client := godo.NewClient(srv.Client())
+	base, err := url.Parse(srv.URL + "/")
 	if err != nil {
-		t.Fatalf("parse httptest URL %q: %v", serverURL, err)
+		t.Fatalf("parse httptest URL %q: %v", srv.URL, err)
 	}
 	client.BaseURL = base
 	return client
