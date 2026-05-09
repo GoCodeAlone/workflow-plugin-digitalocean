@@ -2,9 +2,12 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -1093,6 +1096,109 @@ func TestDOProvider_Apply_UpsertAllDrivers(t *testing.T) {
 		// Verify the discovered ProviderID from Read was propagated into Update.
 		if f.updatedProviderID != r.providerID {
 			t.Errorf("%s: Update called with ProviderID %q, want %q", r.rtype, f.updatedProviderID, r.providerID)
+		}
+	}
+}
+
+// newDOProviderForTest builds a *DOProvider whose godo client points at the
+// given httptest server URL. Mirrors newProviderForEnumeratorTest in
+// provider_enumerator_test.go but takes a raw URL instead of a typed mock so
+// the EnumeratorAll spaces_key test can drive its own paginated handler.
+//
+// godo.NewClient + BaseURL override is the standard hermetic pattern used
+// elsewhere in this package (see provider_enumerator_test.go:144 and
+// internal/drivers/spaces_key_test.go:118).
+func newDOProviderForTest(t *testing.T, serverURL string) *DOProvider {
+	t.Helper()
+	client := godo.NewClient(http.DefaultClient)
+	base, err := url.Parse(serverURL + "/")
+	if err != nil {
+		t.Fatalf("parse httptest URL %q: %v", serverURL, err)
+	}
+	client.BaseURL = base
+	return &DOProvider{client: client, region: "nyc3"}
+}
+
+// TestProvider_EnumerateAll_SpacesKeys is the contract test for the
+// EnumeratorAll interface implementation on the DO provider, scoped to the
+// "infra.spaces_key" resource type. Spaces keys live outside the DO tag
+// system so the existing EnumerateByTag path cannot reach them; the audit /
+// prune CLIs (Tasks 17, 19, 21) need a tag-free enumeration path that
+// returns every key in the account, paginated transparently.
+//
+// The test fakes a paginated DO API response (page 1 returns 2 keys with a
+// next-page link; page 2 returns 1 key) and asserts:
+//
+//   - DOProvider implements interfaces.EnumeratorAll (added in workflow
+//     v0.26.0; see iac_provider.go).
+//   - EnumerateAll(ctx, "infra.spaces_key") returns 3 *ResourceOutput
+//     entries — pagination must be handled inside the provider, not punted
+//     to the caller.
+//   - Each output has Type="infra.spaces_key", non-empty ProviderID
+//     (= access_key, matching the SpacesKeyDriver.Create contract), and
+//     Outputs.access_key + Outputs.created_at populated so audit-keys / prune
+//     can filter by age without re-reading every key.
+//
+// Until Task 15 lands the EnumerateAll method on *DOProvider, this test
+// fails with `Provider must implement EnumeratorAll` — which is the
+// failing-side signal Task 14 is supposed to produce.
+func TestProvider_EnumerateAll_SpacesKeys(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v2/spaces/keys" {
+			w.Header().Set("Content-Type", "application/json")
+			page := r.URL.Query().Get("page")
+			if page == "" || page == "1" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"keys": []any{
+						map[string]any{"name": "key-a", "access_key": "AK_A", "created_at": "2026-05-01T00:00:00Z"},
+						map[string]any{"name": "key-b", "access_key": "AK_B", "created_at": "2026-05-02T00:00:00Z"},
+					},
+					"links": map[string]any{
+						"pages": map[string]any{"next": srv.URL + "/v2/spaces/keys?page=2"},
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"keys": []any{
+					map[string]any{"name": "key-c", "access_key": "AK_C", "created_at": "2026-05-03T00:00:00Z"},
+				},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	p := newDOProviderForTest(t, srv.URL)
+	enumerator, ok := interfaces.IaCProvider(p).(interfaces.EnumeratorAll)
+	if !ok {
+		t.Fatalf("Provider must implement EnumeratorAll")
+	}
+
+	outs, err := enumerator.EnumerateAll(context.Background(), "infra.spaces_key")
+	if err != nil {
+		t.Fatalf("EnumerateAll: %v", err)
+	}
+	if len(outs) != 3 {
+		t.Fatalf("expected 3 keys (paginated), got %d: %+v", len(outs), outs)
+	}
+	// Each *ResourceOutput must have Name + Type + ProviderID populated, plus
+	// the full Outputs map (name, access_key, created_at, ...) so downstream
+	// filter use cases (wfctl infra audit-keys, prune) don't have to re-read.
+	for _, o := range outs {
+		if o.Type != "infra.spaces_key" {
+			t.Errorf("expected Type=infra.spaces_key, got %q", o.Type)
+		}
+		if o.ProviderID == "" {
+			t.Errorf("ProviderID must be populated (= access_key); got empty for %q", o.Name)
+		}
+		if o.Outputs["access_key"] == nil {
+			t.Errorf("Outputs.access_key must be populated for %q", o.Name)
+		}
+		if o.Outputs["created_at"] == nil {
+			t.Errorf("Outputs.created_at must be populated for %q", o.Name)
 		}
 	}
 }
