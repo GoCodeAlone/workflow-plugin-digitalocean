@@ -60,6 +60,15 @@ func newDOIaCServer(provider *DOProvider) *doIaCServer {
 	return &doIaCServer{provider: provider}
 }
 
+// NewIaCServer is the package entrypoint used by cmd/plugin/main.go. It
+// constructs a fresh *DOProvider and wraps it in the typed pb.IaCProvider*
+// server surface. The returned value is suitable to pass to
+// sdk.ServeIaCPlugin; the SDK auto-registers every typed gRPC service
+// the server satisfies via Go type-assertion at plugin startup.
+func NewIaCServer() *doIaCServer {
+	return newDOIaCServer(NewDOProvider())
+}
+
 // Compile-time guards: every typed server interface this DO plugin
 // advertises MUST be satisfied. A signature drift on any of these will
 // fail the build at this file rather than at first RPC dispatch.
