@@ -49,6 +49,12 @@ type doIaCServer struct {
 	pb.UnimplementedIaCProviderMigrationRepairerServer
 	pb.UnimplementedIaCProviderValidatorServer
 	pb.UnimplementedIaCProviderDriftConfigDetectorServer
+	// pb.UnimplementedResourceDriverServer satisfies the
+	// mustEmbedUnimplementedResourceDriverServer() forward-compat
+	// requirement on pb.ResourceDriverServer; the per-type CRUD
+	// dispatch methods are declared in resourcedriver_server.go
+	// (Task 11 of the strict-contracts force-cutover plan).
+	pb.UnimplementedResourceDriverServer
 
 	provider *DOProvider
 }
