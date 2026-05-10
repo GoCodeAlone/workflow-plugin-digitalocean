@@ -320,6 +320,46 @@ func TestDatabaseDriver_Diff_NoChanges(t *testing.T) {
 	}
 }
 
+func TestDatabaseDriver_Diff_ImmutableShapeChangesForceReplace(t *testing.T) {
+	mock := &mockDatabaseClient{}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"engine":  "mysql",
+			"version": "8",
+			"region":  "sfo3",
+			"size":    "db-s-1vcpu-2gb",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"engine":  "pg",
+			"version": "15",
+			"region":  "nyc3",
+			"size":    "db-s-1vcpu-2gb",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsReplace {
+		t.Fatal("expected NeedsReplace=true for immutable database shape changes")
+	}
+	for _, path := range []string{"engine", "version", "region"} {
+		found := false
+		for _, change := range result.Changes {
+			if change.Path == path && change.ForceNew {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing ForceNew change for %s: %+v", path, result.Changes)
+		}
+	}
+}
+
 func TestDatabaseDriver_HealthCheck(t *testing.T) {
 	mock := &mockDatabaseClient{db: testDatabase()}
 	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
@@ -379,6 +419,44 @@ func TestDatabaseDriver_Read_NameBased(t *testing.T) {
 	}
 	if out.Name != "my-db" {
 		t.Errorf("Name = %q, want %q", out.Name, "my-db")
+	}
+}
+
+func TestDatabaseDriver_AdoptionRefUsesNameLookup(t *testing.T) {
+	d := drivers.NewDatabaseDriverWithClient(&mockDatabaseClient{}, "nyc3")
+	locator := any(d).(interfaces.ResourceAdoptionLocator)
+
+	ref, ok, err := locator.AdoptionRef(interfaces.ResourceSpec{
+		Name: "my-db",
+		Type: "infra.database",
+		Config: map[string]any{
+			"adopt_existing": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("AdoptionRef: %v", err)
+	}
+	if !ok {
+		t.Fatal("AdoptionRef: got ok=false, want true")
+	}
+	if ref.Name != "my-db" || ref.Type != "infra.database" || ref.ProviderID != "" {
+		t.Fatalf("AdoptionRef = %#v, want name/type ref with empty ProviderID", ref)
+	}
+}
+
+func TestDatabaseDriver_AdoptionRefRequiresOptIn(t *testing.T) {
+	d := drivers.NewDatabaseDriverWithClient(&mockDatabaseClient{}, "nyc3")
+	locator := any(d).(interfaces.ResourceAdoptionLocator)
+
+	ref, ok, err := locator.AdoptionRef(interfaces.ResourceSpec{
+		Name: "my-db",
+		Type: "infra.database",
+	})
+	if err != nil {
+		t.Fatalf("AdoptionRef: %v", err)
+	}
+	if ok {
+		t.Fatalf("AdoptionRef = %#v, want ok=false without adopt_existing", ref)
 	}
 }
 

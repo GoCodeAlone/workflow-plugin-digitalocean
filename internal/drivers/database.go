@@ -136,6 +136,20 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 // (empty ProviderID), enabling the ErrResourceAlreadyExists → upsert path.
 func (d *DatabaseDriver) SupportsUpsert() bool { return true }
 
+func (d *DatabaseDriver) AdoptionRef(spec interfaces.ResourceSpec) (interfaces.ResourceRef, bool, error) {
+	if !boolFromConfig(spec.Config, "adopt_existing", false) {
+		return interfaces.ResourceRef{}, false, nil
+	}
+	if strings.TrimSpace(spec.Name) == "" {
+		return interfaces.ResourceRef{}, false, fmt.Errorf("database adoption requires resource name")
+	}
+	resourceType := spec.Type
+	if resourceType == "" {
+		resourceType = "infra.database"
+	}
+	return interfaces.ResourceRef{Name: spec.Name, Type: resourceType}, true, nil
+}
+
 func (d *DatabaseDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
 	if ref.ProviderID == "" {
 		return d.findDatabaseByName(ctx, ref.Name)
@@ -258,12 +272,42 @@ func (d *DatabaseDriver) Diff(_ context.Context, desired interfaces.ResourceSpec
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
 	var changes []interfaces.FieldChange
+	var needsReplace bool
+	for _, field := range []struct {
+		key string
+		def string
+	}{
+		{key: "engine", def: "pg"},
+		{key: "version"},
+		{key: "region", def: d.region},
+	} {
+		desiredValue := strFromConfig(desired.Config, field.key, field.def)
+		if desiredValue == "" {
+			continue
+		}
+		currentValue, _ := current.Outputs[field.key].(string)
+		if currentValue != "" && currentValue != desiredValue {
+			changes = append(changes, interfaces.FieldChange{
+				Path: field.key, Old: currentValue, New: desiredValue, ForceNew: true,
+			})
+			needsReplace = true
+		}
+	}
 	if sz := strFromConfig(desired.Config, "size", ""); sz != "" {
 		if cur, _ := current.Outputs["size"].(string); cur != sz {
 			changes = append(changes, interfaces.FieldChange{Path: "size", Old: cur, New: sz})
 		}
 	}
-	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
+	if numNodes, ok := intFromConfig(desired.Config, "num_nodes", 0); ok {
+		if cur, _ := current.Outputs["num_nodes"].(int); cur != 0 && cur != numNodes {
+			changes = append(changes, interfaces.FieldChange{Path: "num_nodes", Old: cur, New: numNodes})
+		}
+	}
+	return &interfaces.DiffResult{
+		NeedsUpdate:  len(changes) > 0,
+		NeedsReplace: needsReplace,
+		Changes:      changes,
+	}, nil
 }
 
 func (d *DatabaseDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
@@ -552,10 +596,11 @@ func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseF
 
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 	outputs := map[string]any{
-		"engine":  db.EngineSlug,
-		"region":  db.RegionSlug,
-		"size":    db.SizeSlug,
-		"version": db.VersionSlug,
+		"engine":    db.EngineSlug,
+		"num_nodes": db.NumNodes,
+		"region":    db.RegionSlug,
+		"size":      db.SizeSlug,
+		"version":   db.VersionSlug,
 	}
 	if db.Connection != nil {
 		outputs["host"] = db.Connection.Host
@@ -574,7 +619,9 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 	}
 }
 
-func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat { return interfaces.IDFormatUUID }
+func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
+	return interfaces.IDFormatUUID
+}
 
 // buildCreateFirewallRulesExcludingApps builds DatabaseCreateFirewallRules from
 // the "trusted_sources" config, omitting type=app entries that require name
