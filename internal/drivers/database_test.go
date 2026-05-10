@@ -360,6 +360,33 @@ func TestDatabaseDriver_Diff_ImmutableShapeChangesForceReplace(t *testing.T) {
 	}
 }
 
+func TestDatabaseDriver_Diff_NumNodesCoercesStructPBNumbers(t *testing.T) {
+	mock := &mockDatabaseClient{}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"size":      "db-s-1vcpu-2gb",
+			"num_nodes": float64(1),
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"size":      "db-s-1vcpu-2gb",
+			"num_nodes": 2,
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true for num_nodes drift")
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Path != "num_nodes" {
+		t.Fatalf("changes = %+v, want num_nodes drift only", result.Changes)
+	}
+}
+
 func TestDatabaseDriver_HealthCheck(t *testing.T) {
 	mock := &mockDatabaseClient{db: testDatabase()}
 	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")

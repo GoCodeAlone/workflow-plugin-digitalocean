@@ -299,7 +299,7 @@ func (d *DatabaseDriver) Diff(_ context.Context, desired interfaces.ResourceSpec
 		}
 	}
 	if numNodes, ok := intFromConfig(desired.Config, "num_nodes", 0); ok {
-		if cur, _ := current.Outputs["num_nodes"].(int); cur != 0 && cur != numNodes {
+		if cur, ok := intOutputFromMap(current.Outputs, "num_nodes"); ok && cur != numNodes {
 			changes = append(changes, interfaces.FieldChange{Path: "num_nodes", Old: cur, New: numNodes})
 		}
 	}
@@ -597,7 +597,7 @@ func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseF
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 	outputs := map[string]any{
 		"engine":    db.EngineSlug,
-		"num_nodes": db.NumNodes,
+		"num_nodes": float64(db.NumNodes),
 		"region":    db.RegionSlug,
 		"size":      db.SizeSlug,
 		"version":   db.VersionSlug,
@@ -621,6 +621,23 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 
 func (d *DatabaseDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
 	return interfaces.IDFormatUUID
+}
+
+func intOutputFromMap(outputs map[string]any, key string) (int, bool) {
+	switch v := outputs[key].(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 // buildCreateFirewallRulesExcludingApps builds DatabaseCreateFirewallRules from
