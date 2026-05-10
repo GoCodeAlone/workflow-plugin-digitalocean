@@ -1075,17 +1075,24 @@ func ParseImageRef(imageStr string) (*godo.ImageSourceSpec, error) {
 // Accepts either a flat string (parsed by ParseImageRef) or an already-nested
 // map[string]any with keys registry_type, repository, tag, registry.
 func imageSpecFromConfig(cfg map[string]any) (*godo.ImageSourceSpec, error) {
+	var img *godo.ImageSourceSpec
+	var err error
 	switch v := cfg["image"].(type) {
 	case string:
 		if v == "" {
 			return nil, fmt.Errorf("image config is empty")
 		}
-		return ParseImageRef(v)
+		img, err = ParseImageRef(v)
 	case map[string]any:
-		return imageSpecFromMap(v)
+		img, err = imageSpecFromMap(v)
 	default:
 		return nil, fmt.Errorf("image config must be a string or map[string]any, got %T", cfg["image"])
 	}
+	if err != nil {
+		return nil, err
+	}
+	applyRegistryCredentialsFromConfig(img, cfg)
+	return img, nil
 }
 
 func imageSpecFromMap(m map[string]any) (*godo.ImageSourceSpec, error) {
@@ -1102,12 +1109,35 @@ func imageSpecFromMap(m map[string]any) (*godo.ImageSourceSpec, error) {
 		tag = "latest"
 	}
 	registry, _ := m["registry"].(string)
+	registryCredentials, _ := m["registry_credentials"].(string)
 	return &godo.ImageSourceSpec{
-		RegistryType: godo.ImageSourceSpecRegistryType(regType),
-		Registry:     registry,
-		Repository:   repo,
-		Tag:          tag,
+		RegistryType:        godo.ImageSourceSpecRegistryType(regType),
+		Registry:            registry,
+		Repository:          repo,
+		Tag:                 tag,
+		RegistryCredentials: registryCredentials,
 	}, nil
+}
+
+func applyRegistryCredentialsFromConfig(img *godo.ImageSourceSpec, cfg map[string]any) {
+	if img == nil || img.RegistryCredentials != "" {
+		return
+	}
+	if credentials, ok := cfg["registry_credentials"].(string); ok && credentials != "" {
+		img.RegistryCredentials = credentials
+		return
+	}
+	ps, ok := cfg["provider_specific"].(map[string]any)
+	if !ok {
+		return
+	}
+	do, ok := ps["digitalocean"].(map[string]any)
+	if !ok {
+		return
+	}
+	if credentials, ok := do["registry_credentials"].(string); ok && credentials != "" {
+		img.RegistryCredentials = credentials
+	}
 }
 
 // envVarsFromConfig converts the "env_vars" map in spec config to App Platform
