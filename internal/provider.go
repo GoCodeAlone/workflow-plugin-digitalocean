@@ -27,6 +27,12 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: t.token}, nil
 }
 
+// Version is set at build time via -ldflags
+// "-X github.com/GoCodeAlone/workflow-plugin-digitalocean/internal.Version=X.Y.Z".
+// Lived in plugin.go before the strict-contracts cutover; moved here when
+// the legacy doPlugin / NewDOPlugin entrypoint was deleted (Task 9).
+var Version = "dev"
+
 // DOProvider implements interfaces.IaCProvider for DigitalOcean.
 type DOProvider struct {
 	client  *godo.Client
