@@ -1,0 +1,82 @@
+name: IaC Host Conformance
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GOPRIVATE: github.com/GoCodeAlone/*
+
+jobs:
+  workflow-engine-range:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Configure Git for private repos
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -n "${RELEASES_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Determine Workflow engine versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_CURRENT_VERSION: ${{ vars.WORKFLOW_CURRENT_VERSION }}
+        run: |
+          set -euo pipefail
+          min="$(jq -r '.minEngineVersion // empty' plugin.json)"
+          if [ -z "${min}" ]; then
+            echo "::error::plugin.json must declare minEngineVersion"
+            exit 1
+          fi
+          case "${min}" in
+            v*) min_version="${min}" ;;
+            *) min_version="v${min}" ;;
+          esac
+          current="${WORKFLOW_CURRENT_VERSION}"
+          if [ -z "${current}" ]; then
+            current="$(gh release view --repo GoCodeAlone/workflow --json tagName --jq '.tagName')"
+          fi
+          if [ -z "${current}" ]; then
+            echo "::error::could not determine current Workflow engine release"
+            exit 1
+          fi
+          first="$(printf '%s\n%s\n' "${current}" "${min_version}" | sort -V | head -n1)"
+          if [ "${first}" = "${current}" ] && [ "${current}" != "${min_version}" ]; then
+            echo "::notice::current Workflow release ${current} is older than declared minimum ${min_version}; testing minimum as current"
+            current="${min_version}"
+          fi
+          echo "min=${min_version}" >> "${GITHUB_OUTPUT}"
+          echo "current=${current}" >> "${GITHUB_OUTPUT}"
+          echo "Declared min engine: ${min_version}"
+          echo "Current engine release: ${current}"
+
+      # The declared minimum is intentionally executable, not just metadata.
+      # For this strict-cutover plugin it is v0.51.2 because v0.51.0/v0.51.1
+      # start the plugin but reject its intentionally unimplemented GetManifest RPC.
+      - name: Conformance against declared minimum engine
+        run: ./scripts/workflow-iac-host-conformance.sh "${{ steps.versions.outputs.min }}" min
+
+      - name: Conformance against current engine release
+        if: steps.versions.outputs.current != steps.versions.outputs.min
+        run: ./scripts/workflow-iac-host-conformance.sh "${{ steps.versions.outputs.current }}" current
+
+      - name: Remove private repo Git credential rewrite
+        if: always()
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -n "${RELEASES_TOKEN}" ]; then
+            git config --global --unset-all url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf || true
+          fi
