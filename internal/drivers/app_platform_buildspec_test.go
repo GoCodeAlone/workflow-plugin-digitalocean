@@ -88,6 +88,41 @@ func TestBuildAppSpec_RepresentativeCanonicalConfig(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_ImageRegistryCredentialsProviderSpecific(t *testing.T) {
+	cfg := map[string]any{
+		"image": "ghcr.io/gocodealone/workflow-compute-server:abc123",
+		"provider_specific": map[string]any{
+			"digitalocean": map[string]any{
+				"registry_credentials": "gocodealone:ghp_secret",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	img := spec.Services[0].Image
+	if img.RegistryType != godo.ImageSourceSpecRegistryType_Ghcr {
+		t.Fatalf("RegistryType = %q, want GHCR", img.RegistryType)
+	}
+	if img.RegistryCredentials != "gocodealone:ghp_secret" {
+		t.Fatalf("RegistryCredentials = %q, want provider-specific credential", img.RegistryCredentials)
+	}
+}
+
+func TestBuildAppSpec_ImageMapRegistryCredentials(t *testing.T) {
+	cfg := map[string]any{
+		"image": map[string]any{
+			"registry_type":        "GHCR",
+			"registry":             "gocodealone",
+			"repository":           "workflow-compute-server",
+			"tag":                  "abc123",
+			"registry_credentials": "gocodealone:ghp_secret",
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if got := spec.Services[0].Image.RegistryCredentials; got != "gocodealone:ghp_secret" {
+		t.Fatalf("RegistryCredentials = %q, want image-map credential", got)
+	}
+}
+
 // ── instanceSizeSlug ────────────────────────────────────────────────────────
 
 func TestBuildAppSpec_InstanceSizeSlug_AbstractSize(t *testing.T) {
