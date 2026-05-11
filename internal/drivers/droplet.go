@@ -554,11 +554,22 @@ func (d *DropletDriver) dropletOutput(ctx context.Context, droplet *godo.Droplet
 	}
 }
 
-// dropletBackupsEnabled returns true when DO reports any backup IDs on the
-// droplet — godo.Droplet has no dedicated EnableBackups field on Read, so
-// presence of BackupIDs is the only reliable read-side signal.
+// dropletBackupsEnabled returns true when DO reports the "backups" feature
+// is enabled on the droplet. Uses droplet.Features (the canonical read-side
+// source — same path as monitoring/ipv6) rather than BackupIDs.
+//
+// Why not BackupIDs: DO populates BackupIDs only AFTER the first scheduled
+// snapshot is taken (backups run on a weekly cadence). A freshly-created
+// Droplet with `Backups: true` in the create request returns Features
+// containing "backups" but BackupIDs=[] until the first weekly snapshot.
+// Reading enable_backups via BackupIDs therefore false-negatives for the
+// entire interval between create and first backup, which (a) writes
+// state.Outputs.enable_backups=false despite desired=true, and (b)
+// triggers an unnecessary ForceNew on every subsequent Plan because
+// DropletDriver.Diff sees state ≠ desired. Surfaced end-to-end on
+// core-dump deploy run 25648072116 (perpetual replace cycle).
 func dropletBackupsEnabled(droplet *godo.Droplet) bool {
-	return len(droplet.BackupIDs) > 0
+	return dropletHasFeature(droplet, "backups")
 }
 
 // dropletHasFeature returns true when the named feature string is present in

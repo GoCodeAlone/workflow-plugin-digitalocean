@@ -1394,3 +1394,76 @@ func (m *pollingDropletClient) Get(_ context.Context, _ int) (*godo.Droplet, *go
 func (m *pollingDropletClient) Delete(_ context.Context, _ int) (*godo.Response, error) {
 	return nil, nil
 }
+
+// TestDropletDriver_Create_BackupsEnabled_ViaFeaturesSlice asserts
+// dropletOutput correctly reports enable_backups=true when the DO API
+// returns the "backups" feature in droplet.Features but BackupIDs=[]
+// (the actual scenario for any freshly-created Droplet with backups
+// enabled — backups don't appear in BackupIDs until the first weekly
+// snapshot is taken).
+//
+// Regression: the prior implementation used len(BackupIDs)>0, which
+// false-negatived for the entire interval between Droplet create and
+// first backup, causing DropletDriver.Diff to flag enable_backups
+// drift on every Plan and triggering an infinite Replace cycle.
+// Surfaced on core-dump deploy run 25648072116.
+func TestDropletDriver_Create_BackupsEnabled_ViaFeaturesSlice(t *testing.T) {
+	dropletWithBackupsEnabled := &godo.Droplet{
+		ID:     43,
+		Name:   "with-backups",
+		Status: "active",
+		Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
+		Region: &godo.Region{Slug: "nyc3"},
+		Networks: &godo.Networks{V4: []godo.NetworkV4{
+			{IPAddress: "10.0.0.10", Type: "private"},
+		}},
+		Features:  []string{"backups", "monitoring"},
+		BackupIDs: nil, // explicitly empty — first backup hasn't run yet
+	}
+	mock := &mockDropletClient{droplet: dropletWithBackupsEnabled}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "with-backups",
+		Config: map[string]any{"size": "s-1vcpu-2gb", "image": "ubuntu-24-04-x64", "enable_backups": true},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, _ := out.Outputs["enable_backups"].(bool)
+	if !got {
+		t.Errorf("enable_backups = %v, want true (Features contains 'backups' even though BackupIDs is empty)", got)
+	}
+}
+
+// TestDropletDriver_Create_BackupsDisabled_NoFeaturesEntry asserts that
+// dropletOutput reports enable_backups=false when "backups" is absent
+// from droplet.Features (matching DO's behavior when backups are
+// disabled — the feature string is omitted entirely).
+func TestDropletDriver_Create_BackupsDisabled_NoFeaturesEntry(t *testing.T) {
+	dropletNoBackups := &godo.Droplet{
+		ID:     44,
+		Name:   "no-backups",
+		Status: "active",
+		Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
+		Region: &godo.Region{Slug: "nyc3"},
+		Networks: &godo.Networks{V4: []godo.NetworkV4{
+			{IPAddress: "10.0.0.11", Type: "private"},
+		}},
+		Features: []string{"monitoring"}, // no "backups"
+	}
+	mock := &mockDropletClient{droplet: dropletNoBackups}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc3")
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "no-backups",
+		Config: map[string]any{"size": "s-1vcpu-2gb", "image": "ubuntu-24-04-x64"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, _ := out.Outputs["enable_backups"].(bool)
+	if got {
+		t.Errorf("enable_backups = %v, want false (Features does not contain 'backups')", got)
+	}
+}
