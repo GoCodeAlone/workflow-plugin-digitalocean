@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -2119,13 +2120,14 @@ func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
 	mock := &mockAppClient{}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
 
+	// Current-side: a stable hash placeholder representing the OLD
+	// env_vars (any non-empty hash that differs from the desired hash
+	// suffices to assert drift detection).
 	current := &interfaces.ResourceOutput{
 		Outputs: map[string]any{
-			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
-			"region": "nyc",
-			"env_vars": map[string]any{
-				"DATABASE_URL": "postgres://u:p@10.20.0.2:5432/db",
-			},
+			"image":         "registry.digitalocean.com/myrepo/myapp:v1",
+			"region":        "nyc",
+			"env_vars_hash": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		},
 	}
 	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
@@ -2133,7 +2135,7 @@ func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
 			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
 			"region": "nyc",
 			"env_vars": map[string]any{
-				"DATABASE_URL": "postgres://u:p@10.20.0.6:5432/db", // newly-resolved IP
+				"DATABASE_URL": "postgres://u:p@10.20.0.6:5432/db",
 			},
 		},
 	}, current)
@@ -2141,12 +2143,13 @@ func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
 		t.Fatalf("Diff: %v", err)
 	}
 	if !result.NeedsUpdate {
-		t.Fatalf("expected NeedsUpdate=true when env_vars DATABASE_URL changed")
+		t.Fatalf("expected NeedsUpdate=true when env_vars hash mismatched")
 	}
 	if result.NeedsReplace {
 		t.Errorf("env_vars change must NOT force replace (in-place Update suffices)")
 	}
 }
+
 
 // TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift covers the migrate-job
 // case specifically — pre_deploy jobs carry their own env_vars that can
@@ -2159,14 +2162,8 @@ func TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift(t *testing.T) {
 		Outputs: map[string]any{
 			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
 			"region": "nyc",
-			"jobs": []any{
-				map[string]any{
-					"name": "migrate",
-					"kind": "PRE_DEPLOY",
-					"env_vars": map[string]any{
-						"DATABASE_URL": "postgres://u:p@10.20.0.2:5432/db",
-					},
-				},
+			"jobs_hash": map[string]any{
+				"migrate": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 			},
 		},
 	}
@@ -2189,7 +2186,7 @@ func TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift(t *testing.T) {
 		t.Fatalf("Diff: %v", err)
 	}
 	if !result.NeedsUpdate {
-		t.Fatal("expected NeedsUpdate=true when job env_vars DATABASE_URL changed")
+		t.Fatal("expected NeedsUpdate=true when job env_vars hash differs")
 	}
 }
 
@@ -2261,4 +2258,53 @@ func hasChangePath(changes []interfaces.FieldChange, path string) bool {
 		}
 	}
 	return false
+}
+
+// TestAppPlatformDriver_appOutput_DoesNotLeakPlaintextSecrets is the
+// regression test for the v1.0.5 security bug: appOutput surfaced
+// env_vars / jobs / workers as raw maps, exposing JIT-substituted
+// secret values (e.g. plaintext STAGING_PG_PASSWORD baked into
+// DATABASE_URL) to state.Outputs — which lives in DO Spaces and is
+// dumped by `wfctl infra outputs`. v1.0.6+ stores SHA-256 hashes only.
+//
+// This test inspects the appOutput map directly to assert no string
+// matching a known secret value appears anywhere — defends against
+// any future code path that would re-introduce plaintext surfacing.
+func TestAppPlatformDriver_appOutput_DoesNotLeakPlaintextSecrets(t *testing.T) {
+	const secretValue = "SUPER_SECRET_PASSWORD_DO_NOT_LEAK"
+	app := &godo.App{
+		ID: "app-uuid",
+		Spec: &godo.AppSpec{
+			Name:   "test-app",
+			Region: "nyc",
+			Services: []*godo.AppServiceSpec{
+				{
+					Name:  "svc",
+					Image: &godo.ImageSourceSpec{RegistryType: "DOCR", Repository: "r", Tag: "v1"},
+					Envs:  []*godo.AppVariableDefinition{{Key: "DATABASE_URL", Value: "postgres://u:" + secretValue + "@host/db"}},
+				},
+			},
+			Jobs: []*godo.AppJobSpec{
+				{
+					Name: "migrate", Kind: "PRE_DEPLOY",
+					Envs: []*godo.AppVariableDefinition{{Key: "DATABASE_URL", Value: "postgres://u:" + secretValue + "@host/db"}},
+				},
+			},
+		},
+	}
+	outputs := drivers.AppOutputForTest(app)
+	data, err := json.Marshal(outputs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), secretValue) {
+		t.Fatalf("plaintext secret leaked into state.Outputs JSON: %s", data)
+	}
+	// Sanity: hash fields are present.
+	if outputs["env_vars_hash"] == nil {
+		t.Error("env_vars_hash should be populated")
+	}
+	if outputs["jobs_hash"] == nil {
+		t.Error("jobs_hash should be populated")
+	}
 }
