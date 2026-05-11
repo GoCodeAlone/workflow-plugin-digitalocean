@@ -1056,7 +1056,17 @@ func routesCanonicalFromOutput(v any) []any {
 }
 
 func routesCanonicalFromSpec(spec *godo.AppSpec) []any {
-	if spec == nil || len(spec.Services) == 0 || spec.Services[0] == nil || len(spec.Services[0].Routes) == 0 {
+	if spec == nil {
+		return nil
+	}
+	primaryServiceName := ""
+	if len(spec.Services) > 0 && spec.Services[0] != nil {
+		primaryServiceName = spec.Services[0].Name
+	}
+	if routes := routesCanonicalFromIngressSpec(spec.Ingress, primaryServiceName); len(routes) > 0 {
+		return routes
+	}
+	if len(spec.Services) == 0 || spec.Services[0] == nil || len(spec.Services[0].Routes) == 0 {
 		return nil
 	}
 	out := make([]any, 0, len(spec.Services[0].Routes))
@@ -1069,6 +1079,32 @@ func routesCanonicalFromSpec(spec *godo.AppSpec) []any {
 			path = "/"
 		}
 		out = append(out, routeCanonicalMap(path, r.PreservePathPrefix))
+	}
+	return out
+}
+
+func routesCanonicalFromIngressSpec(ingress *godo.AppIngressSpec, serviceName string) []any {
+	if ingress == nil || len(ingress.Rules) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(ingress.Rules))
+	for _, rule := range ingress.Rules {
+		if rule == nil || rule.Match == nil || rule.Match.Path == nil || rule.Component == nil {
+			continue
+		}
+		if serviceName != "" && rule.Component.Name != serviceName {
+			continue
+		}
+		path := ""
+		if rule.Match.Path.Prefix != nil {
+			path = *rule.Match.Path.Prefix
+		} else if rule.Match.Path.Exact != nil {
+			path = *rule.Match.Path.Exact
+		}
+		if path == "" {
+			path = "/"
+		}
+		out = append(out, routeCanonicalMap(path, rule.Component.PreservePathPrefix))
 	}
 	return out
 }

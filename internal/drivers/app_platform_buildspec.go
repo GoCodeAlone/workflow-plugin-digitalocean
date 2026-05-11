@@ -96,7 +96,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		StaticSites:                  staticSitesFromConfig(cfg),
 		Domains:                      domainsFromConfig(cfg),
 		Alerts:                       appAlertsFromConfig(cfg),
-		Ingress:                      ingressFromConfig(cfg),
+		Ingress:                      ingressFromConfig(cfg, name),
 		Egress:                       egressFromConfig(cfg),
 		Maintenance:                  maintenanceFromConfig(cfg),
 		Vpc:                          vpcFromConfig(cfg),
@@ -609,24 +609,48 @@ func domainsFromConfig(cfg map[string]any) []*godo.AppDomainSpec {
 	return out
 }
 
-// ingressFromConfig converts the canonical "ingress" map to a *godo.AppIngressSpec.
-// The canonical ingress spec is minimal; complex routing should use provider_specific.
+// ingressFromConfig converts canonical "ingress" and "routes" config to a
+// *godo.AppIngressSpec. App Platform service routes are deprecated; top-level
+// ingress rules are the public-routing source of truth.
 // Returns nil when no supported fields are present (consistent with CORS/autoscaling/maintenance).
-func ingressFromConfig(cfg map[string]any) *godo.AppIngressSpec {
-	raw, ok := cfg["ingress"].(map[string]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
+func ingressFromConfig(cfg map[string]any, serviceName string) *godo.AppIngressSpec {
+	raw, _ := cfg["ingress"].(map[string]any)
 	spec := &godo.AppIngressSpec{}
 	if lb := strFromConfig(raw, "load_balancer", ""); lb != "" {
 		spec.LoadBalancer = godo.AppIngressSpecLoadBalancer(strings.ToUpper(lb))
 	}
-	// Rules are complex; skip for now unless coming from provider_specific.
+	spec.Rules = ingressRulesFromRoutesConfig(cfg, serviceName)
 	// Return nil when no supported field was set to avoid sending an empty ingress block.
 	if spec.LoadBalancer == "" && len(spec.Rules) == 0 {
 		return nil
 	}
 	return spec
+}
+
+func ingressRulesFromRoutesConfig(cfg map[string]any, serviceName string) []*godo.AppIngressSpecRule {
+	raw, ok := cfg["routes"].([]any)
+	if !ok || len(raw) == 0 || canonicalExpose(cfg) == "internal" {
+		return nil
+	}
+	rules := make([]*godo.AppIngressSpecRule, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := strFromConfig(m, "path", "/")
+		preservePathPrefix, _ := m["preserve_path_prefix"].(bool)
+		rules = append(rules, &godo.AppIngressSpecRule{
+			Match: &godo.AppIngressSpecRuleMatch{
+				Path: &godo.AppIngressSpecRuleStringMatch{Prefix: &path},
+			},
+			Component: &godo.AppIngressSpecRuleRoutingComponent{
+				Name:               serviceName,
+				PreservePathPrefix: preservePathPrefix,
+			},
+		})
+	}
+	return rules
 }
 
 // egressFromConfig converts the canonical "egress" map to a *godo.AppEgressSpec.
