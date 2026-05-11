@@ -275,11 +275,135 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 		}
 	}
 
+	// env_vars / jobs / workers env_vars drift — critical for cascade
+	// propagation when an `infra_output:` secret resolves to a new value
+	// (e.g. Droplet replace bumping STAGING_PG_HOST → all components
+	// referencing it via env_vars need a new rollout). Without these
+	// comparisons the App's state.config froze with the first-resolved
+	// value and Plan stayed at 0 changes on subsequent Applies.
+	//
+	// Guards: skip comparison when the corresponding current.Outputs key
+	// is absent (state predates this driver version) so a stale state
+	// from before doesn't false-positive on the first Plan after upgrade
+	// — same pattern Droplet's monitoring/ipv6 comparisons use. Outputs
+	// will be populated on the next Read.
+	if desiredEnvs, ok := desired.Config["env_vars"].(map[string]any); ok {
+		if _, hasKey := current.Outputs["env_vars"]; hasKey {
+			curEnvs, _ := current.Outputs["env_vars"].(map[string]any)
+			if !envVarsEqual(desiredEnvs, curEnvs) {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "env_vars", Old: curEnvs, New: desiredEnvs,
+				})
+			}
+		}
+	}
+	if desiredJobs, ok := desired.Config["jobs"].([]any); ok {
+		if _, hasKey := current.Outputs["jobs"]; hasKey {
+			curJobs, _ := current.Outputs["jobs"].([]any)
+			if !componentEnvVarsEqual(desiredJobs, curJobs) {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "jobs", Old: curJobs, New: desiredJobs,
+				})
+			}
+		}
+	}
+	if desiredWorkers, ok := desired.Config["workers"].([]any); ok {
+		if _, hasKey := current.Outputs["workers"]; hasKey {
+			curWorkers, _ := current.Outputs["workers"].([]any)
+			if !componentEnvVarsEqual(desiredWorkers, curWorkers) {
+				changes = append(changes, interfaces.FieldChange{
+					Path: "workers", Old: curWorkers, New: desiredWorkers,
+				})
+			}
+		}
+	}
+
+	// vpc_uuid / vpc_ref drift — App Platform Update accepts VPC
+	// attachment changes in-place (not ForceNew). vpc_ref is the
+	// canonical config key (matches Droplet's vpc_uuid alias pattern);
+	// also accept vpc_uuid for symmetry.
+	desiredVPC := strFromConfig(desired.Config, "vpc_ref", "")
+	if desiredVPC == "" {
+		desiredVPC = strFromConfig(desired.Config, "vpc_uuid", "")
+	}
+	if _, hasKey := current.Outputs["vpc_uuid"]; hasKey {
+		curVPC, _ := current.Outputs["vpc_uuid"].(string)
+		if curVPC != desiredVPC {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "vpc_uuid", Old: curVPC, New: desiredVPC,
+			})
+		}
+	}
+
 	return &interfaces.DiffResult{
 		NeedsUpdate:  len(changes) > 0,
 		NeedsReplace: needsReplace,
 		Changes:      changes,
 	}, nil
+}
+
+// envVarsEqual compares two env_vars maps for value equality, ignoring nil
+// vs empty distinctions and coercing all values to strings (matching how
+// envVarsFromConfig converts `any` to string via fmt.Sprintf).
+func envVarsEqual(desired, current map[string]any) bool {
+	if len(desired) != len(current) {
+		return false
+	}
+	for k, dv := range desired {
+		cv, ok := current[k]
+		if !ok {
+			return false
+		}
+		if fmt.Sprintf("%v", dv) != fmt.Sprintf("%v", cv) {
+			return false
+		}
+	}
+	return true
+}
+
+// componentEnvVarsEqual compares two []any of jobs/workers entries on
+// `name` + `env_vars` only. Other component fields (image, instance_count,
+// kind) are intentionally not compared here — the existing image/expose
+// comparisons handle the per-component image drift via the top-level
+// service path, and the env_vars drift is the unique gap this guards.
+func componentEnvVarsEqual(desired, current []any) bool {
+	if len(desired) != len(current) {
+		return false
+	}
+	// Index by name for order-independent comparison. App Platform allows
+	// reordering jobs/workers, so a re-Read may shuffle them.
+	dByName := componentEnvVarsByName(desired)
+	cByName := componentEnvVarsByName(current)
+	if len(dByName) != len(cByName) {
+		return false
+	}
+	for name, dEnv := range dByName {
+		cEnv, ok := cByName[name]
+		if !ok {
+			return false
+		}
+		if !envVarsEqual(dEnv, cEnv) {
+			return false
+		}
+	}
+	return true
+}
+
+func componentEnvVarsByName(comps []any) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(comps))
+	for _, c := range comps {
+		m, _ := c.(map[string]any)
+		if m == nil {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if name == "" {
+			continue
+		}
+		envs, _ := m["env_vars"].(map[string]any)
+		out[name] = envs
+	}
+	return out
 }
 
 // canonicalExpose returns the canonical `expose` value for a desired-spec
@@ -843,6 +967,24 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			// surface it as ForceNew (App Platform's UpdateApp does not
 			// accept region changes — region is a Create-only field).
 			"region": app.Spec.Region,
+			// `env_vars` (first service component) + per-component
+			// `jobs` / `workers` env_vars carry the JIT-resolved values
+			// that DO is actually running with. Without these in Outputs,
+			// Diff cannot detect drift when a referenced `infra_output:`
+			// secret (e.g. STAGING_PG_HOST sourced from
+			// coredump-staging-pg.private_ip) resolves to a new value on
+			// the next Apply — the App keeps its stale env_vars in
+			// state.config and Plan stays at 0 changes despite the
+			// Droplet's IP having moved. Surfaced on core-dump deploy run
+			// 25653219644: state.config DATABASE_URL pinned to a long-
+			// gone 10.20.0.2 while the live Droplet had moved to 10.20.0.6.
+			"env_vars": serviceEnvVarsFromSpec(app.Spec),
+			"jobs":     jobsCanonicalFromSpec(app.Spec),
+			"workers":  workersCanonicalFromSpec(app.Spec),
+			// `vpc_uuid` records the App's VPC attachment so Diff can
+			// detect attachment drift. App Platform Update accepts VPC
+			// changes in-place; ForceNew not required.
+			"vpc_uuid": vpcUUIDFromSpec(app.Spec),
 		},
 		Status: "running",
 	}
@@ -850,6 +992,92 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		out.Status = "pending"
 	}
 	return out
+}
+
+// serviceEnvVarsFromSpec returns the first service component's Envs as a
+// canonical map[string]any so Diff can compare against the desired
+// `env_vars` config map. Returns nil when the spec has no services or the
+// first service has no Envs. Sensitive vars are included as their
+// godo-stored value (which is the ${SECRET_REF} placeholder for type=SECRET).
+func serviceEnvVarsFromSpec(spec *godo.AppSpec) map[string]any {
+	if spec == nil || len(spec.Services) == 0 || spec.Services[0] == nil {
+		return nil
+	}
+	return envVarsToCanonicalMap(spec.Services[0].Envs)
+}
+
+// jobsCanonicalFromSpec converts AppSpec.Jobs to a canonical
+// `[]any` of `map[string]any{"name": ..., "env_vars": ...}` shape so Diff
+// can compare against the desired `jobs:` config. Critical for migrate-job
+// DATABASE_URL drift detection — pre_deploy jobs carry their own env_vars
+// which can independently go stale when an infra_output: ref resolves to
+// a new value (e.g. Droplet replace updating STAGING_PG_HOST).
+func jobsCanonicalFromSpec(spec *godo.AppSpec) []any {
+	if spec == nil || len(spec.Jobs) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(spec.Jobs))
+	for _, j := range spec.Jobs {
+		if j == nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"name":     j.Name,
+			"kind":     string(j.Kind),
+			"env_vars": envVarsToCanonicalMap(j.Envs),
+		})
+	}
+	return out
+}
+
+// workersCanonicalFromSpec mirrors jobsCanonicalFromSpec for AppSpec.Workers.
+// Workers don't run migrate steps but can also reference Droplet outputs in
+// their env_vars (NATS_URL, MESH_ENDPOINT, etc.), so symmetric Diff coverage
+// avoids the same silent-drift bug class.
+func workersCanonicalFromSpec(spec *godo.AppSpec) []any {
+	if spec == nil || len(spec.Workers) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(spec.Workers))
+	for _, w := range spec.Workers {
+		if w == nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"name":     w.Name,
+			"env_vars": envVarsToCanonicalMap(w.Envs),
+		})
+	}
+	return out
+}
+
+// envVarsToCanonicalMap converts []*godo.AppVariableDefinition to a
+// map[string]any{"KEY": "value"} so the structpb-encoded Outputs round-trip
+// preserves equality semantics with the desired-side `env_vars:` YAML map.
+// Sensitive vars surface their godo-side value verbatim (which is the
+// ${SECRET_REF} placeholder DO API stores for type=SECRET, kept stable
+// across reads — Diff would otherwise see masked vs unmasked).
+func envVarsToCanonicalMap(envs []*godo.AppVariableDefinition) map[string]any {
+	if len(envs) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(envs))
+	for _, e := range envs {
+		if e == nil {
+			continue
+		}
+		out[e.Key] = e.Value
+	}
+	return out
+}
+
+// vpcUUIDFromSpec extracts the App's attached VPC UUID. Empty string when
+// the App is not VPC-attached (DO's default — public-network only).
+func vpcUUIDFromSpec(spec *godo.AppSpec) string {
+	if spec == nil || spec.Vpc == nil {
+		return ""
+	}
+	return spec.Vpc.ID
 }
 
 // deriveImageFromAppSpec returns a canonical user-facing image ref string for
