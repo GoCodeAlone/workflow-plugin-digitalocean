@@ -613,9 +613,8 @@ func TestBuildAppSpec_Routes(t *testing.T) {
 		},
 	}
 	spec := buildSpecViaCreate(t, cfg)
-	routes := spec.Services[0].Routes
-	if len(routes) != 0 {
-		t.Fatalf("service Routes = %+v, want nil when top-level ingress rules are emitted", routes)
+	if spec.Services[0].Routes != nil {
+		t.Fatalf("service Routes = %+v, want nil when top-level ingress rules are emitted", spec.Services[0].Routes)
 	}
 	if spec.Ingress == nil || len(spec.Ingress.Rules) != 2 {
 		t.Fatalf("expected 2 ingress rules from routes, got %+v", spec.Ingress)
