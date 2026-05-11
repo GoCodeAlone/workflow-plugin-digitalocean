@@ -6,6 +6,9 @@ on:
     branches: [main]
 env:
   GOPRIVATE: github.com/GoCodeAlone/*
+  WFCTL_VALIDATE_VERSION: v0.51.2
+  WFCTL_CONFORMANCE_REF: 8e4247812e6df34e1d95f93ba732b2af745c3187
+  WFCTL_CONFORMANCE_VERSION: v0.51.3-0.20260511092920-8e4247812e6d
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -34,21 +37,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Fail fast if plugin.json is missing
         run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
-      - uses: actions/setup-go@v5
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
         with:
-          go-version-file: go.mod
-      - name: Configure Git for private repos
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
+          version: ${{ env.WFCTL_VALIDATE_VERSION }}
       - name: Validate strict plugin contracts
         run: |
-          WFCTL_VERSION="$(go list -m github.com/GoCodeAlone/workflow | awk '{print $2}')"
           # Validate as checked in.
-          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file plugin.json --strict-contracts
+          wfctl plugin validate --file plugin.json --strict-contracts
           # Also validate after simulating the GoReleaser before-hook rewrites
           # (mirrors .goreleaser.yaml before.hooks) so a bad template change
           # is caught before release.
@@ -61,5 +56,45 @@ jobs:
           cp plugin.contracts.json "$tmp_dir/"
           sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
           sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
-          go run "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION}" plugin validate --file "$tmp_dir/plugin.json" --strict-contracts
+          wfctl plugin validate --file "$tmp_dir/plugin.json" --strict-contracts
           rm -rf "$tmp_dir"
+
+  wfctl-conformance:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail fast if plugin.json is missing
+        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Configure Git for private repos
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -n "${RELEASES_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+      - name: Build conformance inputs
+        run: |
+          mkdir -p .conformance/bin
+          GOBIN="${PWD}/.conformance/bin" GOWORK=off go install "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_CONFORMANCE_REF}"
+      - name: Run typed IaC conformance
+        run: |
+          .conformance/bin/wfctl \
+            plugin conformance \
+            --mode typed-iac \
+            --build-package ./cmd/plugin \
+            --engine-version "${WFCTL_CONFORMANCE_VERSION}" \
+            --format json \
+            --output conformance-evidence.json \
+            .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workflow-plugin-digitalocean-conformance
+          path: conformance-evidence.json
+          if-no-files-found: error
