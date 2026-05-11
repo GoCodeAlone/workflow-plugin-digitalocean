@@ -359,10 +359,29 @@ func inboundRulesFromConfig(cfg map[string]any) []godo.InboundRule {
 			PortRange: strFromConfig(m, "ports", "all"),
 			Sources:   &godo.Sources{},
 		}
-		if srcs, ok := m["sources"].([]any); ok {
+		// Accept both canonical shapes:
+		//   sources: ["10.20.0.0/16"]                    (flat list)
+		//   sources: {addresses: ["10.20.0.0/16"]}       (DO-native, structured)
+		// The structured form mirrors godo.Sources, which is the shape DO API
+		// returns on Read, and is the form most operators reach for first.
+		// Without the structured-form parser the type assertion fails silently,
+		// rule.Sources.Addresses stays nil, and the firewall ships with no
+		// inbound allowlist — surfaced on core-dump deploy run 25651563717
+		// (App Platform → Droplet:5432 connection timeouts despite the
+		// firewall apparently "applying").
+		switch srcs := m["sources"].(type) {
+		case []any:
 			for _, s := range srcs {
 				if addr, ok := s.(string); ok {
 					rule.Sources.Addresses = append(rule.Sources.Addresses, addr)
+				}
+			}
+		case map[string]any:
+			if addrs, ok := srcs["addresses"].([]any); ok {
+				for _, s := range addrs {
+					if addr, ok := s.(string); ok {
+						rule.Sources.Addresses = append(rule.Sources.Addresses, addr)
+					}
 				}
 			}
 		}
@@ -389,10 +408,21 @@ func outboundRulesFromConfig(cfg map[string]any) []godo.OutboundRule {
 			PortRange:    strFromConfig(m, "ports", "all"),
 			Destinations: &godo.Destinations{},
 		}
-		if dsts, ok := m["destinations"].([]any); ok {
+		// Same dual-shape acceptance as inboundRulesFromConfig — see comment
+		// there for rationale.
+		switch dsts := m["destinations"].(type) {
+		case []any:
 			for _, s := range dsts {
 				if addr, ok := s.(string); ok {
 					rule.Destinations.Addresses = append(rule.Destinations.Addresses, addr)
+				}
+			}
+		case map[string]any:
+			if addrs, ok := dsts["addresses"].([]any); ok {
+				for _, s := range addrs {
+					if addr, ok := s.(string); ok {
+						rule.Destinations.Addresses = append(rule.Destinations.Addresses, addr)
+					}
 				}
 			}
 		}

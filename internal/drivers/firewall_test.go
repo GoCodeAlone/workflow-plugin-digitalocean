@@ -1111,3 +1111,106 @@ func TestFirewallDriver_DropletIDs_FractionalFloat_Rejected(t *testing.T) {
 		}
 	})
 }
+
+// TestFirewallDriver_Create_AcceptsStructuredSourcesShape is a regression
+// test for the silent-empty-Sources bug where infra.yaml using DO-native
+// structured `sources: {addresses: [...]}` shape (mirroring godo.Sources)
+// type-assertion-failed in the driver's flat-list parser, leaving
+// rule.Sources.Addresses empty and shipping a firewall with no inbound
+// allowlist.
+//
+// Surfaced on core-dump deploy run 25651563717: state.outputs.sources=null
+// post-Apply despite state.config.inbound_rules[0].sources={"addresses":
+// ["10.20.0.0/16"]} → App Platform → Droplet:5432 connection timed out.
+func TestFirewallDriver_Create_AcceptsStructuredSourcesShape(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "fw-structured",
+		Config: map[string]any{
+			"droplet_ids": []any{123},
+			"inbound_rules": []any{
+				map[string]any{
+					"protocol": "tcp",
+					"ports":    "5432",
+					"sources": map[string]any{
+						"addresses": []any{"10.20.0.0/16"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastReq == nil || len(mock.lastReq.InboundRules) != 1 {
+		t.Fatal("expected 1 inbound rule sent to godo")
+	}
+	got := mock.lastReq.InboundRules[0].Sources
+	if got == nil || len(got.Addresses) != 1 || got.Addresses[0] != "10.20.0.0/16" {
+		t.Errorf("Sources.Addresses = %#v, want [10.20.0.0/16]", got)
+	}
+}
+
+// TestFirewallDriver_Create_AcceptsStructuredDestinationsShape mirrors the
+// inbound regression for outbound destinations.
+func TestFirewallDriver_Create_AcceptsStructuredDestinationsShape(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "fw-out-structured",
+		Config: map[string]any{
+			"droplet_ids": []any{123},
+			"outbound_rules": []any{
+				map[string]any{
+					"protocol": "tcp",
+					"ports":    "1-65535",
+					"destinations": map[string]any{
+						"addresses": []any{"0.0.0.0/0"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if mock.lastReq == nil || len(mock.lastReq.OutboundRules) != 1 {
+		t.Fatal("expected 1 outbound rule sent to godo")
+	}
+	got := mock.lastReq.OutboundRules[0].Destinations
+	if got == nil || len(got.Addresses) != 1 || got.Addresses[0] != "0.0.0.0/0" {
+		t.Errorf("Destinations.Addresses = %#v, want [0.0.0.0/0]", got)
+	}
+}
+
+// TestFirewallDriver_Create_FlatSourcesShape_StillWorks asserts the
+// pre-existing flat-list shape continues to work after the dual-shape
+// patch (no regression to the documented canonical form).
+func TestFirewallDriver_Create_FlatSourcesShape_StillWorks(t *testing.T) {
+	mock := &mockFirewallClient{fw: testFirewall()}
+	d := drivers.NewFirewallDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "fw-flat",
+		Config: map[string]any{
+			"droplet_ids": []any{123},
+			"inbound_rules": []any{
+				map[string]any{
+					"protocol": "tcp",
+					"ports":    "5432",
+					"sources":  []any{"10.20.0.0/16"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got := mock.lastReq.InboundRules[0].Sources
+	if got == nil || len(got.Addresses) != 1 || got.Addresses[0] != "10.20.0.0/16" {
+		t.Errorf("Sources.Addresses = %#v, want [10.20.0.0/16]", got)
+	}
+}
