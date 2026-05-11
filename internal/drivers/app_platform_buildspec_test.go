@@ -613,15 +613,8 @@ func TestBuildAppSpec_Routes(t *testing.T) {
 		},
 	}
 	spec := buildSpecViaCreate(t, cfg)
-	routes := spec.Services[0].Routes
-	if len(routes) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(routes))
-	}
-	if routes[0].Path != "/api" || !routes[0].PreservePathPrefix {
-		t.Errorf("route[0] = %+v, want path=/api preserve=true", routes[0])
-	}
-	if routes[1].Path != "/health" {
-		t.Errorf("route[1].Path = %q, want /health", routes[1].Path)
+	if spec.Services[0].Routes != nil {
+		t.Fatalf("service Routes = %+v, want nil when top-level ingress rules are emitted", spec.Services[0].Routes)
 	}
 	if spec.Ingress == nil || len(spec.Ingress.Rules) != 2 {
 		t.Fatalf("expected 2 ingress rules from routes, got %+v", spec.Ingress)

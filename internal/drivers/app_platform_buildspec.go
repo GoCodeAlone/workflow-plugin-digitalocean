@@ -26,6 +26,11 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 
 	httpPort, httpPortSet := intFromConfig(cfg, "http_port", 8080)
 	instanceCount, _ := intFromConfig(cfg, "instance_count", 1)
+	ingress := ingressFromConfig(cfg, name)
+	serviceRoutes := routesFromConfig(cfg)
+	if ingress != nil && len(ingress.Rules) > 0 {
+		serviceRoutes = nil
+	}
 
 	svc := &godo.AppServiceSpec{
 		Name:                name,
@@ -40,7 +45,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		InstanceSizeSlug:    instanceSizeSlugFromConfig(cfg),
 		Protocol:            httpPortProtocolFromConfig(cfg),
 		InternalPorts:       internalPortsFromConfig(cfg),
-		Routes:              routesFromConfig(cfg),
+		Routes:              serviceRoutes,
 		HealthCheck:         serviceHealthCheckFromConfig(cfg),
 		LivenessHealthCheck: livenessHealthCheckFromConfig(cfg),
 		CORS:                corsFromConfig(cfg),
@@ -96,7 +101,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		StaticSites:                  staticSitesFromConfig(cfg),
 		Domains:                      domainsFromConfig(cfg),
 		Alerts:                       appAlertsFromConfig(cfg),
-		Ingress:                      ingressFromConfig(cfg, name),
+		Ingress:                      ingress,
 		Egress:                       egressFromConfig(cfg),
 		Maintenance:                  maintenanceFromConfig(cfg),
 		Vpc:                          vpcFromConfig(cfg),
