@@ -80,7 +80,7 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	if len(archive.IDs) != 1 || archive.IDs[0] != build.ID {
 		t.Fatalf("archive ids = %v, want [%s]", archive.IDs, build.ID)
 	}
-	if !containsArchiveFile(archive.Files, "dist/release/plugin.json", "plugin.json") {
+	if !containsArchiveFile(archive.Files, ".release/plugin.json", "plugin.json") {
 		t.Fatalf("archive files = %v, want plugin.json", archive.Files)
 	}
 	if !containsArchiveFile(archive.Files, "plugin.contracts.json", "plugin.contracts.json") {
@@ -116,7 +116,7 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 
 	archivePath := filepath.Join(t.TempDir(), "plugin.tar.gz")
 	if err := writeTestArchive(repoRoot, archivePath, archive.Files, map[string][]byte{
-		"dist/release/plugin.json": manifestData,
+		".release/plugin.json": manifestData,
 	}); err != nil {
 		t.Fatalf("write test archive: %v", err)
 	}
@@ -133,9 +133,10 @@ func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
 	}
 	text := string(releaseData)
 	for _, want := range []string{
-		"cp plugin.json dist/release/plugin.json",
-		"cp plugin.contracts.json dist/release/plugin.contracts.json",
-		"--file dist/release/plugin.json --strict-contracts",
+		"rm -rf .release",
+		"cp plugin.json .release/plugin.json",
+		"cp plugin.contracts.json .release/plugin.contracts.json",
+		"--file .release/plugin.json --strict-contracts",
 		"WFCTL_VERSION=$(GOWORK=off go list -m github.com/GoCodeAlone/workflow",
 	} {
 		if !strings.Contains(text, want) {
@@ -143,7 +144,7 @@ func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
 		}
 	}
 
-	dir := filepath.Join(t.TempDir(), "dist", "release")
+	dir := filepath.Join(t.TempDir(), ".release")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir release dir: %v", err)
 	}
@@ -160,6 +161,10 @@ func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("release validation directory missing %s: %v", name, err)
 		}
+	}
+
+	if strings.Contains(text, "dist/release") {
+		t.Fatal(".goreleaser.yaml must not generate manifests under dist; GoReleaser requires dist to remain empty before build")
 	}
 }
 

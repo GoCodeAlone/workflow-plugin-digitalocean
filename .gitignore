@@ -1,3 +1,4 @@
 data/plugins/
 .worktrees/
 dist/
+.release/

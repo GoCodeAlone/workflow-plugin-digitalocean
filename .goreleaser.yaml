@@ -4,9 +4,9 @@ project_name: workflow-plugin-digitalocean
 
 before:
   hooks:
-    - "sh -c \"mkdir -p dist/release && cp plugin.json dist/release/plugin.json && cp plugin.contracts.json dist/release/plugin.contracts.json && sed -i.bak 's/\\\"version\\\": \\\".*\\\"/\\\"version\\\": \\\"{{ .Version }}\\\"/' dist/release/plugin.json && rm -f dist/release/plugin.json.bak\""
-    - "sh -c \"sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' dist/release/plugin.json && rm -f dist/release/plugin.json.bak\""
-    - "sh -c \"export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(GOWORK=off go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file dist/release/plugin.json --strict-contracts\""
+    - "sh -c \"rm -rf .release && mkdir -p .release && cp plugin.json .release/plugin.json && cp plugin.contracts.json .release/plugin.contracts.json && sed -i.bak 's/\\\"version\\\": \\\".*\\\"/\\\"version\\\": \\\"{{ .Version }}\\\"/' .release/plugin.json && rm -f .release/plugin.json.bak\""
+    - "sh -c \"sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/{{ .Tag }}/|g' .release/plugin.json && rm -f .release/plugin.json.bak\""
+    - "sh -c \"export GOPRIVATE=github.com/GoCodeAlone/*; WFCTL_VERSION=$(GOWORK=off go list -m github.com/GoCodeAlone/workflow | awk '{print $2}') && GOWORK=off go run github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_VERSION} plugin validate --file .release/plugin.json --strict-contracts\""
 
 builds:
   - id: workflow-plugin-digitalocean
@@ -31,7 +31,7 @@ archives:
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
-      - src: dist/release/plugin.json
+      - src: .release/plugin.json
         dst: plugin.json
       - plugin.contracts.json
 
