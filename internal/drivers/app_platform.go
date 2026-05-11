@@ -3,6 +3,8 @@ package drivers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -308,32 +311,38 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 	// from before doesn't false-positive on the first Plan after upgrade
 	// — same pattern Droplet's monitoring/ipv6 comparisons use. Outputs
 	// will be populated on the next Read.
+	// Hash-based comparison: state.Outputs stores SHA-256 hashes only
+	// (never plaintext values — env_vars may contain JIT-substituted
+	// secrets). Diff side computes the desired-side hash via the same
+	// algorithm and compares strings. FieldChange Old/New are the
+	// HASHES, never the values themselves, so the changelog Path
+	// communicates "drift detected" without revealing what changed.
 	if desiredEnvs, ok := desired.Config["env_vars"].(map[string]any); ok {
-		if _, hasKey := current.Outputs["env_vars"]; hasKey {
-			curEnvs, _ := current.Outputs["env_vars"].(map[string]any)
-			if !envVarsEqual(desiredEnvs, curEnvs) {
+		if curHash, hasKey := current.Outputs["env_vars_hash"].(string); hasKey {
+			desiredHash := envVarsHashFromConfigMap(desiredEnvs)
+			if desiredHash != curHash {
 				changes = append(changes, interfaces.FieldChange{
-					Path: "env_vars", Old: curEnvs, New: desiredEnvs,
+					Path: "env_vars", Old: "[hash:" + curHash[:8] + "...]", New: "[hash:" + desiredHash[:8] + "...]",
 				})
 			}
 		}
 	}
 	if desiredJobs, ok := desired.Config["jobs"].([]any); ok {
-		if _, hasKey := current.Outputs["jobs"]; hasKey {
-			curJobs, _ := current.Outputs["jobs"].([]any)
-			if !componentEnvVarsEqual(desiredJobs, curJobs) {
+		if curHashes, hasKey := current.Outputs["jobs_hash"].(map[string]any); hasKey {
+			desiredHashes := componentHashesByName(desiredJobs)
+			if !hashMapsEqual(desiredHashes, curHashes) {
 				changes = append(changes, interfaces.FieldChange{
-					Path: "jobs", Old: curJobs, New: desiredJobs,
+					Path: "jobs", Old: "[hash-map]", New: "[hash-map]",
 				})
 			}
 		}
 	}
 	if desiredWorkers, ok := desired.Config["workers"].([]any); ok {
-		if _, hasKey := current.Outputs["workers"]; hasKey {
-			curWorkers, _ := current.Outputs["workers"].([]any)
-			if !componentEnvVarsEqual(desiredWorkers, curWorkers) {
+		if curHashes, hasKey := current.Outputs["workers_hash"].(map[string]any); hasKey {
+			desiredHashes := componentHashesByName(desiredWorkers)
+			if !hashMapsEqual(desiredHashes, curHashes) {
 				changes = append(changes, interfaces.FieldChange{
-					Path: "workers", Old: curWorkers, New: desiredWorkers,
+					Path: "workers", Old: "[hash-map]", New: "[hash-map]",
 				})
 			}
 		}
@@ -363,55 +372,11 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 	}, nil
 }
 
-// envVarsEqual compares two env_vars maps for value equality, ignoring nil
-// vs empty distinctions and coercing all values to strings (matching how
-// envVarsFromConfig converts `any` to string via fmt.Sprintf).
-func envVarsEqual(desired, current map[string]any) bool {
-	if len(desired) != len(current) {
-		return false
-	}
-	for k, dv := range desired {
-		cv, ok := current[k]
-		if !ok {
-			return false
-		}
-		if fmt.Sprintf("%v", dv) != fmt.Sprintf("%v", cv) {
-			return false
-		}
-	}
-	return true
-}
-
-// componentEnvVarsEqual compares two []any of jobs/workers entries on
-// `name` + `env_vars` only. Other component fields (image, instance_count,
-// kind) are intentionally not compared here — the existing image/expose
-// comparisons handle the per-component image drift via the top-level
-// service path, and the env_vars drift is the unique gap this guards.
-func componentEnvVarsEqual(desired, current []any) bool {
-	if len(desired) != len(current) {
-		return false
-	}
-	// Index by name for order-independent comparison. App Platform allows
-	// reordering jobs/workers, so a re-Read may shuffle them.
-	dByName := componentEnvVarsByName(desired)
-	cByName := componentEnvVarsByName(current)
-	if len(dByName) != len(cByName) {
-		return false
-	}
-	for name, dEnv := range dByName {
-		cEnv, ok := cByName[name]
-		if !ok {
-			return false
-		}
-		if !envVarsEqual(dEnv, cEnv) {
-			return false
-		}
-	}
-	return true
-}
-
-func componentEnvVarsByName(comps []any) map[string]map[string]any {
-	out := make(map[string]map[string]any, len(comps))
+// componentHashesByName indexes a desired-side jobs/workers list into a
+// name → hash map so Diff can compare against current.Outputs[*_hash]
+// (which is already name-keyed).
+func componentHashesByName(comps []any) map[string]any {
+	out := make(map[string]any, len(comps))
 	for _, c := range comps {
 		m, _ := c.(map[string]any)
 		if m == nil {
@@ -421,10 +386,27 @@ func componentEnvVarsByName(comps []any) map[string]map[string]any {
 		if name == "" {
 			continue
 		}
-		envs, _ := m["env_vars"].(map[string]any)
-		out[name] = envs
+		out[name] = componentHashFromConfig(m)
 	}
 	return out
+}
+
+// hashMapsEqual reports whether two name→hash maps describe the same
+// set of components. Used by jobs/workers hash drift detection.
+func hashMapsEqual(desired, current map[string]any) bool {
+	if len(desired) != len(current) {
+		return false
+	}
+	for name, dh := range desired {
+		ch, ok := current[name]
+		if !ok {
+			return false
+		}
+		if dh != ch {
+			return false
+		}
+	}
+	return true
 }
 
 // canonicalExpose returns the canonical `expose` value for a desired-spec
@@ -988,20 +970,22 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			// surface it as ForceNew (App Platform's UpdateApp does not
 			// accept region changes — region is a Create-only field).
 			"region": app.Spec.Region,
-			// `env_vars` (first service component) + per-component
-			// `jobs` / `workers` env_vars carry the JIT-resolved values
-			// that DO is actually running with. Without these in Outputs,
-			// Diff cannot detect drift when a referenced `infra_output:`
-			// secret (e.g. STAGING_PG_HOST sourced from
-			// coredump-staging-pg.private_ip) resolves to a new value on
-			// the next Apply — the App keeps its stale env_vars in
-			// state.config and Plan stays at 0 changes despite the
-			// Droplet's IP having moved. Surfaced on core-dump deploy run
-			// 25653219644: state.config DATABASE_URL pinned to a long-
-			// gone 10.20.0.2 while the live Droplet had moved to 10.20.0.6.
-			"env_vars": serviceEnvVarsFromSpec(app.Spec),
-			"jobs":     jobsCanonicalFromSpec(app.Spec),
-			"workers":  workersCanonicalFromSpec(app.Spec),
+			// env_vars / jobs / workers env_vars drift-detection — surfaced
+			// as content HASHES (sha256 over canonical-sorted JSON) instead
+			// of raw maps. v1.0.5 stored the maps verbatim, but the values
+			// come back from DO API JIT-resolved: a `${STAGING_PG_PASSWORD}`
+			// placeholder in infra.yaml that wfctl substituted before
+			// sending to DO surfaced in state.outputs as the plaintext
+			// password (state file lives in DO Spaces — accessible to
+			// anyone with the Spaces creds + via `wfctl infra outputs`).
+			// Hashing keeps Diff drift-detection (hash mismatch →
+			// NeedsUpdate) while never persisting plaintext secret values
+			// to state. Hashes also stabilize the structpb-round-trip:
+			// the same env_vars always hash to the same string regardless
+			// of map iteration order.
+			"env_vars_hash": serviceEnvVarsHashFromSpec(app.Spec),
+			"jobs_hash":     jobsHashFromSpec(app.Spec),
+			"workers_hash":  workersHashFromSpec(app.Spec),
 			// `routes` records the first service component's public ingress
 			// paths. Stored on Outputs so Diff can add/remove routes on
 			// existing apps instead of only honoring them at Create time.
@@ -1113,81 +1097,123 @@ func routesCanonicalEqual(desired, current []any) bool {
 	return true
 }
 
-// serviceEnvVarsFromSpec returns the first service component's Envs as a
-// canonical map[string]any so Diff can compare against the desired
-// `env_vars` config map. Returns nil when the spec has no services or the
-// first service has no Envs. Sensitive vars are included as their
-// godo-stored value (which is the ${SECRET_REF} placeholder for type=SECRET).
-func serviceEnvVarsFromSpec(spec *godo.AppSpec) map[string]any {
+// serviceEnvVarsHashFromSpec returns the SHA-256 hash of the first
+// service component's env_vars as canonical-sorted JSON. Hash-only
+// representation keeps Diff drift-detection working (hash mismatch →
+// NeedsUpdate) without persisting plaintext env_var values to state.
+// CRITICAL for security: env_vars may contain JIT-substituted secrets
+// (e.g. `${STAGING_PG_PASSWORD}` in infra.yaml that wfctl resolves to
+// the actual password before sending to DO). Returns "" when the spec
+// has no services or the first service has no Envs.
+func serviceEnvVarsHashFromSpec(spec *godo.AppSpec) string {
 	if spec == nil || len(spec.Services) == 0 || spec.Services[0] == nil {
-		return nil
+		return ""
 	}
-	return envVarsToCanonicalMap(spec.Services[0].Envs)
+	return envVarsHash(spec.Services[0].Envs)
 }
 
-// jobsCanonicalFromSpec converts AppSpec.Jobs to a canonical
-// `[]any` of `map[string]any{"name": ..., "env_vars": ...}` shape so Diff
-// can compare against the desired `jobs:` config. Critical for migrate-job
-// DATABASE_URL drift detection — pre_deploy jobs carry their own env_vars
-// which can independently go stale when an infra_output: ref resolves to
-// a new value (e.g. Droplet replace updating STAGING_PG_HOST).
-func jobsCanonicalFromSpec(spec *godo.AppSpec) []any {
+// jobsHashFromSpec returns SHA-256 hashes per job (keyed by name) of
+// each job's env_vars + kind. Hash-only mirrors the security model of
+// serviceEnvVarsHashFromSpec; jobs typically carry the same secret-
+// substituted DATABASE_URL the top-level service does, so the same
+// plaintext-leak risk applies.
+func jobsHashFromSpec(spec *godo.AppSpec) map[string]any {
 	if spec == nil || len(spec.Jobs) == 0 {
 		return nil
 	}
-	out := make([]any, 0, len(spec.Jobs))
+	out := make(map[string]any, len(spec.Jobs))
 	for _, j := range spec.Jobs {
-		if j == nil {
+		if j == nil || j.Name == "" {
 			continue
 		}
-		out = append(out, map[string]any{
-			"name":     j.Name,
-			"kind":     string(j.Kind),
-			"env_vars": envVarsToCanonicalMap(j.Envs),
-		})
+		out[j.Name] = componentHash(string(j.Kind), j.Envs)
 	}
 	return out
 }
 
-// workersCanonicalFromSpec mirrors jobsCanonicalFromSpec for AppSpec.Workers.
-// Workers don't run migrate steps but can also reference Droplet outputs in
-// their env_vars (NATS_URL, MESH_ENDPOINT, etc.), so symmetric Diff coverage
-// avoids the same silent-drift bug class.
-func workersCanonicalFromSpec(spec *godo.AppSpec) []any {
+// workersHashFromSpec mirrors jobsHashFromSpec for AppSpec.Workers.
+func workersHashFromSpec(spec *godo.AppSpec) map[string]any {
 	if spec == nil || len(spec.Workers) == 0 {
 		return nil
 	}
-	out := make([]any, 0, len(spec.Workers))
+	out := make(map[string]any, len(spec.Workers))
 	for _, w := range spec.Workers {
-		if w == nil {
+		if w == nil || w.Name == "" {
 			continue
 		}
-		out = append(out, map[string]any{
-			"name":     w.Name,
-			"env_vars": envVarsToCanonicalMap(w.Envs),
-		})
+		out[w.Name] = componentHash("", w.Envs)
 	}
 	return out
 }
 
-// envVarsToCanonicalMap converts []*godo.AppVariableDefinition to a
-// map[string]any{"KEY": "value"} so the structpb-encoded Outputs round-trip
-// preserves equality semantics with the desired-side `env_vars:` YAML map.
-// Sensitive vars surface their godo-side value verbatim (which is the
-// ${SECRET_REF} placeholder DO API stores for type=SECRET, kept stable
-// across reads — Diff would otherwise see masked vs unmasked).
-func envVarsToCanonicalMap(envs []*godo.AppVariableDefinition) map[string]any {
+// envVarsHash computes the SHA-256 of canonical-sorted JSON over the
+// env_vars (key+value pairs). Sorting by key ensures map-iteration
+// order doesn't affect the hash. Empty/nil envs hash to "" (not
+// sha256("[]")) so empty-vs-absent are treated identically.
+func envVarsHash(envs []*godo.AppVariableDefinition) string {
 	if len(envs) == 0 {
-		return nil
+		return ""
 	}
-	out := make(map[string]any, len(envs))
+	keys := make([]string, 0, len(envs))
+	byKey := make(map[string]string, len(envs))
 	for _, e := range envs {
 		if e == nil {
 			continue
 		}
-		out[e.Key] = e.Value
+		keys = append(keys, e.Key)
+		byKey[e.Key] = e.Value
 	}
-	return out
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		// Length-prefix each field so "AB"+"C" cannot collide with "A"+"BC".
+		fmt.Fprintf(h, "%d:%s=%d:%s\x00", len(k), k, len(byKey[k]), byKey[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// componentHash hashes a component's kind + env_vars together so Diff
+// detects changes to either dimension on jobs/workers.
+func componentHash(kind string, envs []*godo.AppVariableDefinition) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "kind=%s\x00", kind)
+	io.WriteString(h, envVarsHash(envs))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// envVarsHashFromConfigMap is the desired-side counterpart for envVarsHash:
+// hashes a map[string]any (the shape infra.yaml YAML decodes to) using the
+// same canonical-sorted-JSON algorithm. Values are coerced to string via
+// fmt.Sprintf to match envVarsFromConfig's coercion.
+func envVarsHashFromConfigMap(m map[string]any) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		v := fmt.Sprintf("%v", m[k])
+		fmt.Fprintf(h, "%d:%s=%d:%s\x00", len(k), k, len(v), v)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// componentHashFromConfig hashes a desired-side jobs[]/workers[] entry
+// (canonical-shape: map[string]any{"name", "kind", "env_vars"}). Mirrors
+// componentHash so desired and current hashes are directly comparable.
+func componentHashFromConfig(m map[string]any) string {
+	kind, _ := m["kind"].(string)
+	// Match godo's UPPER_SNAKE convention: pre_deploy → PRE_DEPLOY etc.
+	kind = strings.ToUpper(kind)
+	envs, _ := m["env_vars"].(map[string]any)
+	h := sha256.New()
+	fmt.Fprintf(h, "kind=%s\x00", kind)
+	io.WriteString(h, envVarsHashFromConfigMap(envs))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // vpcUUIDFromSpec extracts the App's attached VPC UUID. Empty string when
