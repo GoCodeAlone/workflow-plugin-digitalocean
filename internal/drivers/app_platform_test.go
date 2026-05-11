@@ -1898,3 +1898,153 @@ func TestAppPlatformDriver_Diff_AcceptsValidRegion(t *testing.T) {
 		t.Errorf("Diff with valid App Platform region must not error: %v", err)
 	}
 }
+
+// TestAppPlatformDriver_Diff_DetectsEnvVarsDrift is the regression test for
+// the silent-stale-DATABASE_URL bug: when an `infra_output:` secret
+// reference (e.g. STAGING_PG_HOST sourced from coredump-staging-pg.private_ip)
+// resolves to a NEW value on Apply (Droplet replace bumps the IP), the
+// App's env_vars need to be re-pushed to DO. Prior Diff only compared
+// image/expose/region, missing env_vars entirely → state.config DATABASE_URL
+// froze with the first-resolved IP, every subsequent Plan returned 0
+// changes, and the migrate job kept dialing the long-gone IP.
+//
+// Surfaced on core-dump deploy run 25653219644: state.config DATABASE_URL
+// pinned to 10.20.0.2 while the live Droplet had moved to 10.20.0.6.
+func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars": map[string]any{
+				"DATABASE_URL": "postgres://u:p@10.20.0.2:5432/db",
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars": map[string]any{
+				"DATABASE_URL": "postgres://u:p@10.20.0.6:5432/db", // newly-resolved IP
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatalf("expected NeedsUpdate=true when env_vars DATABASE_URL changed")
+	}
+	if result.NeedsReplace {
+		t.Errorf("env_vars change must NOT force replace (in-place Update suffices)")
+	}
+}
+
+// TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift covers the migrate-job
+// case specifically — pre_deploy jobs carry their own env_vars that can
+// independently go stale.
+func TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"jobs": []any{
+				map[string]any{
+					"name": "migrate",
+					"kind": "PRE_DEPLOY",
+					"env_vars": map[string]any{
+						"DATABASE_URL": "postgres://u:p@10.20.0.2:5432/db",
+					},
+				},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"jobs": []any{
+				map[string]any{
+					"name": "migrate",
+					"kind": "pre_deploy",
+					"env_vars": map[string]any{
+						"DATABASE_URL": "postgres://u:p@10.20.0.6:5432/db",
+					},
+				},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when job env_vars DATABASE_URL changed")
+	}
+}
+
+// TestAppPlatformDriver_Diff_NoSpurious_EnvVarsChange_OnEmptyState guards
+// the upgrade path: state from a prior plugin version (no env_vars in
+// Outputs) must NOT false-positive on the first Plan post-upgrade.
+func TestAppPlatformDriver_Diff_NoSpurious_EnvVarsChange_OnEmptyState(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			// env_vars key intentionally absent — state predates this version
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars": map[string]any{
+				"DATABASE_URL": "postgres://u:p@10.20.0.6:5432/db",
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Errorf("expected NeedsUpdate=false when current.Outputs lacks env_vars key (upgrade path)")
+	}
+}
+
+// TestAppPlatformDriver_Diff_DetectsVPCDrift covers VPC attachment change.
+func TestAppPlatformDriver_Diff_DetectsVPCDrift(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":    "registry.digitalocean.com/myrepo/myapp:v1",
+			"region":   "nyc",
+			"vpc_uuid": "", // App was created outside VPC
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":   "registry.digitalocean.com/myrepo/myapp:v1",
+			"region":  "nyc",
+			"vpc_ref": "14badc41-c954-4dfd-b1e2-87b72eb8a147",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when vpc_ref differs from current vpc_uuid")
+	}
+	if result.NeedsReplace {
+		t.Errorf("VPC attachment change must NOT force replace (in-place Update suffices)")
+	}
+}
