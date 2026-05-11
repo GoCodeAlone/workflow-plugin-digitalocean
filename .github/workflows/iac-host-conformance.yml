@@ -31,7 +31,7 @@ jobs:
       - name: Determine Workflow engine versions
         id: versions
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
           WORKFLOW_CURRENT_VERSION: ${{ vars.WORKFLOW_CURRENT_VERSION }}
         run: |
           set -euo pipefail
