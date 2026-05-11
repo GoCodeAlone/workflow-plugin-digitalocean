@@ -87,6 +87,11 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 	}
 	services := append([]*godo.AppServiceSpec{svc}, sidecars...)
 
+	ingress := ingressFromConfig(cfg, name)
+	if ingress != nil && len(ingress.Rules) > 0 {
+		svc.Routes = nil
+	}
+
 	spec := &godo.AppSpec{
 		Name:                         name,
 		Region:                       region,
@@ -96,7 +101,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		StaticSites:                  staticSitesFromConfig(cfg),
 		Domains:                      domainsFromConfig(cfg),
 		Alerts:                       appAlertsFromConfig(cfg),
-		Ingress:                      ingressFromConfig(cfg, name),
+		Ingress:                      ingress,
 		Egress:                       egressFromConfig(cfg),
 		Maintenance:                  maintenanceFromConfig(cfg),
 		Vpc:                          vpcFromConfig(cfg),
