@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -53,9 +54,9 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 		} `yaml:"builds"`
 		Archives []struct {
 			ID           string   `yaml:"id"`
-			Builds       []string `yaml:"builds"`
+			IDs          []string `yaml:"ids"`
 			NameTemplate string   `yaml:"name_template"`
-			Files        []string `yaml:"files"`
+			Files        []archiveFileSpec `yaml:"files"`
 		} `yaml:"archives"`
 	}
 	releaseData, err := os.ReadFile(filepath.Join(repoRoot, ".goreleaser.yaml"))
@@ -76,13 +77,13 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	if archive.NameTemplate != "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}" {
 		t.Fatalf("unsupported archive name_template %q; update download manifest generation/test", archive.NameTemplate)
 	}
-	if len(archive.Builds) != 1 || archive.Builds[0] != build.ID {
-		t.Fatalf("archive builds = %v, want [%s]", archive.Builds, build.ID)
+	if len(archive.IDs) != 1 || archive.IDs[0] != build.ID {
+		t.Fatalf("archive ids = %v, want [%s]", archive.IDs, build.ID)
 	}
-	if !containsString(archive.Files, "plugin.json") {
+	if !containsArchiveFile(archive.Files, "dist/release/plugin.json", "plugin.json") {
 		t.Fatalf("archive files = %v, want plugin.json", archive.Files)
 	}
-	if !containsString(archive.Files, "plugin.contracts.json") {
+	if !containsArchiveFile(archive.Files, "plugin.contracts.json", "plugin.contracts.json") {
 		t.Fatalf("archive files = %v, want plugin.contracts.json", archive.Files)
 	}
 
@@ -114,7 +115,9 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	}
 
 	archivePath := filepath.Join(t.TempDir(), "plugin.tar.gz")
-	if err := writeTestArchive(repoRoot, archivePath, archive.Files); err != nil {
+	if err := writeTestArchive(repoRoot, archivePath, archive.Files, map[string][]byte{
+		"dist/release/plugin.json": manifestData,
+	}); err != nil {
 		t.Fatalf("write test archive: %v", err)
 	}
 	if !tarGzContains(archivePath, "plugin.contracts.json") {
@@ -122,16 +125,84 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	}
 }
 
-func containsString(values []string, want string) bool {
+func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	releaseData, err := os.ReadFile(filepath.Join(repoRoot, ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	text := string(releaseData)
+	for _, want := range []string{
+		"cp plugin.json dist/release/plugin.json",
+		"cp plugin.contracts.json dist/release/plugin.contracts.json",
+		"--file dist/release/plugin.json --strict-contracts",
+		"WFCTL_VERSION=$(GOWORK=off go list -m github.com/GoCodeAlone/workflow",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf(".goreleaser.yaml release validation hook missing %q", want)
+		}
+	}
+
+	dir := filepath.Join(t.TempDir(), "dist", "release")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir release dir: %v", err)
+	}
+	for _, name := range []string{"plugin.json", "plugin.contracts.json"} {
+		data, err := os.ReadFile(filepath.Join(repoRoot, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			t.Fatalf("write release %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"plugin.json", "plugin.contracts.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("release validation directory missing %s: %v", name, err)
+		}
+	}
+}
+
+type archiveFileSpec struct {
+	Src string
+	Dst string
+}
+
+func (s *archiveFileSpec) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		s.Src = value.Value
+		s.Dst = value.Value
+		return nil
+	case yaml.MappingNode:
+		var raw struct {
+			Src string `yaml:"src"`
+			Dst string `yaml:"dst"`
+		}
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		s.Src = raw.Src
+		s.Dst = raw.Dst
+		if s.Dst == "" {
+			s.Dst = raw.Src
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported archive file spec kind %v", value.Kind)
+	}
+}
+
+func containsArchiveFile(values []archiveFileSpec, src, dst string) bool {
 	for _, value := range values {
-		if value == want {
+		if value.Src == src && value.Dst == dst {
 			return true
 		}
 	}
 	return false
 }
 
-func writeTestArchive(repoRoot, archivePath string, files []string) error {
+func writeTestArchive(repoRoot, archivePath string, files []archiveFileSpec, overrides map[string][]byte) error {
 	out, err := os.Create(archivePath)
 	if err != nil {
 		return err
@@ -141,12 +212,16 @@ func writeTestArchive(repoRoot, archivePath string, files []string) error {
 	defer gz.Close()
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
-	for _, name := range files {
-		data, err := os.ReadFile(filepath.Join(repoRoot, name))
-		if err != nil {
-			return err
+	for _, file := range files {
+		data, ok := overrides[file.Src]
+		if !ok {
+			var err error
+			data, err = os.ReadFile(filepath.Join(repoRoot, file.Src))
+			if err != nil {
+				return err
+			}
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: file.Dst, Mode: 0o644, Size: int64(len(data))}); err != nil {
 			return err
 		}
 		if _, err := tw.Write(data); err != nil {
