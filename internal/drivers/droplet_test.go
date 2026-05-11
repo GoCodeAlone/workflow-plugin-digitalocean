@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -1312,4 +1314,83 @@ func TestNewDropletDriverWithClient_TypedNilSafe(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDropletDriver_Create_WaitsForPrivateIP_BeforeReturning is a regression
+// test for the bug where DropletDriver.Create returned immediately after the
+// 202 Accepted from DO's Droplets.Create, persisting ResourceOutput.Outputs
+// with private_ip="" (DO assigns IPs only after the Droplet transitions to
+// "active", typically 30-90s later). Downstream consumers reading
+// `state.Outputs["private_ip"]` (e.g. core-dump deploy.yml's
+// `wfctl infra outputs --module coredump-staging-pg`) then got empty
+// strings, breaking dependency cascade.
+//
+// The fix: post-Create, poll Droplets.Get until status="active" AND
+// PrivateIPv4 is non-empty, then build the ResourceOutput from the
+// freshly-read Droplet record.
+func TestDropletDriver_Create_WaitsForPrivateIP_BeforeReturning(t *testing.T) {
+	// Simulate DO behavior: Create returns "new" droplet with no Networks
+	// (provisioning still in progress). Get is called repeatedly; first 2
+	// calls return the "new" record, third call returns "active" with IP.
+	// The test asserts (a) Get was polled, (b) returned Output has the
+	// post-active private_ip, NOT the empty intermediate value.
+	createReturned := &godo.Droplet{
+		ID: 100, Name: "pg", Status: "new",
+		Size: &godo.Size{Slug: "s-1vcpu-2gb"}, Region: &godo.Region{Slug: "nyc1"},
+	}
+	activeReturned := &godo.Droplet{
+		ID: 100, Name: "pg", Status: "active",
+		Size: &godo.Size{Slug: "s-1vcpu-2gb"}, Region: &godo.Region{Slug: "nyc1"},
+		Networks: &godo.Networks{V4: []godo.NetworkV4{
+			{IPAddress: "10.0.0.5", Type: "private"},
+		}},
+	}
+	mock := &pollingDropletClient{
+		createResp:    createReturned,
+		callsBeforeOK: 2,
+		activeResp:    activeReturned,
+	}
+	d := drivers.NewDropletDriverWithClient(mock, "nyc1")
+	d.SetReplaceTimeoutsForTest(2*time.Second, 10*time.Millisecond)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "pg",
+		Config: map[string]any{"size": "s-1vcpu-2gb", "image": "docker-20-04"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got, _ := out.Outputs["private_ip"].(string); got != "10.0.0.5" {
+		t.Errorf("private_ip = %q, want %q (driver returned before active state)", got, "10.0.0.5")
+	}
+	if mock.getCalls.Load() < 1 {
+		t.Errorf("expected at least 1 Get call to poll for active status, got %d", mock.getCalls.Load())
+	}
+}
+
+// pollingDropletClient is a fake whose Get returns createResp for the
+// first callsBeforeOK invocations, then activeResp thereafter — modelling
+// the DO API behavior where a freshly-Created Droplet takes several
+// poll cycles to transition to status=active with networking populated.
+type pollingDropletClient struct {
+	createResp    *godo.Droplet
+	activeResp    *godo.Droplet
+	callsBeforeOK int32
+	getCalls      atomic.Int32
+}
+
+func (m *pollingDropletClient) Create(_ context.Context, _ *godo.DropletCreateRequest) (*godo.Droplet, *godo.Response, error) {
+	return m.createResp, nil, nil
+}
+
+func (m *pollingDropletClient) Get(_ context.Context, _ int) (*godo.Droplet, *godo.Response, error) {
+	n := m.getCalls.Add(1)
+	if n <= m.callsBeforeOK {
+		return m.createResp, nil, nil
+	}
+	return m.activeResp, nil, nil
+}
+
+func (m *pollingDropletClient) Delete(_ context.Context, _ int) (*godo.Response, error) {
+	return nil, nil
 }

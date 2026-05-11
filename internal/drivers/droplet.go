@@ -158,7 +158,91 @@ func (d *DropletDriver) createWithResolvedVolumes(
 	if droplet == nil || droplet.ID == 0 {
 		return nil, fmt.Errorf("droplet create %q: API returned droplet with empty ID", spec.Name)
 	}
-	return d.dropletOutput(ctx, droplet), nil
+	// DO Droplets.Create returns 202 Accepted with the droplet record
+	// before networking is provisioned, so the immediate response has
+	// empty Networks.V4 and PrivateIPv4()/PublicIPv4() return "". Poll
+	// Droplets.Get until status="active" AND PrivateIPv4 is non-empty
+	// (private_ip is the canonical Output every downstream consumer reads
+	// for VPC connectivity); without this wait, ResourceOutput.Outputs
+	// gets persisted with empty private_ip and any subsequent
+	// `wfctl infra outputs` / secrets.generate `infra_output: ...
+	// .private_ip` lookup returns empty, breaking deploy chains.
+	//
+	// Skip the poll when Create's response is already ready (covers test
+	// fakes that hand back a fully-populated Droplet, and the production
+	// no-op case where DO has already finished provisioning by the time
+	// the API replies — rare but legal per the godo contract).
+	ready := droplet
+	if !dropletReady(ready) {
+		var waitErr error
+		ready, waitErr = d.waitForDropletReady(ctx, droplet.ID)
+		if waitErr != nil {
+			return nil, fmt.Errorf("droplet create %q: wait ready (id=%d): %w", spec.Name, droplet.ID, waitErr)
+		}
+	}
+	return d.dropletOutput(ctx, ready), nil
+}
+
+// dropletReady reports whether a Droplet is considered fully provisioned
+// for state-output purposes: Status must be "active" AND PrivateIPv4
+// must be non-empty. private_ip is the canonical VPC output downstream
+// consumers depend on; an "active" droplet without a private IP would
+// satisfy a status-only check but still write empty state.
+func dropletReady(d *godo.Droplet) bool {
+	if d == nil || d.Status != "active" {
+		return false
+	}
+	ip, _ := d.PrivateIPv4()
+	return ip != ""
+}
+
+// waitForDropletReady polls Droplets.Get(id) until the droplet's status
+// is "active" AND it has a private IPv4 (in-VPC drivers always assign one
+// at active time). Returns the freshly-read *godo.Droplet so callers can
+// build a fully-populated dropletOutput.
+//
+// Bounds: defaults to 5 minutes / 5 second poll interval — DO Droplet
+// provisioning is normally 30-90s; 5 minutes is the operator-recovery
+// boundary. Override via SetReplaceTimeoutsForTest in tests.
+func (d *DropletDriver) waitForDropletReady(ctx context.Context, id int) (*godo.Droplet, error) {
+	timeout, pollInterval := d.dropletReadyTimeouts()
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		droplet, _, err := d.client.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("get: %w", WrapGodoError(err))
+		}
+		if droplet == nil {
+			return nil, fmt.Errorf("API returned nil droplet")
+		}
+		if droplet.Status == "active" {
+			privateIP, _ := droplet.PrivateIPv4()
+			if privateIP != "" {
+				return droplet, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timeout after %s (status=%s, networks_v4_count=%d)",
+				timeout, droplet.Status, len(droplet.Networks.V4))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// dropletReadyTimeouts returns the active-readiness wait bounds.
+// SetReplaceTimeoutsForTest also overrides these so tests stay fast.
+func (d *DropletDriver) dropletReadyTimeouts() (time.Duration, time.Duration) {
+	if d.replaceTimeout != 0 {
+		return d.replaceTimeout, d.replacePollInterval
+	}
+	return 5 * time.Minute, 5 * time.Second
 }
 
 func (d *DropletDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {

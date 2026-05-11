@@ -77,6 +77,16 @@ func newRecordingDropletsClient() *recordingDropletsClient {
 			Status: "active",
 			Size:   &godo.Size{Slug: "s-1vcpu-2gb"},
 			Region: &godo.Region{Slug: "nyc1"},
+			// Networks populated so dropletReady() short-circuits the
+			// post-Create wait poll. Without this, the wait loop hits
+			// recordingDropletsClient.Get (returning the OLD droplet's
+			// getResponse, which lacks Networks) and times out after
+			// the production 5-minute deadline.
+			Networks: &godo.Networks{
+				V4: []godo.NetworkV4{
+					{IPAddress: "10.0.0.200", Type: "private"},
+				},
+			},
 		},
 	}
 }
