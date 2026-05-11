@@ -9,6 +9,13 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **App Platform route drift detection** — `infra.container_service.routes` is
+  now recorded in outputs and compared during `Diff`, so adding or clearing
+  public ingress routes on an existing app triggers an in-place App Platform
+  update instead of silently no-oping.
+
 ### Added
 
 - **`DropletDriver.Replace` implements `interfaces.ResourceReplacer`** (workflow v0.23.0+). Replaces use detach-before-create orchestration: read old → DetachByDropletID per attached Block Storage Volume → wait for each detach action completion (60s/2s bounds) → delete old Droplet → create new Droplet with the resolved volume IDs (bypassing the name-resolution race in `resolveDropletVolumes`). Fixes the "422 storage already associated with another droplet" failure class when replacing Droplets with attached Volumes.

@@ -34,9 +34,9 @@ type mockAppClient struct {
 	createDeploymentCalled bool
 	lastCreateReq          *godo.AppCreateRequest
 	lastUpdateReq          *godo.AppUpdateRequest
-	getLogsResult          *godo.AppLogs      // returned by GetLogs
-	getLogsErr             error              // error returned by GetLogs
-	getLogsRequests        []getLogsCall      // recorded GetLogs calls
+	getLogsResult          *godo.AppLogs // returned by GetLogs
+	getLogsErr             error         // error returned by GetLogs
+	getLogsRequests        []getLogsCall // recorded GetLogs calls
 }
 
 // getLogsCall records a single GetLogs invocation for assertion in tests.
@@ -512,6 +512,211 @@ func TestAppPlatformDriver_Diff_DetectsExposeChange_InternalToPublic(t *testing.
 	}
 	if !result.NeedsUpdate {
 		t.Fatal("expected NeedsUpdate=true when expose toggles internal→public")
+	}
+}
+
+func TestAppPlatformDriver_AppOutput_RoutesDerivedFromAppSpec(t *testing.T) {
+	mock := &mockAppClient{app: &godo.App{
+		ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec: &godo.AppSpec{
+			Name: "my-app",
+			Services: []*godo.AppServiceSpec{{
+				Name: "my-app",
+				Routes: []*godo.AppRouteSpec{{
+					Path:               "/",
+					PreservePathPrefix: true,
+				}},
+			}},
+		},
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	routes, _ := out.Outputs["routes"].([]any)
+	if len(routes) != 1 {
+		t.Fatalf("expected one route in outputs, got %#v", out.Outputs["routes"])
+	}
+	route, _ := routes[0].(map[string]any)
+	if route["path"] != "/" || route["preserve_path_prefix"] != true {
+		t.Fatalf("unexpected route output: %#v", route)
+	}
+}
+
+func TestAppPlatformDriver_Diff_DetectsRouteAdd(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			"routes": []any{},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+			"routes": []any{
+				map[string]any{"path": "/"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when desired route is missing from current app")
+	}
+	if !hasChangePath(result.Changes, "routes") {
+		t.Fatalf("expected routes FieldChange, got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_DetectsRouteRemoval(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			"routes": []any{
+				map[string]any{"path": "/", "preserve_path_prefix": false},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"routes": []any{},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected NeedsUpdate=true when desired routes explicitly clear current routes")
+	}
+	if !hasChangePath(result.Changes, "routes") {
+		t.Fatalf("expected routes FieldChange, got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_NoSpuriousRouteChange(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			"routes": []any{
+				map[string]any{"path": "/", "preserve_path_prefix": false},
+			},
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+			"routes": []any{
+				map[string]any{"path": "/"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Fatalf("expected no route update for equivalent routes, got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_DetectsRouteAdd_OnEmptyState(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			// routes key intentionally absent — state predates this version.
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+			"routes": []any{
+				map[string]any{"path": "/"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatalf("expected route update when desired declares routes and current.Outputs lacks routes key")
+	}
+	if !hasChangePath(result.Changes, "routes") {
+		t.Fatalf("expected routes FieldChange, got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_NoSpuriousRouteChange_WhenDesiredOmitted(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			// routes key intentionally absent — state predates this version.
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Fatalf("expected no route update when desired omits routes, got %+v", result.Changes)
+	}
+}
+
+func TestAppPlatformDriver_Diff_DetectsRouteClear_OnEmptyState(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"expose": "public",
+			// routes key intentionally absent — state predates this version.
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"routes": []any{},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatal("expected route update when desired explicitly clears routes and current.Outputs lacks routes key")
+	}
+	if !hasChangePath(result.Changes, "routes") {
+		t.Fatalf("expected routes FieldChange, got %+v", result.Changes)
 	}
 }
 
@@ -1493,8 +1698,8 @@ func TestTroubleshoot_AttachesDeployLogsForFailedDeployment(t *testing.T) {
 	}
 	mock := &mockAppClient{
 		app: &godo.App{
-			ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
-			Spec: &godo.AppSpec{Name: "my-app"},
+			ID:                   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+			Spec:                 &godo.AppSpec{Name: "my-app"},
 			InProgressDeployment: dep,
 		},
 		getLogsResult: &godo.AppLogs{
@@ -2047,4 +2252,13 @@ func TestAppPlatformDriver_Diff_DetectsVPCDrift(t *testing.T) {
 	if result.NeedsReplace {
 		t.Errorf("VPC attachment change must NOT force replace (in-place Update suffices)")
 	}
+}
+
+func hasChangePath(changes []interfaces.FieldChange, path string) bool {
+	for _, c := range changes {
+		if c.Path == path {
+			return true
+		}
+	}
+	return false
 }

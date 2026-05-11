@@ -257,6 +257,27 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 		changes = append(changes, interfaces.FieldChange{Path: "expose", Old: curExpose, New: desiredExpose})
 	}
 
+	// routes drift — App Platform routes live on the service component and
+	// control public ingress. buildAppSpec already sends cfg["routes"] on
+	// Create/Update; Diff must also compare them or existing apps never gain a
+	// route added after first create. Skip when desired omits routes so older
+	// configs do not unexpectedly manage provider defaults after upgrade.
+	if desiredRoutes, ok := desiredRoutesCanonicalFromConfig(desired.Config); ok {
+		if canonicalExpose(desired.Config) == "internal" {
+			desiredRoutes = nil
+		}
+		curRoutes := routesCanonicalFromOutput(current.Outputs["routes"])
+		if _, hasKey := current.Outputs["routes"]; !hasKey {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "routes", Old: "<unknown>", New: desiredRoutes,
+			})
+		} else if !routesCanonicalEqual(desiredRoutes, curRoutes) {
+			changes = append(changes, interfaces.FieldChange{
+				Path: "routes", Old: curRoutes, New: desiredRoutes,
+			})
+		}
+	}
+
 	// region: App Platform's UpdateApp does not accept region changes —
 	// region is a Create-only field on godo.AppSpec, so any drift forces
 	// replace. Mirror VolumeDriver.Diff's region pattern. Guard
@@ -981,6 +1002,10 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			"env_vars": serviceEnvVarsFromSpec(app.Spec),
 			"jobs":     jobsCanonicalFromSpec(app.Spec),
 			"workers":  workersCanonicalFromSpec(app.Spec),
+			// `routes` records the first service component's public ingress
+			// paths. Stored on Outputs so Diff can add/remove routes on
+			// existing apps instead of only honoring them at Create time.
+			"routes": routesCanonicalFromSpec(app.Spec),
 			// `vpc_uuid` records the App's VPC attachment so Diff can
 			// detect attachment drift. App Platform Update accepts VPC
 			// changes in-place; ForceNew not required.
@@ -992,6 +1017,100 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		out.Status = "pending"
 	}
 	return out
+}
+
+// desiredRoutesCanonicalFromConfig converts cfg["routes"] into the same
+// canonical shape produced from DO AppSpec. The boolean distinguishes absent
+// routes (do not manage on upgrade) from an explicit empty list (clear routes).
+func desiredRoutesCanonicalFromConfig(cfg map[string]any) ([]any, bool) {
+	raw, ok := cfg["routes"].([]any)
+	if !ok {
+		return nil, false
+	}
+	return routesCanonicalFromConfigList(raw), true
+}
+
+func routesCanonicalFromConfigList(raw []any) []any {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(raw))
+	for _, v := range raw {
+		m, _ := v.(map[string]any)
+		if m == nil {
+			continue
+		}
+		path, _ := m["path"].(string)
+		if path == "" {
+			path = "/"
+		}
+		preservePathPrefix, _ := m["preserve_path_prefix"].(bool)
+		out = append(out, routeCanonicalMap(path, preservePathPrefix))
+	}
+	return out
+}
+
+func routesCanonicalFromOutput(v any) []any {
+	raw, _ := v.([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(raw))
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		if m == nil {
+			continue
+		}
+		path, _ := m["path"].(string)
+		if path == "" {
+			path = "/"
+		}
+		preservePathPrefix, _ := m["preserve_path_prefix"].(bool)
+		out = append(out, routeCanonicalMap(path, preservePathPrefix))
+	}
+	return out
+}
+
+func routesCanonicalFromSpec(spec *godo.AppSpec) []any {
+	if spec == nil || len(spec.Services) == 0 || spec.Services[0] == nil || len(spec.Services[0].Routes) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(spec.Services[0].Routes))
+	for _, r := range spec.Services[0].Routes {
+		if r == nil {
+			continue
+		}
+		path := r.Path
+		if path == "" {
+			path = "/"
+		}
+		out = append(out, routeCanonicalMap(path, r.PreservePathPrefix))
+	}
+	return out
+}
+
+func routeCanonicalMap(path string, preservePathPrefix bool) map[string]any {
+	return map[string]any{
+		"path":                 path,
+		"preserve_path_prefix": preservePathPrefix,
+	}
+}
+
+func routesCanonicalEqual(desired, current []any) bool {
+	if len(desired) != len(current) {
+		return false
+	}
+	for i := range desired {
+		dm, _ := desired[i].(map[string]any)
+		cm, _ := current[i].(map[string]any)
+		if dm == nil || cm == nil {
+			return dm == nil && cm == nil
+		}
+		if dm["path"] != cm["path"] || dm["preserve_path_prefix"] != cm["preserve_path_prefix"] {
+			return false
+		}
+	}
+	return true
 }
 
 // serviceEnvVarsFromSpec returns the first service component's Envs as a
