@@ -623,6 +623,18 @@ func TestBuildAppSpec_Routes(t *testing.T) {
 	if routes[1].Path != "/health" {
 		t.Errorf("route[1].Path = %q, want /health", routes[1].Path)
 	}
+	if spec.Ingress == nil || len(spec.Ingress.Rules) != 2 {
+		t.Fatalf("expected 2 ingress rules from routes, got %+v", spec.Ingress)
+	}
+	if spec.Ingress.Rules[0].Match == nil || spec.Ingress.Rules[0].Match.Path == nil || spec.Ingress.Rules[0].Match.Path.Prefix == nil {
+		t.Fatalf("route[0] ingress match missing: %+v", spec.Ingress.Rules[0])
+	}
+	if got := *spec.Ingress.Rules[0].Match.Path.Prefix; got != "/api" {
+		t.Errorf("ingress route[0] prefix = %q, want /api", got)
+	}
+	if spec.Ingress.Rules[0].Component == nil || spec.Ingress.Rules[0].Component.Name != "test-app" || !spec.Ingress.Rules[0].Component.PreservePathPrefix {
+		t.Errorf("ingress route[0] component = %+v, want test-app preserve=true", spec.Ingress.Rules[0].Component)
+	}
 }
 
 // ── HealthCheck ──────────────────────────────────────────────────────────────

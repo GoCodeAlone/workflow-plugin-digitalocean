@@ -550,6 +550,54 @@ func TestAppPlatformDriver_AppOutput_RoutesDerivedFromAppSpec(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_AppOutput_RoutesDerivedFromIngressSpec(t *testing.T) {
+	path := "/"
+	otherPath := "/sidecar"
+	mock := &mockAppClient{app: &godo.App{
+		ID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec: &godo.AppSpec{
+			Name: "my-app",
+			Services: []*godo.AppServiceSpec{{
+				Name: "my-app",
+			}},
+			Ingress: &godo.AppIngressSpec{Rules: []*godo.AppIngressSpecRule{{
+				Match: &godo.AppIngressSpecRuleMatch{
+					Path: &godo.AppIngressSpecRuleStringMatch{Prefix: &path},
+				},
+				Component: &godo.AppIngressSpecRuleRoutingComponent{
+					Name:               "my-app",
+					PreservePathPrefix: true,
+				},
+			}, {
+				Match: &godo.AppIngressSpecRuleMatch{
+					Path: &godo.AppIngressSpecRuleStringMatch{Prefix: &otherPath},
+				},
+				Component: &godo.AppIngressSpecRuleRoutingComponent{
+					Name: "sidecar",
+				},
+			}}},
+		},
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	routes, _ := out.Outputs["routes"].([]any)
+	if len(routes) != 1 {
+		t.Fatalf("expected one route in outputs, got %#v", out.Outputs["routes"])
+	}
+	route, _ := routes[0].(map[string]any)
+	if route["path"] != "/" || route["preserve_path_prefix"] != true {
+		t.Fatalf("unexpected route output: %#v", route)
+	}
+}
+
 func TestAppPlatformDriver_Diff_DetectsRouteAdd(t *testing.T) {
 	mock := &mockAppClient{}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
@@ -2149,7 +2197,6 @@ func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
 		t.Errorf("env_vars change must NOT force replace (in-place Update suffices)")
 	}
 }
-
 
 // TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift covers the migrate-job
 // case specifically — pre_deploy jobs carry their own env_vars that can
