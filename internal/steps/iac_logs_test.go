@@ -89,8 +89,7 @@ func TestIaCLogsFactory_CreateStep_Defaults(t *testing.T) {
 
 // ── Execute tests ─────────────────────────────────────────────────────────────
 
-// newTestStep constructs a step instance via the factory and returns it
-// alongside a test HTTP server that serves the given log body.
+// newTestStep constructs a step instance via the factory and returns it.
 func newTestStep(t *testing.T, client steps.IaCLogsClient, cfg map[string]any) sdk.StepInstance {
 	t.Helper()
 	factory := steps.NewIaCLogsFactory(client)
@@ -212,7 +211,8 @@ func TestIaCLogsStep_Execute_WithHistoricURL(t *testing.T) {
 		t.Errorf("log_url should be LiveURL, got: %v", output["log_url"])
 	}
 	// No component_name was specified → 0 means "all components (aggregate)".
-	if output["component_count"].(int) != 0 {
+	// component_count is emitted as float64 to survive structpb round-trips.
+	if output["component_count"].(float64) != 0 {
 		t.Errorf("component_count should be 0 (all components) when no component_name, got: %v", output["component_count"])
 	}
 }
@@ -230,7 +230,10 @@ func TestIaCLogsStep_Execute_WithComponentName(t *testing.T) {
 		"module":         "my-app",
 		"component_name": "web",
 	})
-	_, _ = inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	_, err := inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected Execute error: %v", err)
+	}
 	if capturedComponent != "web" {
 		t.Errorf("expected component_name 'web' forwarded to GetLogs, got %q", capturedComponent)
 	}
@@ -246,7 +249,10 @@ func TestIaCLogsStep_Execute_LogTypeDefault(t *testing.T) {
 		},
 	}
 	inst := newTestStep(t, capturedClient, map[string]any{"module": "my-app"})
-	_, _ = inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	_, err := inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected Execute error: %v", err)
+	}
 	if capturedLogType != godo.AppLogTypeRun {
 		t.Errorf("default log_type should be RUN, got %q", capturedLogType)
 	}
@@ -264,7 +270,10 @@ func TestIaCLogsStep_Execute_LogTypeBuild(t *testing.T) {
 		"module":   "my-app",
 		"log_type": "BUILD",
 	})
-	_, _ = inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	_, err := inst.Execute(context.Background(), nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected Execute error: %v", err)
+	}
 	if capturedLogType != godo.AppLogTypeBuild {
 		t.Errorf("expected log_type BUILD, got %q", capturedLogType)
 	}

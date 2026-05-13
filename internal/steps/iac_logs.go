@@ -143,7 +143,9 @@ func (s *iacLogsStep) Execute(ctx context.Context, _ map[string]any, _ map[strin
 	}
 
 	// Component count: 1 when a specific component is requested, 0 means "all".
-	componentCount := 1
+	// Emitted as float64 so the value round-trips correctly through structpb.NewStruct
+	// (which encodes all numbers as float64 in JSON-derived proto Struct values).
+	var componentCount float64 = 1
 	if s.cfg.componentName == "" {
 		componentCount = 0 // all components aggregated
 	}
@@ -176,16 +178,24 @@ func (s *iacLogsStep) Execute(ctx context.Context, _ map[string]any, _ map[strin
 	}, nil
 }
 
-// resolveAppID lists DO apps and returns the ID of the app whose Spec.Name
-// matches appName. Returns an error if not found or if the List call fails.
+// resolveAppID lists DO apps (paginated) and returns the ID of the app whose
+// Spec.Name matches appName. Returns an error if not found or if any List
+// call fails. Each page fetches up to 200 apps; iteration stops when the
+// returned page is shorter than PerPage (last page) or the app is found.
 func resolveAppID(ctx context.Context, client IaCLogsClient, appName string) (string, error) {
-	apps, _, err := client.List(ctx, &godo.ListOptions{Page: 1, PerPage: 200})
-	if err != nil {
-		return "", err
-	}
-	for _, app := range apps {
-		if app.Spec != nil && app.Spec.Name == appName {
-			return app.ID, nil
+	const perPage = 200
+	for page := 1; ; page++ {
+		apps, _, err := client.List(ctx, &godo.ListOptions{Page: page, PerPage: perPage})
+		if err != nil {
+			return "", err
+		}
+		for _, app := range apps {
+			if app.Spec != nil && app.Spec.Name == appName {
+				return app.ID, nil
+			}
+		}
+		if len(apps) < perPage {
+			break // last page
 		}
 	}
 	return "", fmt.Errorf("app %q not found in DigitalOcean App Platform", appName)
@@ -203,7 +213,7 @@ var logFetchClient = &http.Client{Timeout: 30 * time.Second}
 func fetchLogContent(ctx context.Context, url string, tailLines int) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("build log request: invalid URL shape")
+		return "", fmt.Errorf("log request: invalid URL shape")
 	}
 	resp, err := logFetchClient.Do(req)
 	if err != nil {
@@ -220,8 +230,8 @@ func fetchLogContent(ctx context.Context, url string, tailLines int) (string, er
 	return tailString(string(body), tailLines), nil
 }
 
-// tailString returns the last n non-empty lines of s. When s has fewer than
-// n lines the entire string is returned unchanged.
+// tailString returns the last n lines of s. When s has fewer than n lines the
+// entire string is returned unchanged. Empty lines are preserved (not filtered).
 func tailString(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) <= n {
@@ -247,7 +257,7 @@ func parseLogType(s string) (godo.AppLogType, error) {
 }
 
 // intFromConfig extracts an int from a map[string]any config value. Handles
-// int, int64, float64 (JSON numbers) and string representations.
+// int, int64, and float64 (JSON numbers are decoded as float64 by encoding/json).
 func intFromConfig(config map[string]any, key string) (int, bool) {
 	v, ok := config[key]
 	if !ok {

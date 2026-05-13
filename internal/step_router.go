@@ -165,7 +165,10 @@ func (s *doIaCServer) DestroyStep(_ context.Context, req *pb.HandleRequest) (*pb
 // These are required for the interface but are not used by this plugin.
 
 func (s *doIaCServer) GetModuleTypes(_ context.Context, _ *emptypb.Empty) (*pb.TypeList, error) {
-	return &pb.TypeList{}, nil
+	// Return Unimplemented so the engine falls back to the disk plugin.json for
+	// module-type discovery (iac.provider). An empty TypeList would hide the
+	// advertised module type from gRPC-based capability discovery.
+	return nil, status.Error(codes.Unimplemented, "module types served from disk plugin.json")
 }
 
 func (s *doIaCServer) GetTriggerTypes(_ context.Context, _ *emptypb.Empty) (*pb.TypeList, error) {
