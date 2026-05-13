@@ -69,12 +69,14 @@ func (s *doIaCServer) GetManifest(_ context.Context, _ *emptypb.Empty) (*pb.Mani
 // GetContractRegistry returns the typed-IaC service registrations from the
 // underlying gRPC server. This is the critical forward-compat hook: without
 // it the host's ExternalPluginAdapter cannot discover IaC services.
+// Returns FailedPrecondition when SetGRPCServer has not been called yet, so
+// mis-wiring is surfaced immediately rather than silently hiding IaC contracts.
 func (s *doIaCServer) GetContractRegistry(_ context.Context, _ *emptypb.Empty) (*pb.ContractRegistry, error) {
 	s.mu.RLock()
 	srv := s.grpcSrv
 	s.mu.RUnlock()
 	if srv == nil {
-		return &pb.ContractRegistry{}, nil
+		return nil, status.Error(codes.FailedPrecondition, "GetContractRegistry: SetGRPCServer was not called — plugin wiring incomplete")
 	}
 	return sdk.BuildContractRegistry(srv), nil
 }

@@ -201,9 +201,9 @@ func resolveAppID(ctx context.Context, client IaCLogsClient, appName string) (st
 	return "", fmt.Errorf("app %q not found in DigitalOcean App Platform", appName)
 }
 
-// logFetchTimeout is the per-request timeout for fetching log content from
-// DO's presigned HistoricURLs. 30s provides generous headroom for slow S3
-// presigned URL responses without hanging pipelines indefinitely.
+// logFetchClient is an http.Client with a 30 s per-request timeout used when
+// fetching log content from DO's presigned HistoricURLs. 30 s provides generous
+// headroom for slow S3 presigned URL responses without hanging pipelines.
 var logFetchClient = &http.Client{Timeout: 30 * time.Second}
 
 // fetchLogContent fetches the first log URL and returns the last tailLines
