@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
+	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/steps"
 	"github.com/GoCodeAlone/workflow/iac/wfctlhelpers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/GoCodeAlone/workflow/platform"
@@ -140,6 +141,15 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.iam_role", Tier: 1, Operations: noScale},
 		{ResourceType: "infra.api_gateway", Tier: 3, Operations: noScale},
 	}
+}
+
+// AppsClient returns the godo Apps service for use by pipeline steps.
+// Returns nil when the provider has not yet been initialized (Initialize not called).
+func (p *DOProvider) AppsClient() steps.IaCLogsClient {
+	if p.client == nil {
+		return nil
+	}
+	return p.client.Apps
 }
 
 // ResourceDriver returns the driver for the given resource type.

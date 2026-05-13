@@ -41,6 +41,11 @@ import (
 // the SDK type-assert succeed when only some of the optional methods are
 // overridden — though doIaCServer overrides every one for parity with the
 // underlying *DOProvider's interface coverage.
+//
+// doIaCServer also implements pb.PluginServiceServer (step-related methods)
+// so the workflow SDK (v0.51.6+) can auto-register it as the PluginService,
+// enabling step.iac_logs and any future step types to be served alongside
+// the typed IaC contract on the same gRPC connection. See step_router.go.
 type doIaCServer struct {
 	pb.UnimplementedIaCProviderRequiredServer
 	pb.UnimplementedIaCProviderEnumeratorServer
@@ -55,8 +60,19 @@ type doIaCServer struct {
 	// dispatch methods are declared in resourcedriver_server.go
 	// (Task 11 of the strict-contracts force-cutover plan).
 	pb.UnimplementedResourceDriverServer
+	// pb.UnimplementedPluginServiceServer satisfies the
+	// mustEmbedUnimplementedPluginServiceServer() forward-compat
+	// requirement on pb.PluginServiceServer. All PluginService methods
+	// that doIaCServer actually handles are overridden in step_router.go;
+	// remaining methods fall back to the Unimplemented stubs here.
+	pb.UnimplementedPluginServiceServer
 
 	provider *DOProvider
+
+	// stepRegistry holds the embedded step management state (instances map,
+	// grpcSrv ref, and mu) used by the pb.PluginServiceServer implementation
+	// in step_router.go.
+	stepRegistry
 }
 
 // newDOIaCServer constructs a typed-IaC server backed by the given
