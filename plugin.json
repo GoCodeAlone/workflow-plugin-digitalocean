@@ -38,7 +38,7 @@
   "capabilities": {
     "configProvider": false,
     "moduleTypes": ["iac.provider"],
-    "stepTypes": ["step.iac_logs"],
+    "stepTypes": ["step.iac_logs", "step.iac_scale"],
     "triggerTypes": [],
     "iacProvider": {
       "name": "digitalocean",

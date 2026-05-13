@@ -152,6 +152,15 @@ func (p *DOProvider) AppsClient() steps.IaCLogsClient {
 	return p.client.Apps
 }
 
+// AppsScaleClient returns the godo Apps service as steps.AppsScaleClient for
+// use by step.iac_scale. Returns nil when Initialize has not been called.
+func (p *DOProvider) AppsScaleClient() steps.AppsScaleClient {
+	if p.client == nil {
+		return nil
+	}
+	return p.client.Apps
+}
+
 // ResourceDriver returns the driver for the given resource type.
 func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDriver, error) {
 	d, ok := p.drivers[resourceType]
