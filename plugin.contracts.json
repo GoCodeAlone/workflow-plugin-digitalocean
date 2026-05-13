@@ -13,6 +13,14 @@
       "mode": "strict",
       "input": "workflow.plugins.digitalocean.IacLogsRequest",
       "output": "workflow.plugins.digitalocean.IacLogsResponse"
+    },
+    {
+      "kind": "step",
+      "type": "step.iac_scale",
+      "mode": "strict",
+      "config": "workflow.plugins.digitalocean.IacScaleConfig",
+      "input": "workflow.plugins.digitalocean.IacScaleInput",
+      "output": "workflow.plugins.digitalocean.IacScaleOutput"
     }
   ]
 }

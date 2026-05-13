@@ -83,23 +83,33 @@ func (s *doIaCServer) GetContractRegistry(_ context.Context, _ *emptypb.Empty) (
 
 // GetStepTypes returns the step type names provided by this plugin.
 func (s *doIaCServer) GetStepTypes(_ context.Context, _ *emptypb.Empty) (*pb.TypeList, error) {
-	return &pb.TypeList{Types: []string{"step.iac_logs"}}, nil
+	return &pb.TypeList{Types: []string{
+		"step.iac_logs",
+		"step.iac_scale",
+	}}, nil
 }
 
-// CreateStep instantiates a step.iac_logs instance for the given config and
+// CreateStep instantiates a step instance for the given type and config, then
 // stores it under a newly-allocated handle ID.
 func (s *doIaCServer) CreateStep(_ context.Context, req *pb.CreateStepRequest) (*pb.HandleResponse, error) {
-	if req.GetType() != "step.iac_logs" {
-		return &pb.HandleResponse{Error: fmt.Sprintf("unknown step type %q", req.GetType())}, nil
-	}
-
 	cfg := make(map[string]any)
 	if req.GetConfig() != nil {
 		cfg = req.GetConfig().AsMap()
 	}
 
-	factory := steps.NewIaCLogsFactory(s.provider.AppsClient())
-	inst, err := factory.CreateStep(req.GetType(), req.GetName(), cfg)
+	var inst sdk.StepInstance
+	var err error
+
+	switch req.GetType() {
+	case "step.iac_logs":
+		factory := steps.NewIaCLogsFactory(s.provider.AppsClient())
+		inst, err = factory.CreateStep(req.GetType(), req.GetName(), cfg)
+	case "step.iac_scale":
+		inst = steps.NewIaCScaleStep(req.GetName(), s.provider.AppsScaleClient())
+	default:
+		return &pb.HandleResponse{Error: fmt.Sprintf("unknown step type %q", req.GetType())}, nil
+	}
+
 	if err != nil {
 		return &pb.HandleResponse{Error: err.Error()}, nil //nolint:nilerr // app error in response field
 	}
