@@ -113,10 +113,10 @@ func TestIaCScale_ScaleUp(t *testing.T) {
 	if result.Output["app_id"] != "app-123" {
 		t.Errorf("app_id = %v, want app-123", result.Output["app_id"])
 	}
-	if result.Output["previous_count"] != int64(1) {
+	if result.Output["previous_count"] != float64(1) {
 		t.Errorf("previous_count = %v, want 1", result.Output["previous_count"])
 	}
-	if result.Output["new_count"] != int64(3) {
+	if result.Output["new_count"] != float64(3) {
 		t.Errorf("new_count = %v, want 3", result.Output["new_count"])
 	}
 	if result.Output["deployment_id"] != "dep-new" {
@@ -160,10 +160,10 @@ func TestIaCScale_ScaleDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Output["previous_count"] != int64(5) {
+	if result.Output["previous_count"] != float64(5) {
 		t.Errorf("previous_count = %v, want 5", result.Output["previous_count"])
 	}
-	if result.Output["new_count"] != int64(2) {
+	if result.Output["new_count"] != float64(2) {
 		t.Errorf("new_count = %v, want 2", result.Output["new_count"])
 	}
 }
@@ -191,10 +191,10 @@ func TestIaCScale_Idempotent(t *testing.T) {
 	if fake.lastUpdateReq != nil {
 		t.Error("Update should not be called when count is already at target")
 	}
-	if result.Output["previous_count"] != int64(2) {
+	if result.Output["previous_count"] != float64(2) {
 		t.Errorf("previous_count = %v, want 2", result.Output["previous_count"])
 	}
-	if result.Output["new_count"] != int64(2) {
+	if result.Output["new_count"] != float64(2) {
 		t.Errorf("new_count = %v, want 2", result.Output["new_count"])
 	}
 	if result.Output["deployment_id"] != "" {

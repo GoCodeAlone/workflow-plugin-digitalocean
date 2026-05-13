@@ -106,8 +106,11 @@ func (s *iacScaleStep) Execute(
 	// No-op path: count is already at target — skip the Update call entirely.
 	if previousCount == targetCount {
 		return &sdk.StepResult{Output: map[string]any{
-			"previous_count": previousCount,
-			"new_count":      previousCount,
+			// Use float64 for numeric outputs: structpb.NewStruct (used by step_router.go
+			// to encode the output over gRPC) only supports float64 for numbers; int64
+			// values cause "encode step output" marshalling errors.
+			"previous_count": float64(previousCount),
+			"new_count":      float64(previousCount),
 			"app_id":         appID,
 			"deployment_id":  "",
 		}}, nil
@@ -132,8 +135,10 @@ func (s *iacScaleStep) Execute(
 	}
 
 	return &sdk.StepResult{Output: map[string]any{
-		"previous_count": previousCount,
-		"new_count":      targetCount,
+		// Use float64 for numeric outputs: structpb.NewStruct only supports float64
+		// for numbers; int64 values cause marshalling errors over gRPC.
+		"previous_count": float64(previousCount),
+		"new_count":      float64(targetCount),
 		"app_id":         appID,
 		"deployment_id":  deploymentID,
 	}}, nil
@@ -203,13 +208,15 @@ func findServiceCount(spec *godo.AppSpec, componentName string) (int64, bool) {
 }
 
 // setServiceCount replaces the named service entry in spec.Services with a
-// shallow copy whose InstanceCount is set to count. Using a copy avoids
-// mutating the pointer owned by the godo Get response in-place, which
-// prevents aliasing surprises if the caller reuses the original app object.
+// shallow copy of the AppServiceSpec struct whose InstanceCount is set to count.
+// The slice element (spec.Services[i]) is replaced with a new pointer to the
+// copied struct, so the original AppServiceSpec that was pointed to by the godo
+// Get response is not mutated — only the slice entry is updated.
 func setServiceCount(spec *godo.AppSpec, componentName string, count int64) {
 	for i, svc := range spec.Services {
 		if svc.Name == componentName {
-			// Shallow-copy the spec to avoid mutating the Get-response pointer.
+			// Copy the AppServiceSpec struct (not the spec itself) so the
+			// original struct pointed to by the Get response is not modified.
 			copied := *svc
 			copied.InstanceCount = count
 			spec.Services[i] = &copied
