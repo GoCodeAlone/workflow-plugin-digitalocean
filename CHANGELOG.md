@@ -15,6 +15,12 @@ All notable changes to workflow-plugin-digitalocean are documented here.
   now recorded in outputs and compared during `Diff`, so adding or clearing
   public ingress routes on an existing app triggers an in-place App Platform
   update instead of silently no-oping.
+- **Database adoption hydrates connection outputs** — name-based reads now
+  follow the list match with a `Get` call so adopted managed databases expose
+  `outputs.uri` for Workflow `infra_output` secret generation.
+- **plugin.json download URLs stay release-aligned** — the tag sync workflow now
+  updates both manifest `version` and download URLs, preventing stale asset
+  links after release tags.
 
 ### Added
 

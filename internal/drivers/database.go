@@ -164,6 +164,24 @@ func (d *DatabaseDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (
 // findDatabaseByName iterates the paginated database list and returns the first
 // database whose Name matches. Returns ErrResourceNotFound if no match is found.
 func (d *DatabaseDriver) findDatabaseByName(ctx context.Context, name string) (*interfaces.ResourceOutput, error) {
+	db, err := d.lookupDatabaseByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if db.ID == "" {
+		return dbOutput(db), nil
+	}
+	hydrated, _, err := d.client.Get(ctx, db.ID)
+	if err != nil {
+		return nil, fmt.Errorf("database read %q after name lookup: %w", name, WrapGodoError(err))
+	}
+	if hydrated == nil {
+		return dbOutput(db), nil
+	}
+	return dbOutput(hydrated), nil
+}
+
+func (d *DatabaseDriver) lookupDatabaseByName(ctx context.Context, name string) (*godo.Database, error) {
 	opts := &godo.ListOptions{Page: 1, PerPage: 200}
 	for {
 		dbs, resp, err := d.client.List(ctx, opts)
@@ -172,7 +190,7 @@ func (d *DatabaseDriver) findDatabaseByName(ctx context.Context, name string) (*
 		}
 		for i := range dbs {
 			if dbs[i].Name == name {
-				return dbOutput(&dbs[i]), nil
+				return &dbs[i], nil
 			}
 		}
 		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
@@ -193,11 +211,11 @@ func (d *DatabaseDriver) resolveProviderID(ctx context.Context, ref interfaces.R
 	}
 	log.Printf("warn: database %q: ProviderID %q is not UUID-like; resolving by name (state-heal)",
 		ref.Name, ref.ProviderID)
-	out, err := d.findDatabaseByName(ctx, ref.Name)
+	db, err := d.lookupDatabaseByName(ctx, ref.Name)
 	if err != nil {
 		return "", fmt.Errorf("database state-heal for %q: %w", ref.Name, err)
 	}
-	return out.ProviderID, nil
+	return db.ID, nil
 }
 
 func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {

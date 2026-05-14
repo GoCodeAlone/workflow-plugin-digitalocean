@@ -24,16 +24,18 @@ jobs:
       - name: Update plugin.json
         run: |
           if [ ! -f plugin.json ]; then echo "no plugin.json; skipping"; exit 0; fi
-          CURRENT=$(python3 -c "import json; print(json.load(open('plugin.json')).get('version',''))")
           TARGET="${{ steps.ver.outputs.version }}"
-          if [ "$CURRENT" = "$TARGET" ]; then
-            echo "plugin.json already at $TARGET; no action"
-            exit 0
-          fi
           python3 -c "
           import json
+          tag = '${{ steps.ver.outputs.tag }}'
           p = json.load(open('plugin.json'))
           p['version'] = '$TARGET'
+          name = p.get('name', 'workflow-plugin-digitalocean')
+          for dl in p.get('downloads', []):
+              goos = dl.get('os')
+              goarch = dl.get('arch')
+              if goos and goarch:
+                  dl['url'] = f'https://github.com/GoCodeAlone/{name}/releases/download/{tag}/{name}-{goos}-{goarch}.tar.gz'
           json.dump(p, open('plugin.json', 'w'), indent=2)
           open('plugin.json', 'a').write('\n')
           "
