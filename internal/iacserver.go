@@ -66,6 +66,7 @@ type doIaCServer struct {
 	// that doIaCServer actually handles are overridden in step_router.go;
 	// remaining methods fall back to the Unimplemented stubs here.
 	pb.UnimplementedPluginServiceServer
+	pb.UnimplementedIaCStateBackendServer
 
 	provider *DOProvider
 
@@ -73,6 +74,12 @@ type doIaCServer struct {
 	// grpcSrv ref, and mu) used by the pb.PluginServiceServer implementation
 	// in step_router.go.
 	stepRegistry
+
+	// stateBackend serves the typed pb.IaCStateBackendServer surface
+	// (spaces backend). Per decisions/0035, this one type carries both the
+	// IaC-provider and the IaC-state-backend concerns. The backing store is
+	// constructed lazily via the Configure RPC — see internal/statebackend_server.go.
+	stateBackend stateBackend
 }
 
 // newDOIaCServer constructs a typed-IaC server backed by the given
@@ -102,6 +109,10 @@ var (
 	_ pb.IaCProviderMigrationRepairerServer   = (*doIaCServer)(nil)
 	_ pb.IaCProviderValidatorServer           = (*doIaCServer)(nil)
 	_ pb.IaCProviderDriftConfigDetectorServer = (*doIaCServer)(nil)
+	// doIaCServer also SERVES the typed IaC state-backend contract (spaces
+	// backend). The SDK serve hook auto-registers this via type-assertion at
+	// plugin startup — see cmd/plugin/main.go.
+	_ pb.IaCStateBackendServer = (*doIaCServer)(nil)
 )
 
 // ── Required service methods ────────────────────────────────────────────────

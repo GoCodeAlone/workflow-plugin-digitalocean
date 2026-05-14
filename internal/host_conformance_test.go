@@ -118,3 +118,39 @@ func capabilitiesHasResource(capabilities *pb.CapabilitiesResponse, resourceType
 	}
 	return false
 }
+
+// TestCapabilityParity_IaCStateBackends asserts that every iac.state backend
+// name declared in plugin.json capabilities.iacStateBackends is actually
+// served by the plugin — i.e. returned by NewIaCServer().ListBackendNames.
+// This guards against a manifest claiming a backend the plugin does not serve.
+func TestCapabilityParity_IaCStateBackends(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	data, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+	var manifest struct {
+		Capabilities struct {
+			IaCStateBackends []string `json:"iacStateBackends"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+
+	resp, err := NewIaCServer().ListBackendNames(context.Background(), &pb.ListBackendNamesRequest{})
+	if err != nil {
+		t.Fatalf("ListBackendNames: %v", err)
+	}
+	served := make(map[string]bool, len(resp.GetBackendNames()))
+	for _, n := range resp.GetBackendNames() {
+		served[n] = true
+	}
+
+	for _, declared := range manifest.Capabilities.IaCStateBackends {
+		if !served[declared] {
+			t.Errorf("plugin.json declares iacStateBackends entry %q but ListBackendNames does not serve it (served: %v)",
+				declared, resp.GetBackendNames())
+		}
+	}
+}
