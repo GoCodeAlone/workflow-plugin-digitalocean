@@ -11,6 +11,10 @@ All notable changes to workflow-plugin-digitalocean are documented here.
 
 ### Fixed
 
+- **App Platform worker private image pulls** — `workers[].image` now applies
+  `provider_specific.digitalocean.registry_credentials` the same way the
+  primary service image does, allowing private GHCR worker components to run
+  inside a multi-component App Platform app.
 - **App Platform route drift detection** — `infra.container_service.routes` is
   now recorded in outputs and compared during `Diff`, so adding or clearing
   public ingress routes on an existing app triggers an in-place App Platform

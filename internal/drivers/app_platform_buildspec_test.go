@@ -1324,6 +1324,38 @@ func TestBuildAppSpec_Workers_ImageStringShape(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_Workers_ImageRegistryCredentialsProviderSpecific(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"workers": []any{
+			map[string]any{
+				"name":        "internal-agent",
+				"image":       "ghcr.io/gocodealone/workflow-compute-agent-heartbeat:abc123",
+				"run_command": "/app/compute-agent-heartbeat",
+				"provider_specific": map[string]any{
+					"digitalocean": map[string]any{
+						"registry_credentials": "x-access-token:ghp_secret",
+					},
+				},
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if len(spec.Workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(spec.Workers))
+	}
+	img := spec.Workers[0].Image
+	if img == nil {
+		t.Fatal("worker image is nil")
+	}
+	if img.RegistryType != godo.ImageSourceSpecRegistryType_Ghcr {
+		t.Fatalf("RegistryType = %q, want GHCR", img.RegistryType)
+	}
+	if img.RegistryCredentials != "x-access-token:ghp_secret" {
+		t.Fatalf("RegistryCredentials = %q, want provider-specific credential", img.RegistryCredentials)
+	}
+}
+
 func TestBuildAppSpec_Workers_ImageEmpty(t *testing.T) {
 	cfg := map[string]any{
 		"image": "registry.digitalocean.com/myrepo/myapp:v1",
