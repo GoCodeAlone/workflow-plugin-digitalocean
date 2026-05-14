@@ -813,6 +813,7 @@ func buildWorkerSpec(m map[string]any) *godo.AppWorkerSpec {
 	}
 	// Image from "image" field (accepts string or structured map).
 	if img, err := imageSpecFromConfig(m); err == nil {
+		applyRegistryCredentialsFromConfig(img, m)
 		w.Image = img
 	}
 	// size tier override.
