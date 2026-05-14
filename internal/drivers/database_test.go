@@ -14,10 +14,13 @@ import (
 
 type mockDatabaseClient struct {
 	db              *godo.Database
+	listDB          *godo.Database
 	err             error
 	firewallErr     error
 	lastCreateReq   *godo.DatabaseCreateRequest
 	lastFirewallReq *godo.DatabaseUpdateFirewallRulesRequest
+	getCalls        int
+	listCalls       int
 }
 
 func (m *mockDatabaseClient) Create(_ context.Context, req *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error) {
@@ -25,16 +28,22 @@ func (m *mockDatabaseClient) Create(_ context.Context, req *godo.DatabaseCreateR
 	return m.db, nil, m.err
 }
 func (m *mockDatabaseClient) Get(_ context.Context, _ string) (*godo.Database, *godo.Response, error) {
+	m.getCalls++
 	return m.db, nil, m.err
 }
 func (m *mockDatabaseClient) List(_ context.Context, _ *godo.ListOptions) ([]godo.Database, *godo.Response, error) {
+	m.listCalls++
 	if m.err != nil {
 		return nil, nil, m.err
 	}
-	if m.db == nil {
+	db := m.db
+	if m.listDB != nil {
+		db = m.listDB
+	}
+	if db == nil {
 		return nil, nil, nil
 	}
-	return []godo.Database{*m.db}, nil, nil
+	return []godo.Database{*db}, nil, nil
 }
 func (m *mockDatabaseClient) Resize(_ context.Context, _ string, _ *godo.DatabaseResizeRequest) (*godo.Response, error) {
 	return nil, m.err
@@ -446,6 +455,30 @@ func TestDatabaseDriver_Read_NameBased(t *testing.T) {
 	}
 	if out.Name != "my-db" {
 		t.Errorf("Name = %q, want %q", out.Name, "my-db")
+	}
+}
+
+func TestDatabaseDriver_Read_NameBasedHydratesConnectionOutputs(t *testing.T) {
+	listDB := *testDatabase()
+	listDB.Connection = nil
+	mock := &mockDatabaseClient{
+		listDB: &listDB,
+		db:     testDatabase(),
+	}
+	d := drivers.NewDatabaseDriverWithClient(mock, "nyc3")
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{Name: "my-db"})
+	if err != nil {
+		t.Fatalf("Read by name: %v", err)
+	}
+	if mock.listCalls != 1 {
+		t.Fatalf("List calls = %d, want 1", mock.listCalls)
+	}
+	if mock.getCalls != 1 {
+		t.Fatalf("Get calls = %d, want 1 to hydrate connection outputs", mock.getCalls)
+	}
+	if uri, _ := out.Outputs["uri"].(string); uri == "" {
+		t.Fatalf("uri output missing after adoption/name-based read: %#v", out.Outputs)
 	}
 }
 

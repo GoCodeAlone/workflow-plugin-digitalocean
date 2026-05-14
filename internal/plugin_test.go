@@ -53,9 +53,9 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 			Goarch []string `yaml:"goarch"`
 		} `yaml:"builds"`
 		Archives []struct {
-			ID           string   `yaml:"id"`
-			IDs          []string `yaml:"ids"`
-			NameTemplate string   `yaml:"name_template"`
+			ID           string            `yaml:"id"`
+			IDs          []string          `yaml:"ids"`
+			NameTemplate string            `yaml:"name_template"`
 			Files        []archiveFileSpec `yaml:"files"`
 		} `yaml:"archives"`
 	}
@@ -122,6 +122,23 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	}
 	if !tarGzContains(archivePath, "plugin.contracts.json") {
 		t.Fatal("test release archive missing plugin.contracts.json")
+	}
+}
+
+func TestSyncPluginVersionWorkflowUpdatesDownloads(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	body, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "sync-plugin-version.yml"))
+	if err != nil {
+		t.Fatalf("read sync workflow: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"dl['url'] = f'https://github.com/GoCodeAlone/{name}/releases/download/{tag}/{name}-{goos}-{goarch}.tar.gz'",
+		"p['version'] = '$TARGET'",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sync workflow must update manifest downloads with release tag, missing %q", want)
+		}
 	}
 }
 
