@@ -54,7 +54,9 @@
       "step.iac_scale"
     ],
     "triggerTypes": [],
-    "iacStateBackends": ["spaces"],
+    "iacStateBackends": [
+      "spaces"
+    ],
     "iacProvider": {
       "name": "digitalocean",
       "resourceTypes": [
