@@ -405,7 +405,10 @@ func isNotFoundErr(err error) bool {
 		return true
 	}
 	// Some S3-compatible stores return a plain "not found" in the message.
-	return strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "NoSuchKey")
+	// Match case-insensitively so stores returning lower-case "not found"
+	// (or other case variants of "NotFound" / "NoSuchKey") are recognised.
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "notfound") || strings.Contains(msg, "nosuchkey") || strings.Contains(msg, "not found")
 }
 
 // Compile-time check that SpacesIaCStateStore satisfies IaCStateStore.

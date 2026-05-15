@@ -446,7 +446,7 @@ func TestSpacesIaCStateStore_ErrorPropagation(t *testing.T) {
 		t.Errorf("DeleteState error = %v, want simulated error", err)
 	}
 
-	// Lock error (HeadObject fails with non-NotFound).
+	// Lock error (PutObject fails — Lock does not call HeadObject).
 	err = store.Lock(context.Background(), "x")
 	if err == nil || !strings.Contains(err.Error(), "simulated") {
 		t.Errorf("Lock error = %v, want simulated error", err)
