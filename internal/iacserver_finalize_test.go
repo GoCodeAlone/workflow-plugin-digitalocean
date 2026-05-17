@@ -137,10 +137,21 @@ func TestDOIaCServer_FinalizeApply_FlushesDeferredUpdates(t *testing.T) {
 // wfctl-side OnPlanComplete handler can render the operator-facing
 // diagnostic distinctly per driver. Per ADR 0040 invariants 1 + 2.
 func TestDOIaCServer_FinalizeApply_PreservesPerDriverErrorAttribution(t *testing.T) {
-	provider, _, sentinel := setupProviderWithFailingDBDeferredUpdate(t)
+	provider, dbMock, sentinel := setupProviderWithFailingDBDeferredUpdate(t)
 	s := newDOIaCServer(provider)
 
 	resp, err := s.FinalizeApply(context.Background(), &pb.FinalizeApplyRequest{PlanId: "test-plan-fail"})
+
+	// Belt+suspenders — the error round-trip below implicitly proves the
+	// flush chain ran, but locking lastFirewallReq != nil directly guards
+	// against a future refactor where the mock's UpdateFirewallRules
+	// short-circuits before recording the request (e.g., if flushErr is
+	// moved to a pre-call gate). The contract under test is "flush was
+	// attempted AND failed"; the implicit-only assert would mask a
+	// regression that drops the attempt.
+	if dbMock.lastFirewallReq == nil {
+		t.Fatal("UpdateFirewallRules was not attempted — failure-path coverage degraded to flush-never-fired")
+	}
 
 	// Wire-status invariant (FinalizeApplyResponse godoc, mirrors
 	// ADR 0040 inv 2): per-driver errors live in response.errors[];
@@ -167,5 +178,24 @@ func TestDOIaCServer_FinalizeApply_PreservesPerDriverErrorAttribution(t *testing
 	// order non-determinism if multiple drivers fail in a future test.
 	if !strings.Contains(got.GetError(), sentinel.Error()) {
 		t.Errorf("expected Error to contain %q; got %q", sentinel.Error(), got.GetError())
+	}
+}
+
+// TestDOIaCServer_Capabilities_DeclaresV2 locks the load-bearing
+// ComputePlanVersion="v2" opt-in literal in the Capabilities RPC
+// return. wfctl's DispatchVersionFor reads this string to route the
+// plugin through the v2 apply path (wfctlhelpers.ApplyPlan + per-action
+// hooks); a future refactor accidentally dropping the literal (or a
+// struct re-init forgetting to set it) silently reverts the plugin to
+// v1 dispatch — and the compile-time assert can't catch a string
+// omission. Per workflow#695 Phase 2.5.
+func TestDOIaCServer_Capabilities_DeclaresV2(t *testing.T) {
+	s := newDOIaCServer(&DOProvider{})
+	caps, err := s.Capabilities(context.Background(), &pb.CapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if got := caps.GetComputePlanVersion(); got != "v2" {
+		t.Errorf("CapabilitiesResponse.ComputePlanVersion = %q; want %q (v2 dispatch opt-in lost)", got, "v2")
 	}
 }
