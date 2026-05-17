@@ -201,6 +201,12 @@ func (s *doIaCServer) Capabilities(_ context.Context, _ *pb.CapabilitiesRequest)
 //
 // Empty errors slice = success (gRPC status OK; wire-status invariant
 // per FinalizeApplyResponse godoc).
+//
+// Best-effort fan-out: per-driver flushes that succeed remain committed
+// even if later drivers fail; this method does not coordinate rollback
+// across drivers (same semantics as v1 DOProvider.Apply's post-loop
+// block). Operators reconcile partial failures from the per-driver
+// errors[] entries surfaced by the wfctl-side OnPlanComplete handler.
 func (s *doIaCServer) FinalizeApply(ctx context.Context, _ *pb.FinalizeApplyRequest) (*pb.FinalizeApplyResponse, error) {
 	var errs []*pb.ActionError
 	// Iterate the driver registry directly (not plan.Actions) so that

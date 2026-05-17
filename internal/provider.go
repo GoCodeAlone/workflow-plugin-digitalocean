@@ -246,8 +246,12 @@ type deferredUpdater interface {
 // PR P-DO TP2: under iacProvider.computePlanVersion: v2 wfctl dispatches
 // directly through wfctlhelpers.ApplyPlan and does not call this method.
 // The implementation here remains for legacy v1 callers (wfctl < v0.21.0
-// or any in-process embedder of the gRPC plugin) and for the deferred-flush
-// behavior that wfctlhelpers does not yet hoist.
+// or any in-process embedder of the gRPC plugin). Post-workflow#695
+// Phase 2.5, v2 callers route the deferred-flush behavior through the
+// FinalizeApply RPC (see iacserver.go) which the workflow engine invokes
+// via the ApplyPlanHooks.OnPlanComplete hook — wfctlhelpers no longer
+// "doesn't hoist" the flush, it just dispatches it through the gRPC
+// boundary instead of an in-process method call.
 //
 // Per-action upsert recovery, JIT substitution, the Replace cascade, and
 // the input-drift postcondition all live in wfctlhelpers.ApplyPlan now —
