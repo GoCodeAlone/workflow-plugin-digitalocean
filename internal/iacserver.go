@@ -54,6 +54,12 @@ type doIaCServer struct {
 	pb.UnimplementedIaCProviderMigrationRepairerServer
 	pb.UnimplementedIaCProviderValidatorServer
 	pb.UnimplementedIaCProviderDriftConfigDetectorServer
+	// pb.UnimplementedIaCProviderFinalizerServer satisfies the
+	// mustEmbedUnimplementedIaCProviderFinalizerServer() forward-compat
+	// requirement on pb.IaCProviderFinalizerServer (workflow#695 Phase 2.5).
+	// The actual FinalizeApply method is overridden below; the embed is
+	// required by the gRPC codegen contract.
+	pb.UnimplementedIaCProviderFinalizerServer
 	// pb.UnimplementedResourceDriverServer satisfies the
 	// mustEmbedUnimplementedResourceDriverServer() forward-compat
 	// requirement on pb.ResourceDriverServer; the per-type CRUD
@@ -109,6 +115,12 @@ var (
 	_ pb.IaCProviderMigrationRepairerServer   = (*doIaCServer)(nil)
 	_ pb.IaCProviderValidatorServer           = (*doIaCServer)(nil)
 	_ pb.IaCProviderDriftConfigDetectorServer = (*doIaCServer)(nil)
+	// IaCProviderFinalizer is the workflow#695 Phase 2.5 optional service
+	// — DO plugin implements FinalizeApply server-side to host the
+	// deferred-flush iteration previously held inline in the v1
+	// DOProvider.Apply wrapper. Required by the v2 dispatch declared
+	// via ComputePlanVersion="v2" below.
+	_ pb.IaCProviderFinalizerServer = (*doIaCServer)(nil)
 	// doIaCServer also SERVES the typed IaC state-backend contract (spaces
 	// backend). The SDK serve hook auto-registers this via type-assertion at
 	// plugin startup — see cmd/plugin/main.go.
@@ -159,7 +171,56 @@ func (s *doIaCServer) Capabilities(_ context.Context, _ *pb.CapabilitiesRequest)
 			Operations:   append([]string(nil), c.Operations...),
 		})
 	}
-	return &pb.CapabilitiesResponse{Capabilities: out}, nil
+	return &pb.CapabilitiesResponse{
+		Capabilities: out,
+		// ComputePlanVersion="v2" opts this plugin into wfctl's v2 apply
+		// dispatch (wfctlhelpers.ApplyPlan + per-action hooks). The
+		// deferred-flush iteration previously held inline in the v1
+		// DOProvider.Apply wrapper has been hoisted to FinalizeApply (the
+		// IaCProviderFinalizer optional service implementation below). Per
+		// workflow#695 Phase 2.5 / ADR 0024 / ADR 0040.
+		ComputePlanVersion: "v2",
+	}, nil
+}
+
+// FinalizeApply implements pb.IaCProviderFinalizerServer for the v2
+// dispatch path. Inlines the per-driver flush loop from
+// DOProvider.Apply (internal/provider.go's post-loop block iterating
+// p.drivers and calling deferredUpdater.FlushDeferredUpdates) since
+// DOProvider does not expose a public FlushDeferredUpdates method —
+// the flush iteration was inline in the v1 Apply wrapper. Per
+// workflow#695 Phase 2.5.
+//
+// Per-driver error attribution is preserved by returning ActionError
+// entries on the response, mirroring the v1 wrapper shape that wfctl
+// previously read directly from result.Errors via
+// ActionError{Resource: resourceType, Action: "deferred_update",
+// Error: flushErr.Error()}. wfctl-side OnPlanComplete handler appends
+// these entries onward into result.Errors as a "<plan-finalize>" entry,
+// preserving the operator-facing diagnostic shape.
+//
+// Empty errors slice = success (gRPC status OK; wire-status invariant
+// per FinalizeApplyResponse godoc).
+func (s *doIaCServer) FinalizeApply(ctx context.Context, _ *pb.FinalizeApplyRequest) (*pb.FinalizeApplyResponse, error) {
+	var errs []*pb.ActionError
+	// Iterate the driver registry directly (not plan.Actions) so that
+	// orphaned deferred entries are flushed even when their resource type
+	// no longer appears in the current plan (e.g. after a transient flush
+	// failure on a prior Apply run). Mirrors v1 wrapper semantics.
+	for resourceType, d := range s.provider.drivers {
+		du, ok := d.(deferredUpdater)
+		if !ok || !du.HasDeferredUpdates() {
+			continue
+		}
+		if flushErr := du.FlushDeferredUpdates(ctx); flushErr != nil {
+			errs = append(errs, &pb.ActionError{
+				Resource: resourceType,
+				Action:   "deferred_update",
+				Error:    flushErr.Error(),
+			})
+		}
+	}
+	return &pb.FinalizeApplyResponse{Errors: errs}, nil
 }
 
 func (s *doIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanResponse, error) {
