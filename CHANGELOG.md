@@ -2,6 +2,18 @@
 
 All notable changes to workflow-plugin-digitalocean are documented here.
 
+## v2.0.0-rc1 — 2026-05-17
+
+### Breaking changes (workflow#699)
+
+- Removed `DOProvider.Apply` Go method + `ErrApplyV1Removed` sentinel + sibling stub regression test. v1 dispatch was unreachable since v1.4.0 (Phase 3 sentinel-stub); this release deletes the dead surface entirely per ADR 0024 compile-time-safety mandate.
+- Removed `doIaCServer.Apply` gRPC handler + `applyResultToPB` encoder helper. The proto-side `rpc Apply` was deleted in workflow v0.56.0-rc1.
+- Requires workflow v0.56.0+ (was v0.55.0).
+
+### Reason
+
+Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Removed`) that ADR 0024's compile-time-safety mandate was filed to remove. Plugin's typed `CapabilitiesResponse.compute_plan_version = "v2"` declaration unchanged; v2 dispatch via `wfctlhelpers.ApplyPlanWithHooks` + `IaCProviderFinalizer.FinalizeApply` is the only supported path.
+
 ## v0.12.0 — 2026-05-08
 
 - **feat(drivers/app_platform)**: image-presence pre-flight for DOCR-typed images. `Diff`, `Create`, and `Update` now call `verifyImagePresentInDOCR(ctx, regClient, imageRef)` before mutating the AppSpec. On absence, returns wrapping `interfaces.ErrImageNotInRegistry`. Conservative behavior: any DOCR API error (rate-limit, 5xx, parse failure) returns nil so the underlying `apps.update` surfaces the real issue.
