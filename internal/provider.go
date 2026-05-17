@@ -33,11 +33,6 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 // the legacy doPlugin / NewDOPlugin entrypoint was deleted (Task 9).
 var Version = "dev"
 
-// ErrApplyV1Removed is the sentinel returned by DOProvider.Apply when
-// called post-Phase-3 cleanup. Callers can errors.Is for diagnostic
-// classification.
-var ErrApplyV1Removed = errors.New("DOProvider.Apply: v1 dispatch removed since DO v1.4.0 (workflow#695 Phase 2.5 + Phase 3); upgrade wfctl to v0.55.0+ for v2 dispatch via wfctlhelpers.ApplyPlanWithHooks + IaCProviderFinalizer.FinalizeApply")
-
 // DOProvider implements interfaces.IaCProvider for DigitalOcean.
 type DOProvider struct {
 	client  *godo.Client
@@ -227,19 +222,6 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	plan, err := platform.ComputePlan(ctx, p, desired, current)
 	return &plan, err
-}
-
-// Apply returns ErrApplyV1Removed unconditionally. v1 dispatch was
-// removed in DO v1.4.0 (workflow#695 Phase 3 cleanup). wfctl bypasses
-// this method when ComputePlanVersion="v2" is declared in Capabilities;
-// deferred-flush behavior moved to doIaCServer.FinalizeApply via
-// IaCProviderFinalizer RPC. Reaching this method indicates a
-// misconfigured caller (in-process embedder using a pre-Phase-2.5
-// wfctl tag, OR gRPC consumer that opted out of v2 dispatch).
-// Stub preserves interfaces.IaCProvider contract per ADR 0024;
-// interface segregation deferred to separate refactor design.
-func (p *DOProvider) Apply(_ context.Context, _ *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
-	return nil, ErrApplyV1Removed
 }
 
 // EnumerateByTag implements the opt-in interfaces.Enumerator interface.
