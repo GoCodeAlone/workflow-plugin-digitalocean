@@ -25,10 +25,14 @@ func fakeAppForDeferred(name, id string) *godo.App {
 
 // minimalDBMock satisfies drivers.DatabaseClient for the provider-level
 // deferred flush test. Stores the last UpdateFirewallRules request so the
-// test can assert the flush occurred.
+// test can assert the flush occurred. The optional flushErr field — when
+// non-nil — is returned from UpdateFirewallRules so tests can exercise
+// the per-driver error-attribution path (workflow#695 Phase 2.5
+// FinalizeApply regression test).
 type minimalDBMock struct {
 	db              *godo.Database
 	lastFirewallReq *godo.DatabaseUpdateFirewallRulesRequest
+	flushErr        error
 }
 
 func (m *minimalDBMock) Create(_ context.Context, _ *godo.DatabaseCreateRequest) (*godo.Database, *godo.Response, error) {
@@ -51,6 +55,9 @@ func (m *minimalDBMock) Delete(_ context.Context, _ string) (*godo.Response, err
 }
 func (m *minimalDBMock) UpdateFirewallRules(_ context.Context, _ string, req *godo.DatabaseUpdateFirewallRulesRequest) (*godo.Response, error) {
 	m.lastFirewallReq = req
+	if m.flushErr != nil {
+		return nil, m.flushErr
+	}
 	return nil, nil
 }
 
