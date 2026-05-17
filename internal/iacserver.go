@@ -183,13 +183,24 @@ func (s *doIaCServer) Capabilities(_ context.Context, _ *pb.CapabilitiesRequest)
 	}, nil
 }
 
+// deferredUpdater is the per-driver opt-in interface for resources that
+// accumulate updates that cannot be applied until all plan creates
+// complete. The canonical case is DatabaseDriver deferring type=app
+// trusted_sources entries that reference apps created later in the
+// same plan. doIaCServer.FinalizeApply iterates the driver registry
+// and calls FlushDeferredUpdates on every driver that opted in.
+// Per workflow#695 Phase 2.5 (relocated from provider.go in Phase 3).
+type deferredUpdater interface {
+	HasDeferredUpdates() bool
+	FlushDeferredUpdates(ctx context.Context) error
+}
+
 // FinalizeApply implements pb.IaCProviderFinalizerServer for the v2
-// dispatch path. Inlines the per-driver flush loop from
-// DOProvider.Apply (internal/provider.go's post-loop block iterating
-// p.drivers and calling deferredUpdater.FlushDeferredUpdates) since
-// DOProvider does not expose a public FlushDeferredUpdates method —
-// the flush iteration was inline in the v1 Apply wrapper. Per
-// workflow#695 Phase 2.5.
+// dispatch path. Iterates the driver registry and calls
+// FlushDeferredUpdates on every driver that satisfies deferredUpdater
+// (declared above). Originally inline in v1 DOProvider.Apply's post-loop
+// block; hoisted here for the v2 dispatch path. Per workflow#695
+// Phase 2.5.
 //
 // Per-driver error attribution is preserved by returning ActionError
 // entries on the response, mirroring the v1 wrapper shape that wfctl

@@ -12,7 +12,6 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/steps"
-	"github.com/GoCodeAlone/workflow/iac/wfctlhelpers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/GoCodeAlone/workflow/platform"
 	"github.com/digitalocean/godo"
@@ -33,6 +32,11 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 // Lived in plugin.go before the strict-contracts cutover; moved here when
 // the legacy doPlugin / NewDOPlugin entrypoint was deleted (Task 9).
 var Version = "dev"
+
+// ErrApplyV1Removed is the sentinel returned by DOProvider.Apply when
+// called post-Phase-3 cleanup. Callers can errors.Is for diagnostic
+// classification.
+var ErrApplyV1Removed = errors.New("DOProvider.Apply: v1 dispatch removed since DO v1.4.0 (workflow#695 Phase 2.5 + Phase 3); upgrade wfctl to v0.55.0+ for v2 dispatch via wfctlhelpers.ApplyPlanWithHooks + IaCProviderFinalizer.FinalizeApply")
 
 // DOProvider implements interfaces.IaCProvider for DigitalOcean.
 type DOProvider struct {
@@ -225,90 +229,17 @@ func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec
 	return &plan, err
 }
 
-// deferredUpdater is an optional interface for ResourceDrivers that accumulate
-// resource-level updates that cannot be applied until all plan creates complete.
-// The canonical case is DatabaseDriver deferring type=app trusted_sources entries
-// that reference apps created later in the same plan. Apply calls
-// FlushDeferredUpdates once after the main dispatch loop; errors are appended to
-// ApplyResult.Errors so the failure is visible to the operator.
-//
-// This is a DO-plugin-specific extension point not yet hoisted into
-// wfctlhelpers.ApplyPlan; the second-pass flush below preserves the regression
-// gate while the v2 dispatch handles the per-action loop.
-type deferredUpdater interface {
-	HasDeferredUpdates() bool
-	FlushDeferredUpdates(ctx context.Context) error
-}
-
-// Apply executes the plan via wfctlhelpers.ApplyPlan, then runs the
-// DO-specific deferred-update second pass.
-//
-// PR P-DO TP2: under iacProvider.computePlanVersion: v2 wfctl dispatches
-// directly through wfctlhelpers.ApplyPlan and does not call this method.
-// The implementation here remains for legacy v1 callers (wfctl < v0.21.0
-// or any in-process embedder of the gRPC plugin). v2 callers route the
-// deferred-flush through the FinalizeApply RPC (see iacserver.go); the
-// workflow engine invokes it via the ApplyPlanHooks.OnPlanComplete hook.
-// Per workflow#695 Phase 2.5.
-//
-// Per-action upsert recovery, JIT substitution, the Replace cascade, and
-// the input-drift postcondition all live in wfctlhelpers.ApplyPlan now —
-// drivers that opt into the upsert recovery path implement
-// interfaces.UpsertSupporter (DO drivers AppPlatform, VPC, Firewall,
-// Database all do; signature: SupportsUpsert() bool). The local
-// upsertSupporter interface previously declared here is no longer needed:
-// its SupportsUpsert() bool method is structurally identical to
-// interfaces.UpsertSupporter, so the existing driver implementations
-// satisfy the canonical interface without code change.
-//
-// wfctl:skip-iac-codemod
-//
-// The body intentionally wraps wfctlhelpers.ApplyPlan rather than
-// matching the codemod's canonical single-statement
-// `return wfctlhelpers.ApplyPlan(ctx, p, plan)` shape: the
-// post-helper deferred-update flush below is a DO-plugin-specific
-// regression gate (see provider_deferred_test.go and CHANGELOG entry
-// for staging-deploy-blockers Blocker 2) that wfctlhelpers does not
-// hoist. The skip marker tells the codemod's
-// AssertApplyDelegatesToHelper analyzer this deviation is intentional.
-// When wfctlhelpers grows a deferred-update lifecycle hook, the
-// wrapper can collapse and the marker can drop.
-func (p *DOProvider) Apply(ctx context.Context, plan *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
-	result, err := wfctlhelpers.ApplyPlan(ctx, p, plan)
-	if err != nil {
-		// ApplyPlan only returns a top-level error on context cancellation
-		// — per-action failures land on result.Errors. Surface the
-		// cancellation alongside whatever partial result is in hand so
-		// callers can still inspect any actions that completed.
-		return result, err
-	}
-
-	// Second pass: flush deferred updates accumulated by drivers during the
-	// main action loop. These arise when a resource's config (e.g. DB
-	// trusted_sources with type=app) references another resource provisioned
-	// later in the same plan. By this point all plan creates have completed
-	// and the referenced resources exist.
-	//
-	// Iterate the driver registry directly (not plan.Actions) so that orphaned
-	// deferred entries are flushed even when their resource type no longer
-	// appears in the current plan (e.g. after a transient flush failure on a
-	// prior Apply run). Each driver is checked at most once regardless of how
-	// many actions reference it.
-	for resourceType, d := range p.drivers {
-		du, ok := d.(deferredUpdater)
-		if !ok || !du.HasDeferredUpdates() {
-			continue
-		}
-		if flushErr := du.FlushDeferredUpdates(ctx); flushErr != nil {
-			result.Errors = append(result.Errors, interfaces.ActionError{
-				Resource: resourceType,
-				Action:   "deferred_update",
-				Error:    flushErr.Error(),
-			})
-		}
-	}
-
-	return result, nil
+// Apply returns ErrApplyV1Removed unconditionally. v1 dispatch was
+// removed in DO v1.4.0 (workflow#695 Phase 3 cleanup). wfctl bypasses
+// this method when ComputePlanVersion="v2" is declared in Capabilities;
+// deferred-flush behavior moved to doIaCServer.FinalizeApply via
+// IaCProviderFinalizer RPC. Reaching this method indicates a
+// misconfigured caller (in-process embedder using a pre-Phase-2.5
+// wfctl tag, OR gRPC consumer that opted out of v2 dispatch).
+// Stub preserves interfaces.IaCProvider contract per ADR 0024;
+// interface segregation deferred to separate refactor design.
+func (p *DOProvider) Apply(_ context.Context, _ *interfaces.IaCPlan) (*interfaces.ApplyResult, error) {
+	return nil, ErrApplyV1Removed
 }
 
 // EnumerateByTag implements the opt-in interfaces.Enumerator interface.
