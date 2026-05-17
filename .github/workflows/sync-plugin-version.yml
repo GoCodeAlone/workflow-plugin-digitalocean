@@ -20,6 +20,13 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate tag format
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected vN.N.N or vN.N.N-suffix)"
+            exit 1
+          fi
       - name: Compute target version from tag
         id: ver
         run: |
@@ -30,16 +37,18 @@ jobs:
       - name: Update plugin.json
         run: |
           if [ ! -f plugin.json ]; then echo "no plugin.json; skipping"; exit 0; fi
-          CURRENT=$(python3 -c "import json; print(json.load(open('plugin.json')).get('version',''))")
           TARGET="${{ steps.ver.outputs.version }}"
-          if [ "$CURRENT" = "$TARGET" ]; then
-            echo "plugin.json already at $TARGET; no action"
-            exit 0
-          fi
           python3 -c "
           import json
+          tag = '${{ steps.ver.outputs.tag }}'
           p = json.load(open('plugin.json'))
           p['version'] = '$TARGET'
+          name = p.get('name', 'workflow-plugin-digitalocean')
+          for dl in p.get('downloads', []):
+              goos = dl.get('os')
+              goarch = dl.get('arch')
+              if goos and goarch:
+                  dl['url'] = f'https://github.com/GoCodeAlone/{name}/releases/download/{tag}/{name}-{goos}-{goarch}.tar.gz'
           json.dump(p, open('plugin.json', 'w'), indent=2)
           open('plugin.json', 'a').write('\n')
           "
