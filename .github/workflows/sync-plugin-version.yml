@@ -2,6 +2,12 @@ name: Sync plugin.json version
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to sync plugin.json to (e.g. v1.2.0). Escape hatch when push-tag trigger did not fire — see workflow-plugin-aws#18.'
+        required: true
+        type: string
 permissions:
   contents: write
   pull-requests: write
@@ -14,10 +20,17 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate tag format
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected vN.N.N or vN.N.N-suffix)"
+            exit 1
+          fi
       - name: Compute target version from tag
         id: ver
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
