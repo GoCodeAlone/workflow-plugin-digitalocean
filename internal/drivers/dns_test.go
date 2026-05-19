@@ -1098,6 +1098,40 @@ func TestDNSDriver_Diff_AbsentRecordNeedsUpdate(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_Diff_AbsentRecordChecksLiveRecordsWhenStateHasNoRecords(t *testing.T) {
+	mock := &mockDomainsClient{
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "example.com.", TTL: 1800},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	diff, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "EXAMPLE.COM"},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example-dns",
+		Type:       "infra.dns",
+		ProviderID: "example.com",
+		Outputs:    map[string]any{"domain": "example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("NeedsUpdate = false, want true")
+	}
+	if len(mock.recordListCalls) == 0 {
+		t.Fatalf("Diff did not check live DNS records")
+	}
+}
+
 func TestDNSDriver_Diff_AbsentRecordDataUsesCanonicalHostnameMatch(t *testing.T) {
 	d := drivers.NewDNSDriverWithClient(&mockDomainsClient{})
 

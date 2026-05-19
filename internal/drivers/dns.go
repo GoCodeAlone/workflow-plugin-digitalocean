@@ -207,7 +207,7 @@ func (d *DNSDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) erro
 	return nil
 }
 
-func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+func (d *DNSDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
 	desiredDomain, hasDesiredDomain, err := dnsDomainFromConfigIfPresent(desired.Config)
 	if err != nil {
 		return nil, err
@@ -238,6 +238,19 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 	currentRecords, err := dnsRecordsFromOutput(current)
 	if err != nil {
 		return nil, err
+	}
+	if len(absentRecords) > 0 && len(currentRecords) == 0 {
+		domain := current.ProviderID
+		if hasDesiredDomain {
+			domain = desiredDomain
+		}
+		if domain != "" {
+			liveRecords, err := d.listRecords(ctx, domain)
+			if err != nil {
+				return nil, err
+			}
+			currentRecords = liveRecords
+		}
 	}
 	if dnsAnyAbsentRecordPresent(absentRecords, currentRecords) {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
