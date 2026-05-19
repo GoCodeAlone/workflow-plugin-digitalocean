@@ -90,6 +90,18 @@ func (d *AppDomainDriver) Diff(_ context.Context, desired interfaces.ResourceSpe
 	if curDomain, _ := current.Outputs["domain"].(string); !strings.EqualFold(curDomain, domain) {
 		changes = append(changes, interfaces.FieldChange{Path: "domain", Old: curDomain, New: domain, ForceNew: true})
 	}
+	if desiredAppID, _ := desired.Config["app_id"].(string); desiredAppID != "" {
+		currentAppID, _ := current.Outputs["app_id"].(string)
+		if currentAppID != desiredAppID {
+			changes = append(changes, interfaces.FieldChange{Path: "app_id", Old: currentAppID, New: desiredAppID, ForceNew: true})
+		}
+	}
+	if desiredApp, _ := desired.Config["app"].(string); desiredApp != "" {
+		currentApp, _ := current.Outputs["app"].(string)
+		if currentApp != desiredApp {
+			changes = append(changes, interfaces.FieldChange{Path: "app", Old: currentApp, New: desiredApp, ForceNew: true})
+		}
+	}
 	if desiredType := desiredDomainType(desired.Config); desiredType != "" {
 		curType, _ := current.Outputs["type"].(string)
 		if strings.ToUpper(curType) != desiredType {
@@ -168,9 +180,6 @@ func (d *AppDomainDriver) resolveApp(ctx context.Context, ref interfaces.Resourc
 		return d.getApp(ctx, appID)
 	}
 	appName, _ := spec.Config["app"].(string)
-	if appName == "" {
-		appName, _ = spec.Config["app_name"].(string)
-	}
 	if appName == "" {
 		return nil, fmt.Errorf("config requires app or app_id")
 	}

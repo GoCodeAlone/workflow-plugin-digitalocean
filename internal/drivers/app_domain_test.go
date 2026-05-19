@@ -115,6 +115,55 @@ func TestAppDomainDriver_DiffDetectsMissingAndMatchingDomain(t *testing.T) {
 	}
 }
 
+func TestAppDomainDriver_DiffTreatsAppTargetChangeAsReplacement(t *testing.T) {
+	d := drivers.NewAppDomainDriverWithClient(&mockAppClient{})
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "bmw-www-domain",
+		Type: "infra.app_domain",
+		Config: map[string]any{
+			"app":    "other-app",
+			"domain": "www.buymywishlist.com",
+			"type":   "ALIAS",
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "bmw-www-domain",
+		Type:       "infra.app_domain",
+		ProviderID: "app-id/www.buymywishlist.com",
+		Outputs: map[string]any{
+			"app":    "buymywishlist",
+			"app_id": "app-id",
+			"domain": "www.buymywishlist.com",
+			"type":   "ALIAS",
+		},
+		Status: "active",
+	})
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsReplace {
+		t.Fatalf("app target change NeedsReplace = false, want true: %+v", result.Changes)
+	}
+}
+
+func TestAppDomainDriver_CreateRejectsUndocumentedAppNameAlias(t *testing.T) {
+	app := appWithDomains()
+	mock := &mockAppClient{app: app, listApps: []*godo.App{app}}
+	d := drivers.NewAppDomainDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "bmw-www-domain",
+		Type: "infra.app_domain",
+		Config: map[string]any{
+			"app_name": "buymywishlist",
+			"domain":   "www.buymywishlist.com",
+			"type":     "ALIAS",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected undocumented app_name alias to be rejected")
+	}
+}
+
 func TestAppDomainDriver_DeleteRemovesOnlyDesiredDomain(t *testing.T) {
 	app := appWithDomains(
 		&godo.AppDomainSpec{Domain: "buymywishlist.com", Type: godo.AppDomainSpecType_Primary},
