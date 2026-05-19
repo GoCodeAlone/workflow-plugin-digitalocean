@@ -42,6 +42,7 @@ func TestAllDrivers_DeclareProviderIDFormat(t *testing.T) {
 		{"droplet", drivers.NewDropletDriverWithClient(&mockDropletClient{}, "nyc3"), interfaces.IDFormatFreeform},
 		{"spaces", drivers.NewSpacesDriverWithClient(&mockSpacesClient{}, "nyc3"), interfaces.IDFormatFreeform},
 		{"registry", drivers.NewRegistryDriverWithClient(&mockRegistryClient{}), interfaces.IDFormatFreeform},
+		{"app_domain", drivers.NewAppDomainDriverWithClient(&mockAppClient{}), interfaces.IDFormatFreeform},
 		// IAMRoleDriver has no godo client (DO has no IAM API); construct directly.
 		{"iam_role", drivers.NewIAMRoleDriver(), interfaces.IDFormatFreeform},
 	}

@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-digitalocean",
   "version": "2.0.0",
-  "description": "DigitalOcean IaC provider: App Platform, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, Block Storage volumes, IAM (declared), and API gateway",
+  "description": "DigitalOcean IaC provider: App Platform, App Platform domains, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, Block Storage volumes, IAM (declared), and API gateway",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -61,6 +61,7 @@
       "name": "digitalocean",
       "resourceTypes": [
         "infra.container_service",
+        "infra.app_domain",
         "infra.k8s_cluster",
         "infra.database",
         "infra.cache",
@@ -86,6 +87,60 @@
             ],
             "default": "public",
             "description": "Whether the service has a public edge route (public, default) or is reachable only from sibling components via DO App Platform internal DNS (<name>.internal:<port>) (internal)."
+          }
+        },
+        "infra.app_domain": {
+          "description": "DigitalOcean App Platform domain binding. Updates only AppSpec.Domains on an existing App Platform app so DNS/domain aliases can be reconciled without rebuilding service images or runtime environment variables.",
+          "fields": {
+            "app": {
+              "type": "string",
+              "required": false,
+              "description": "Existing App Platform app name. Required unless app_id is set."
+            },
+            "app_id": {
+              "type": "string",
+              "required": false,
+              "description": "Existing App Platform app UUID. Required unless app is set."
+            },
+            "domain": {
+              "type": "string",
+              "required": true,
+              "description": "Fully qualified domain name to attach to the app."
+            },
+            "type": {
+              "type": "string",
+              "required": false,
+              "enum": [
+                "PRIMARY",
+                "ALIAS",
+                "DEFAULT"
+              ],
+              "description": "App Platform domain type."
+            },
+            "zone": {
+              "type": "string",
+              "required": false,
+              "description": "DigitalOcean DNS zone for provider-managed DNS validation."
+            },
+            "wildcard": {
+              "type": "bool",
+              "required": false,
+              "description": "Whether the domain is a wildcard binding."
+            },
+            "certificate": {
+              "type": "string",
+              "required": false,
+              "description": "Certificate ID to attach when using a custom certificate."
+            },
+            "minimum_tls_version": {
+              "type": "string",
+              "required": false,
+              "enum": [
+                "1.2",
+                "1.3"
+              ],
+              "description": "Minimum TLS version for this domain."
+            }
           }
         },
         "infra.firewall": {

@@ -99,6 +99,7 @@ func (p *DOProvider) Initialize(ctx context.Context, config map[string]any) erro
 
 	p.drivers = map[string]interfaces.ResourceDriver{
 		"infra.container_service": drivers.NewAppPlatformDriver(p.client, p.region),
+		"infra.app_domain":        drivers.NewAppDomainDriver(p.client),
 		"infra.k8s_cluster":       drivers.NewKubernetesDriver(p.client, p.region),
 		"infra.database":          drivers.NewDatabaseDriver(p.client, p.region),
 		"infra.cache":             drivers.NewCacheDriver(p.client, p.region),
@@ -124,6 +125,7 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 	noScale := []string{"create", "read", "update", "delete"}
 	return []interfaces.IaCCapabilityDeclaration{
 		{ResourceType: "infra.container_service", Tier: 3, Operations: ops},
+		{ResourceType: "infra.app_domain", Tier: 2, Operations: noScale},
 		{ResourceType: "infra.k8s_cluster", Tier: 1, Operations: ops},
 		{ResourceType: "infra.database", Tier: 1, Operations: ops},
 		{ResourceType: "infra.cache", Tier: 1, Operations: ops},

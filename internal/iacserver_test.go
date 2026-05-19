@@ -44,7 +44,7 @@ const (
 // The assertions cover:
 //
 //  1. Required service Name + Version (provider Go methods).
-//  2. Required service Capabilities (the 16-resource declaration list
+//  2. Required service Capabilities (the 17-resource declaration list
 //     emitted by *DOProvider.Capabilities — typed-marshal happy path).
 //  3. Optional Enumerator service EnumerateAll on an
 //     unsupported-by-design resource type ("infra.unsupported_for_test").
@@ -106,8 +106,8 @@ func TestDOIaCProviderRequiredServer_AllRPCs(t *testing.T) {
 		t.Fatalf("Capabilities RPC: %v", err)
 	}
 	got := capsResp.GetCapabilities()
-	if len(got) != 16 {
-		t.Errorf("Capabilities len = %d, want 16 (one per DO resource type)", len(got))
+	if len(got) != 17 {
+		t.Errorf("Capabilities len = %d, want 17 (one per DO resource type)", len(got))
 	}
 	hasContainerService := false
 	for _, c := range got {

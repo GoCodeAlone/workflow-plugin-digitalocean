@@ -62,6 +62,7 @@ var doSizingMap = map[string]map[interfaces.Size]string{
 	},
 	// Resource types below have no variable sizing — all tiers return "n/a".
 	"infra.vpc":         noopSizing(),
+	"infra.app_domain":  noopSizing(),
 	"infra.firewall":    noopSizing(),
 	"infra.dns":         noopSizing(),
 	"infra.storage":     noopSizing(),
