@@ -1,0 +1,32 @@
+# Minimal workflow-plugin-digitalocean example.
+# Provisions a single Droplet on DigitalOcean.
+#
+# Prerequisites:
+#   export DIGITALOCEAN_TOKEN=<your-do-personal-access-token>
+#
+# Usage:
+#   wfctl infra plan  --env staging
+#   wfctl infra apply --env staging
+
+infra:
+  auto_bootstrap: false
+
+modules:
+  - name: do-provider
+    type: iac.provider
+    config:
+      provider: digitalocean
+      token: ${DIGITALOCEAN_TOKEN}
+
+  - name: my-droplet
+    type: infra.droplet
+    config:
+      provider: do-provider
+    environments:
+      staging:
+        config:
+          name: my-app
+          region: nyc1
+          size: s-1vcpu-1gb
+          image: ubuntu-24-04-x64
+          monitoring: true

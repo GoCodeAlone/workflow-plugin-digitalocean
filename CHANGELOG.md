@@ -21,6 +21,11 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ## [Unreleased]
 
+### Added
+
+- README verified-status banner per workflow#714 (multi-repo QoL sweep).
+- CONTRIBUTING.md, examples/minimal/config.yaml, and GitHub issue/PR templates.
+
 ### Fixed
 
 - **App Platform worker private image pulls** — `workers[].image` now applies
