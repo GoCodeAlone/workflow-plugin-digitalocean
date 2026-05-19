@@ -50,12 +50,17 @@ func NewDNSDriverWithClient(c DomainsClient) *DNSDriver {
 //
 //	domain   string            — the zone name (e.g. "example.com")
 //	records  []any|[]map[string]any — each: {type, name, data, ttl}
+//	absent_records []any|[]map[string]any — each: {type, name, data?}
 func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
 	domain, err := dnsDomainFromConfig(spec.Config, spec.Name)
 	if err != nil {
 		return nil, err
 	}
 	declaredRecords, err := declaredDNSRecords(spec.Config)
+	if err != nil {
+		return nil, err
+	}
+	absentRecords, err := declaredAbsentDNSRecords(spec.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +93,12 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 		return nil, err
 	}
 
+	if err := validateDNSAbsentRecordsDoNotConflict(declaredRecords, absentRecords); err != nil {
+		return nil, err
+	}
+	if err := d.deleteRecords(ctx, domain, absentRecords); err != nil {
+		return nil, err
+	}
 	if err := d.upsertRecords(ctx, domain, declaredRecords); err != nil {
 		return nil, err
 	}
@@ -166,8 +177,18 @@ func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 	if err != nil {
 		return nil, err
 	}
+	absentRecords, err := declaredAbsentDNSRecords(spec.Config)
+	if err != nil {
+		return nil, err
+	}
 	if ref.ProviderID != "" && !strings.EqualFold(domain, ref.ProviderID) {
 		return nil, fmt.Errorf("dns update %q: cannot change domain from %q to %q", ref.Name, ref.ProviderID, domain)
+	}
+	if err := validateDNSAbsentRecordsDoNotConflict(declaredRecords, absentRecords); err != nil {
+		return nil, err
+	}
+	if err := d.deleteRecords(ctx, domain, absentRecords); err != nil {
+		return nil, err
 	}
 	if err := d.upsertRecords(ctx, domain, declaredRecords); err != nil {
 		return nil, err
@@ -195,6 +216,13 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 	if err != nil {
 		return nil, err
 	}
+	absentRecords, err := declaredAbsentDNSRecords(desired.Config)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDNSAbsentRecordsDoNotConflict(desiredRecords, absentRecords); err != nil {
+		return nil, err
+	}
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
@@ -207,12 +235,15 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 			},
 		}, nil
 	}
-	if len(desiredRecords) == 0 {
-		return &interfaces.DiffResult{NeedsUpdate: false}, nil
-	}
 	currentRecords, err := dnsRecordsFromOutput(current)
 	if err != nil {
 		return nil, err
+	}
+	if dnsAnyAbsentRecordPresent(absentRecords, currentRecords) {
+		return &interfaces.DiffResult{NeedsUpdate: true}, nil
+	}
+	if len(desiredRecords) == 0 {
+		return &interfaces.DiffResult{NeedsUpdate: false}, nil
 	}
 	currentByKey := make(map[string][]godo.DomainRecord)
 	for _, record := range currentRecords {
@@ -232,6 +263,12 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 		}
 	}
 	return &interfaces.DiffResult{NeedsUpdate: false}, nil
+}
+
+type dnsAbsentRecord struct {
+	Type string
+	Name string
+	Data string
 }
 
 func (d *DNSDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
@@ -294,6 +331,31 @@ func (d *DNSDriver) upsertRecords(ctx context.Context, domain string, records []
 				}
 				existingByKey = dnsRecordsByUpsertKey(latest)
 			}
+		}
+	}
+	return nil
+}
+
+func (d *DNSDriver) deleteRecords(ctx context.Context, domain string, records []dnsAbsentRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	existing, err := d.listRecords(ctx, domain)
+	if err != nil {
+		return err
+	}
+	for _, record := range existing {
+		for _, absent := range records {
+			if !dnsAbsentRecordMatches(absent, record) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("dns delete record %q %s/%s: %w", domain, record.Type, record.Name, err)
+			}
+			if _, err := d.client.DeleteRecord(ctx, domain, record.ID); err != nil {
+				return fmt.Errorf("dns delete record %q %s/%s: %w", domain, record.Type, record.Name, WrapGodoError(err))
+			}
+			break
 		}
 	}
 	return nil
@@ -483,7 +545,53 @@ func declaredDNSRecords(config map[string]any) ([]godo.DomainRecordEditRequest, 
 	return out, nil
 }
 
+func declaredAbsentDNSRecords(config map[string]any) ([]dnsAbsentRecord, error) {
+	rawValue, ok := config["absent_records"]
+	if !ok {
+		return nil, nil
+	}
+	raw, err := dnsRecordConfigMapsWithLabel(rawValue, "absent_records")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dnsAbsentRecord, 0, len(raw))
+	seen := make(map[string]struct{})
+	for i, m := range raw {
+		recordType, err := dnsOptionalStringFieldWithLabel(i, m, "type", "A", "absent_records")
+		if err != nil {
+			return nil, err
+		}
+		recordType = strings.ToUpper(recordType)
+		if !isSupportedDNSRecordType(recordType) {
+			return nil, fmt.Errorf("dns absent_records[%d].type %q is not supported", i, recordType)
+		}
+		name, err := dnsOptionalStringFieldWithLabel(i, m, "name", "@", "absent_records")
+		if err != nil {
+			return nil, err
+		}
+		data, err := dnsOptionalStringFieldWithLabel(i, m, "data", "", "absent_records")
+		if err != nil {
+			return nil, err
+		}
+		absent := dnsAbsentRecord{Type: recordType, Name: name, Data: data}
+		if err := validateDNSAbsentRecord(i, absent); err != nil {
+			return nil, err
+		}
+		key := dnsAbsentRecordIdentity(absent)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, absent)
+	}
+	return out, nil
+}
+
 func dnsRecordConfigMaps(rawValue any) ([]map[string]any, error) {
+	return dnsRecordConfigMapsWithLabel(rawValue, "records")
+}
+
+func dnsRecordConfigMapsWithLabel(rawValue any, label string) ([]map[string]any, error) {
 	switch raw := rawValue.(type) {
 	case []map[string]any:
 		return raw, nil
@@ -492,13 +600,71 @@ func dnsRecordConfigMaps(rawValue any) ([]map[string]any, error) {
 		for i, rec := range raw {
 			m, ok := rec.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("dns records[%d] must be an object", i)
+				return nil, fmt.Errorf("dns %s[%d] must be an object", label, i)
 			}
 			maps = append(maps, m)
 		}
 		return maps, nil
 	default:
-		return nil, fmt.Errorf("dns records must be a list")
+		return nil, fmt.Errorf("dns %s must be a list", label)
+	}
+}
+
+func validateDNSAbsentRecord(index int, record dnsAbsentRecord) error {
+	if !isValidDNSRecordName(record.Name) {
+		return fmt.Errorf("dns absent_records[%d].name must be a valid DNS record name", index)
+	}
+	if record.Type == "CNAME" && record.Name == "@" {
+		return fmt.Errorf("dns absent_records[%d].name CNAME records cannot be declared at the zone apex", index)
+	}
+	if record.Data != "" && dnsRecordTypeExpectsHostnameValue(record.Type) {
+		if !isValidDNSHostnameValue(record.Data) {
+			return fmt.Errorf("dns absent_records[%d].data must be a hostname for %s records", index, record.Type)
+		}
+	}
+	return nil
+}
+
+func validateDNSAbsentRecordsDoNotConflict(records []godo.DomainRecordEditRequest, absentRecords []dnsAbsentRecord) error {
+	for _, req := range records {
+		for _, absent := range absentRecords {
+			if absent.Type == req.Type && dnsCanonicalRecordName(absent.Name) == dnsCanonicalRecordName(req.Name) {
+				if absent.Data == "" || dnsRecordDataMatches(absent.Type, absent.Data, req.Data) {
+					return fmt.Errorf("dns records %s/%s cannot be both declared and absent", req.Type, req.Name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func dnsAnyAbsentRecordPresent(absentRecords []dnsAbsentRecord, currentRecords []godo.DomainRecord) bool {
+	for _, current := range currentRecords {
+		for _, absent := range absentRecords {
+			if dnsAbsentRecordMatches(absent, current) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func dnsAbsentRecordMatches(absent dnsAbsentRecord, record godo.DomainRecord) bool {
+	return strings.EqualFold(absent.Type, record.Type) &&
+		dnsCanonicalRecordName(absent.Name) == dnsCanonicalRecordName(record.Name) &&
+		(absent.Data == "" || dnsRecordDataMatches(absent.Type, absent.Data, record.Data))
+}
+
+func dnsAbsentRecordIdentity(record dnsAbsentRecord) string {
+	return strings.ToUpper(record.Type) + "\x00" + dnsCanonicalRecordName(record.Name) + "\x00" + dnsCanonicalRecordData(record.Type, record.Data)
+}
+
+func dnsRecordTypeExpectsHostnameValue(recordType string) bool {
+	switch recordType {
+	case "CNAME", "MX", "NS", "SRV":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -591,16 +757,20 @@ func dnsRecordEditRequestFromConfig(index int, m map[string]any) (godo.DomainRec
 }
 
 func dnsOptionalStringField(index int, m map[string]any, key, defaultValue string) (string, error) {
+	return dnsOptionalStringFieldWithLabel(index, m, key, defaultValue, "records")
+}
+
+func dnsOptionalStringFieldWithLabel(index int, m map[string]any, key, defaultValue, label string) (string, error) {
 	value, ok := m[key]
 	if !ok {
 		return defaultValue, nil
 	}
 	text, ok := value.(string)
 	if !ok {
-		return "", fmt.Errorf("dns records[%d].%s must be a string", index, key)
+		return "", fmt.Errorf("dns %s[%d].%s must be a string", label, index, key)
 	}
 	if text == "" && defaultValue != "" {
-		return "", fmt.Errorf("dns records[%d].%s must not be empty", index, key)
+		return "", fmt.Errorf("dns %s[%d].%s must not be empty", label, index, key)
 	}
 	return text, nil
 }

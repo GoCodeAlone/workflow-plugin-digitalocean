@@ -16,7 +16,7 @@ DigitalOcean IaC provider for the [GoCodeAlone/workflow](https://github.com/GoCo
 | `infra.load_balancer` | Load balancer |
 | `infra.vpc` | Virtual Private Cloud |
 | `infra.firewall` | Cloud firewall (Droplet/DOKS tag-based) |
-| `infra.dns` | DNS domain + records |
+| `infra.dns` | DNS domain, records, and targeted stale-record removal |
 | `infra.storage` | Spaces object storage |
 | `infra.registry` | DigitalOcean Container Registry (DOCR) |
 | `infra.certificate` | TLS certificate |
@@ -33,6 +33,24 @@ See [`examples/minimal/config.yaml`](examples/minimal/config.yaml) for a minimal
 wfctl infra plan   --env staging
 wfctl infra apply  --env staging
 ```
+
+## DNS stale-record removal
+
+`infra.dns` is not authoritative for every record in a zone. Use `absent_records` to delete specific stale records while leaving unmanaged records intact.
+
+```yaml
+resources:
+  - name: site-dns
+    type: infra.dns
+    config:
+      domain: example.com
+      absent_records:
+        - type: CNAME
+          name: www
+          data: example.com.
+```
+
+`data` is optional. When omitted, every record matching `type` and `name` is deleted. When set for hostname-like records such as `CNAME`, `MX`, `NS`, and `SRV`, matching ignores case and a trailing dot.
 
 ## Requirements
 
