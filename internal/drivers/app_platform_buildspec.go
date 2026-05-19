@@ -91,6 +91,10 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		return nil, fmt.Errorf("app platform sidecars: %w", err)
 	}
 	services := append([]*godo.AppServiceSpec{svc}, sidecars...)
+	domains, err := domainsFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("app platform domains: %w", err)
+	}
 
 	spec := &godo.AppSpec{
 		Name:                         name,
@@ -99,7 +103,7 @@ func buildAppSpec(name string, cfg map[string]any, region string) (*godo.AppSpec
 		Jobs:                         jobsFromConfig(cfg),
 		Workers:                      workersFromConfig(cfg),
 		StaticSites:                  staticSitesFromConfig(cfg),
-		Domains:                      domainsFromConfig(cfg),
+		Domains:                      domains,
 		Alerts:                       appAlertsFromConfig(cfg),
 		Ingress:                      ingress,
 		Egress:                       egressFromConfig(cfg),
@@ -582,13 +586,13 @@ func logDestinationsFromConfig(cfg map[string]any) []*godo.AppLogDestinationSpec
 }
 
 // domainsFromConfig converts the canonical "domains" list to []*godo.AppDomainSpec.
-func domainsFromConfig(cfg map[string]any) []*godo.AppDomainSpec {
+func domainsFromConfig(cfg map[string]any) ([]*godo.AppDomainSpec, error) {
 	raw, ok := cfg["domains"].([]any)
 	if !ok || len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]*godo.AppDomainSpec, 0, len(raw))
-	for _, v := range raw {
+	for i, v := range raw {
 		m, ok := v.(map[string]any)
 		if !ok {
 			continue
@@ -603,15 +607,18 @@ func domainsFromConfig(cfg map[string]any) []*godo.AppDomainSpec {
 			Certificate:       strFromConfig(m, "certificate", ""),
 			MinimumTLSVersion: strFromConfig(m, "minimum_tls_version", ""),
 		}
+		if err := validateAppDomainTypeConfig(m); err != nil {
+			return nil, fmt.Errorf("domains[%d]: %w", i, err)
+		}
 		if wc, ok := m["wildcard"].(bool); ok {
 			d.Wildcard = wc
 		}
-		if t := strFromConfig(m, "type", ""); t != "" {
-			d.Type = godo.AppDomainSpecType(strings.ToUpper(t))
+		if t := desiredDomainType(m); t != "" {
+			d.Type = godo.AppDomainSpecType(t)
 		}
 		out = append(out, d)
 	}
-	return out
+	return out, nil
 }
 
 // ingressFromConfig converts canonical "ingress" and "routes" config to a

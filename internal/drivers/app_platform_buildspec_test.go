@@ -869,6 +869,47 @@ func TestBuildAppSpec_Domains(t *testing.T) {
 	}
 }
 
+func TestBuildAppSpec_DomainsNormalizesType(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"domains": []any{
+			map[string]any{
+				"domain": "app.example.com",
+				"type":   " primary ",
+			},
+		},
+	}
+	spec := buildSpecViaCreate(t, cfg)
+	if got := spec.Domains[0].Type; got != godo.AppDomainSpecType_Primary {
+		t.Fatalf("domain type = %q, want PRIMARY", got)
+	}
+}
+
+func TestBuildAppSpec_DomainsRejectDefaultCustomDomainType(t *testing.T) {
+	cfg := map[string]any{
+		"image": "registry.digitalocean.com/myrepo/myapp:v1",
+		"domains": []any{
+			map[string]any{
+				"domain": "www.example.com",
+				"type":   "DEFAULT",
+				"zone":   "example.com",
+			},
+		},
+	}
+	mock := &mockAppClient{app: testApp()}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	_, err := d.Create(t.Context(), interfaces.ResourceSpec{
+		Name:   "test-app",
+		Config: cfg,
+	})
+	if err == nil {
+		t.Fatal("expected DEFAULT custom domain type to be rejected")
+	}
+	if !strings.Contains(err.Error(), "DEFAULT") || !strings.Contains(err.Error(), "PRIMARY or ALIAS") {
+		t.Fatalf("error = %q, want targeted DEFAULT guidance", err)
+	}
+}
+
 // ── Egress ───────────────────────────────────────────────────────────────────
 
 func TestBuildAppSpec_Egress(t *testing.T) {

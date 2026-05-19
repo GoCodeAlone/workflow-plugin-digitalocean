@@ -102,6 +102,9 @@ func (d *AppDomainDriver) Diff(_ context.Context, desired interfaces.ResourceSpe
 			changes = append(changes, interfaces.FieldChange{Path: "app", Old: currentApp, New: desiredApp, ForceNew: true})
 		}
 	}
+	if err := validateAppDomainTypeConfig(desired.Config); err != nil {
+		return nil, fmt.Errorf("app domain diff %q: %w", desired.Name, err)
+	}
 	if desiredType := desiredDomainType(desired.Config); desiredType != "" {
 		curType, _ := current.Outputs["type"].(string)
 		if strings.ToUpper(curType) != desiredType {
@@ -156,7 +159,10 @@ func (d *AppDomainDriver) upsert(ctx context.Context, ref interfaces.ResourceRef
 	if app.Spec == nil {
 		return nil, fmt.Errorf("app domain upsert %q: app %q has nil spec", spec.Name, app.ID)
 	}
-	desired := appDomainSpecFromConfig(domain, spec.Config)
+	desired, err := appDomainSpecFromConfig(domain, spec.Config)
+	if err != nil {
+		return nil, fmt.Errorf("app domain upsert %q: %w", spec.Name, err)
+	}
 	app.Spec.Domains = mergeAppDomain(app.Spec.Domains, desired)
 	updated, _, err := d.client.Update(ctx, app.ID, &godo.AppUpdateRequest{Spec: app.Spec})
 	if err != nil {
@@ -217,8 +223,11 @@ func (d *AppDomainDriver) findAppObjectByName(ctx context.Context, name string) 
 	return nil, fmt.Errorf("app %q: %w", name, ErrResourceNotFound)
 }
 
-func appDomainSpecFromConfig(domain string, cfg map[string]any) *godo.AppDomainSpec {
+func appDomainSpecFromConfig(domain string, cfg map[string]any) (*godo.AppDomainSpec, error) {
 	out := &godo.AppDomainSpec{Domain: domain}
+	if err := validateAppDomainTypeConfig(cfg); err != nil {
+		return nil, err
+	}
 	if t := desiredDomainType(cfg); t != "" {
 		out.Type = godo.AppDomainSpecType(t)
 	}
@@ -234,12 +243,24 @@ func appDomainSpecFromConfig(domain string, cfg map[string]any) *godo.AppDomainS
 	if wildcard, ok := cfg["wildcard"].(bool); ok {
 		out.Wildcard = wildcard
 	}
-	return out
+	return out, nil
 }
 
 func desiredDomainType(cfg map[string]any) string {
 	t, _ := cfg["type"].(string)
 	return strings.ToUpper(strings.TrimSpace(t))
+}
+
+func validateAppDomainTypeConfig(cfg map[string]any) error {
+	t := desiredDomainType(cfg)
+	switch t {
+	case "", string(godo.AppDomainSpecType_Primary), string(godo.AppDomainSpecType_Alias):
+		return nil
+	case string(godo.AppDomainSpecType_Default):
+		return fmt.Errorf("domain type DEFAULT is reserved for DigitalOcean starter domains and is rejected by App Platform for custom domains; use PRIMARY or ALIAS")
+	default:
+		return fmt.Errorf("domain type %q is not supported; use PRIMARY or ALIAS", t)
+	}
 }
 
 func mergeAppDomain(existing []*godo.AppDomainSpec, desired *godo.AppDomainSpec) []*godo.AppDomainSpec {
