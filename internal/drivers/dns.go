@@ -239,7 +239,8 @@ func (d *DNSDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, c
 	if err != nil {
 		return nil, err
 	}
-	if len(absentRecords) > 0 && len(currentRecords) == 0 {
+	absentCheckRecords := currentRecords
+	if len(absentRecords) > 0 {
 		domain := current.ProviderID
 		if hasDesiredDomain {
 			domain = desiredDomain
@@ -249,10 +250,10 @@ func (d *DNSDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, c
 			if err != nil {
 				return nil, err
 			}
-			currentRecords = liveRecords
+			absentCheckRecords = liveRecords
 		}
 	}
-	if dnsAnyAbsentRecordPresent(absentRecords, currentRecords) {
+	if dnsAnyAbsentRecordPresent(absentRecords, absentCheckRecords) {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
 	if len(desiredRecords) == 0 {
