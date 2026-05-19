@@ -53,6 +53,7 @@ func TestDOProvider_Capabilities(t *testing.T) {
 	}
 	required := []string{
 		"infra.container_service",
+		"infra.app_domain",
 		"infra.k8s_cluster",
 		"infra.database",
 		"infra.cache",

@@ -28,6 +28,7 @@ func TestResolveSizing(t *testing.T) {
 		{"infra.api_gateway", interfaces.SizeS, "apps-s-1vcpu-1gb"},
 		// Types without variable sizing return "n/a".
 		{"infra.vpc", interfaces.SizeM, "n/a"},
+		{"infra.app_domain", interfaces.SizeM, "n/a"},
 		{"infra.firewall", interfaces.SizeL, "n/a"},
 		{"infra.dns", interfaces.SizeS, "n/a"},
 		{"infra.storage", interfaces.SizeXL, "n/a"},
