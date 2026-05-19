@@ -143,6 +143,26 @@
             }
           }
         },
+        "infra.dns": {
+          "description": "DigitalOcean DNS zone and record reconciliation. Declared records are upserted; absent_records deletes targeted stale records without making the whole zone authoritative.",
+          "fields": {
+            "domain": {
+              "type": "string",
+              "required": true,
+              "description": "DNS zone name."
+            },
+            "records": {
+              "type": "array<object>",
+              "required": false,
+              "description": "Records to create or update. Each record supports type, name, data, ttl, and type-specific fields."
+            },
+            "absent_records": {
+              "type": "array<object>",
+              "required": false,
+              "description": "Records to delete when present. Each entry supports type, name, and optional data for exact-value matching."
+            }
+          }
+        },
         "infra.firewall": {
           "description": "DigitalOcean cloud firewall. Attaches to Droplets by ID or by tag (which auto-attaches future Droplets / DOKS pools that receive the tag). Either `droplet_ids` or `tags` is REQUIRED; `wfctl infra apply` rejects firewalls with no targets before any DO API call. NOTE: DO firewalls do not attach to App Platform apps \u2014 for App-Platform-only deployments, use `expose: internal` services plus `trusted_sources` on managed databases.",
           "fields": {

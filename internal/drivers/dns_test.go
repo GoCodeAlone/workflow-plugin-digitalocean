@@ -31,6 +31,7 @@ type mockDomainsClient struct {
 	attemptedEdits              []editedRecord
 	createdRecords              []createdRecord
 	editedRecords               []editedRecord
+	deletedRecords              []deletedRecord
 	createRecordErr             error
 	createRecordErrs            []error
 	afterCreateRecordErr        func()
@@ -55,6 +56,11 @@ type editedRecord struct {
 	domain string
 	id     int
 	req    godo.DomainRecordEditRequest
+}
+
+type deletedRecord struct {
+	domain string
+	id     int
 }
 
 func (m *mockDomainsClient) Create(ctx context.Context, req *godo.DomainCreateRequest) (*godo.Domain, *godo.Response, error) {
@@ -157,7 +163,28 @@ func (m *mockDomainsClient) EditRecord(ctx context.Context, domain string, id in
 	m.replaceRecord(record)
 	return &record, nil, m.err
 }
-func (m *mockDomainsClient) DeleteRecord(_ context.Context, _ string, _ int) (*godo.Response, error) {
+func (m *mockDomainsClient) DeleteRecord(ctx context.Context, domain string, id int) (*godo.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := m.checkDomain(domain); err != nil {
+		return nil, err
+	}
+	m.deletedRecords = append(m.deletedRecords, deletedRecord{domain: domain, id: id})
+	for i := range m.records {
+		if m.records[i].ID == id {
+			m.records = append(m.records[:i], m.records[i+1:]...)
+			break
+		}
+	}
+	for pageIndex := range m.recordPages {
+		for recordIndex := range m.recordPages[pageIndex] {
+			if m.recordPages[pageIndex][recordIndex].ID == id {
+				m.recordPages[pageIndex] = append(m.recordPages[pageIndex][:recordIndex], m.recordPages[pageIndex][recordIndex+1:]...)
+				break
+			}
+		}
+	}
 	return nil, m.err
 }
 func (m *mockDomainsClient) Records(ctx context.Context, domain string, opts *godo.ListOptions) ([]godo.DomainRecord, *godo.Response, error) {
@@ -934,6 +961,223 @@ func TestDNSDriver_Update_NormalEditHonorsCanceledContextBeforeEdit(t *testing.T
 	}
 	if len(mock.editedRecords) != 0 {
 		t.Fatalf("edited records = %d, want 0", len(mock.editedRecords))
+	}
+}
+
+func TestDNSDriver_Update_DeletesAbsentRecord(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "example.com.", TTL: 1800},
+			{ID: 11, Type: "TXT", Name: "@", Data: "keep", TTL: 300},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	out, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.deletedRecords) != 1 || mock.deletedRecords[0].id != 10 {
+		t.Fatalf("deleted records = %+v, want id 10", mock.deletedRecords)
+	}
+	records := out.Outputs["records"].([]map[string]any)
+	for _, record := range records {
+		if record["type"] == "CNAME" && record["name"] == "www" {
+			t.Fatalf("www CNAME still present in outputs: %+v", records)
+		}
+	}
+}
+
+func TestDNSDriver_Create_DeletesAbsentRecord(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "example.com.", TTL: 1800},
+			{ID: 11, Type: "TXT", Name: "@", Data: "keep", TTL: 300},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	out, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "EXAMPLE.COM"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.deletedRecords) != 1 || mock.deletedRecords[0].id != 10 {
+		t.Fatalf("deleted records = %+v, want id 10", mock.deletedRecords)
+	}
+	records := out.Outputs["records"].([]map[string]any)
+	for _, record := range records {
+		if record["type"] == "CNAME" && record["name"] == "www" {
+			t.Fatalf("www CNAME still present in outputs: %+v", records)
+		}
+	}
+}
+
+func TestDNSDriver_Update_DeletesAbsentRecordBeforeUpsert(t *testing.T) {
+	mock := &mockDomainsClient{
+		domain:         testDomain(),
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "example.com.", TTL: 1800},
+		},
+	}
+	d := drivers.NewDNSDriverWithClient(mock)
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "example-dns", ProviderID: "example.com",
+	}, interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "example.com."},
+			},
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "target.ondigitalocean.app.", "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.deletedRecords) != 1 || len(mock.createdRecords) != 1 {
+		t.Fatalf("deleted=%+v created=%+v, want one delete then one create", mock.deletedRecords, mock.createdRecords)
+	}
+	if got := mock.createdRecords[0].req.Data; got != "target.ondigitalocean.app." {
+		t.Fatalf("created data = %q", got)
+	}
+}
+
+func TestDNSDriver_Diff_AbsentRecordNeedsUpdate(t *testing.T) {
+	d := drivers.NewDNSDriverWithClient(&mockDomainsClient{})
+
+	diff, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www"},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example-dns",
+		Type:       "infra.dns",
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"id": 10, "type": "CNAME", "name": "www", "data": "example.com.", "ttl": 1800},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("NeedsUpdate = false, want true")
+	}
+}
+
+func TestDNSDriver_Diff_AbsentRecordDataUsesCanonicalHostnameMatch(t *testing.T) {
+	d := drivers.NewDNSDriverWithClient(&mockDomainsClient{})
+
+	diff, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "EXAMPLE.COM"},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example-dns",
+		Type:       "infra.dns",
+		ProviderID: "example.com",
+		Outputs: map[string]any{
+			"records": []map[string]any{
+				{"id": 10, "type": "CNAME", "name": "www", "data": "example.com.", "ttl": 1800},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("NeedsUpdate = false, want true")
+	}
+}
+
+func TestDNSDriver_Diff_DeclaredAndAbsentRecordConflicts(t *testing.T) {
+	d := drivers.NewDNSDriverWithClient(&mockDomainsClient{})
+
+	_, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www"},
+			},
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com", "ttl": 300},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example-dns",
+		Type:       "infra.dns",
+		ProviderID: "example.com",
+	})
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot be both declared and absent") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDNSDriver_Diff_DeclaredAndAbsentRecordConflictsWithCanonicalHostnameData(t *testing.T) {
+	d := drivers.NewDNSDriverWithClient(&mockDomainsClient{})
+
+	_, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example-dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"absent_records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "TARGET.EXAMPLE.COM"},
+			},
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "target.example.com.", "ttl": 300},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example-dns",
+		Type:       "infra.dns",
+		ProviderID: "example.com",
+	})
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot be both declared and absent") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
