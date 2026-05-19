@@ -112,10 +112,9 @@
               "required": false,
               "enum": [
                 "PRIMARY",
-                "ALIAS",
-                "DEFAULT"
+                "ALIAS"
               ],
-              "description": "App Platform domain type."
+              "description": "App Platform custom domain type. Use PRIMARY for the app's primary custom domain or ALIAS for a non-primary custom domain."
             },
             "zone": {
               "type": "string",

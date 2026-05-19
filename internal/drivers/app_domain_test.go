@@ -2,6 +2,7 @@ package drivers_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
@@ -76,6 +77,31 @@ func TestAppDomainDriver_CreateAddsDomainWithoutRebuildingApp(t *testing.T) {
 	added := got.Domains[1]
 	if added.Domain != "www.buymywishlist.com" || added.Type != godo.AppDomainSpecType_Alias {
 		t.Fatalf("added domain = %+v, want www alias", added)
+	}
+}
+
+func TestAppDomainDriver_CreateRejectsDefaultDomainType(t *testing.T) {
+	app := appWithDomains()
+	mock := &mockAppClient{app: app, listApps: []*godo.App{app}}
+	d := drivers.NewAppDomainDriverWithClient(mock)
+
+	_, err := d.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "bmw-www-domain",
+		Type: "infra.app_domain",
+		Config: map[string]any{
+			"app":    "buymywishlist",
+			"domain": "www.buymywishlist.com",
+			"type":   "DEFAULT",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected DEFAULT custom domain type to be rejected")
+	}
+	if !strings.Contains(err.Error(), "DEFAULT") || !strings.Contains(err.Error(), "PRIMARY or ALIAS") {
+		t.Fatalf("error = %q, want targeted DEFAULT guidance", err)
+	}
+	if mock.lastUpdateReq != nil {
+		t.Fatal("DEFAULT validation should fail before App Platform Update")
 	}
 }
 
