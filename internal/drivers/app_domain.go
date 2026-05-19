@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
@@ -30,19 +31,11 @@ func (d *AppDomainDriver) Create(ctx context.Context, spec interfaces.ResourceSp
 }
 
 func (d *AppDomainDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
-	appID, domain, err := parseAppDomainProviderID(ref.ProviderID)
+	read, err := d.readAppDomain(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("app domain read %q: %w", ref.Name, err)
 	}
-	app, err := d.getApp(ctx, appID)
-	if err != nil {
-		return nil, fmt.Errorf("app domain read %q: %w", ref.Name, err)
-	}
-	found := findAppDomain(app, domain)
-	if found == nil {
-		return nil, fmt.Errorf("app domain %q on app %q: %w", domain, appID, ErrResourceNotFound)
-	}
-	return appDomainOutput(ref.Name, app, found), nil
+	return appDomainOutput(ref.Name, read.app, read.spec, read.live), nil
 }
 
 func (d *AppDomainDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -131,10 +124,21 @@ func (d *AppDomainDriver) Diff(_ context.Context, desired interfaces.ResourceSpe
 }
 
 func (d *AppDomainDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
-	if _, err := d.Read(ctx, ref); err != nil {
+	read, err := d.readAppDomain(ctx, ref)
+	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	return &interfaces.HealthResult{Healthy: true, Message: "domain configured"}, nil
+	if read.live == nil {
+		return &interfaces.HealthResult{
+			Healthy: false,
+			Message: fmt.Sprintf("domain %s configured in app spec but live domain status is not reported", read.spec.Domain),
+		}, nil
+	}
+	message := liveDomainHealthMessage(read.live)
+	if read.live.Phase == godo.AppJobSpecKindPHASE_Active {
+		return &interfaces.HealthResult{Healthy: true, Message: message}, nil
+	}
+	return &interfaces.HealthResult{Healthy: false, Message: message}, nil
 }
 
 func (d *AppDomainDriver) Scale(_ context.Context, _ interfaces.ResourceRef, _ int) (*interfaces.ResourceOutput, error) {
@@ -175,7 +179,33 @@ func (d *AppDomainDriver) upsert(ctx context.Context, ref interfaces.ResourceRef
 	if found == nil {
 		found = desired
 	}
-	return appDomainOutput(spec.Name, updated, found), nil
+	return appDomainOutput(spec.Name, updated, found, findLiveAppDomain(updated, domain)), nil
+}
+
+type appDomainRead struct {
+	app  *godo.App
+	spec *godo.AppDomainSpec
+	live *godo.AppDomain
+}
+
+func (d *AppDomainDriver) readAppDomain(ctx context.Context, ref interfaces.ResourceRef) (*appDomainRead, error) {
+	appID, domain, err := parseAppDomainProviderID(ref.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+	app, err := d.getApp(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	found := findAppDomain(app, domain)
+	live := findLiveAppDomain(app, domain)
+	if found == nil && live != nil {
+		found = live.Spec
+	}
+	if found == nil {
+		return nil, fmt.Errorf("app domain %q on app %q: %w", domain, appID, ErrResourceNotFound)
+	}
+	return &appDomainRead{app: app, spec: found, live: live}, nil
 }
 
 func (d *AppDomainDriver) resolveApp(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*godo.App, error) {
@@ -292,26 +322,144 @@ func findAppDomain(app *godo.App, domain string) *godo.AppDomainSpec {
 	return nil
 }
 
-func appDomainOutput(name string, app *godo.App, domain *godo.AppDomainSpec) *interfaces.ResourceOutput {
+func findLiveAppDomain(app *godo.App, domain string) *godo.AppDomain {
+	if app == nil {
+		return nil
+	}
+	for _, existing := range app.Domains {
+		if existing == nil || existing.Spec == nil {
+			continue
+		}
+		if strings.EqualFold(existing.Spec.Domain, domain) {
+			return existing
+		}
+	}
+	return nil
+}
+
+func appDomainOutput(name string, app *godo.App, domain *godo.AppDomainSpec, live *godo.AppDomain) *interfaces.ResourceOutput {
 	appName := ""
 	if app.Spec != nil {
 		appName = app.Spec.Name
+	}
+	outputs := map[string]any{
+		"app_id":              app.ID,
+		"app":                 appName,
+		"domain":              domain.Domain,
+		"type":                string(domain.Type),
+		"zone":                domain.Zone,
+		"certificate":         domain.Certificate,
+		"minimum_tls_version": domain.MinimumTLSVersion,
+		"wildcard":            domain.Wildcard,
+	}
+	status := "configured"
+	if live != nil {
+		addLiveDomainOutputs(outputs, live)
+		status = appDomainStatus(live.Phase)
 	}
 	return &interfaces.ResourceOutput{
 		Name:       name,
 		Type:       "infra.app_domain",
 		ProviderID: app.ID + "/" + domain.Domain,
-		Outputs: map[string]any{
-			"app_id":              app.ID,
-			"app":                 appName,
-			"domain":              domain.Domain,
-			"type":                string(domain.Type),
-			"zone":                domain.Zone,
-			"certificate":         domain.Certificate,
-			"minimum_tls_version": domain.MinimumTLSVersion,
-			"wildcard":            domain.Wildcard,
-		},
-		Status: "active",
+		Outputs:    outputs,
+		Status:     status,
+	}
+}
+
+func addLiveDomainOutputs(outputs map[string]any, live *godo.AppDomain) {
+	outputs["phase"] = string(live.Phase)
+	if live.ID != "" {
+		outputs["domain_id"] = live.ID
+	}
+	if !live.CertificateExpiresAt.IsZero() {
+		outputs["certificate_expires_at"] = live.CertificateExpiresAt.Format(time.RFC3339)
+	}
+	if live.Validation != nil {
+		outputs["validation_txt_name"] = live.Validation.TXTName
+		outputs["validation_txt_value"] = live.Validation.TXTValue
+	}
+	if len(live.Validations) > 0 {
+		validations := make([]any, 0, len(live.Validations))
+		for _, validation := range live.Validations {
+			if validation == nil {
+				continue
+			}
+			validations = append(validations, map[string]any{
+				"txt_name":  validation.TXTName,
+				"txt_value": validation.TXTValue,
+			})
+		}
+		if len(validations) > 0 {
+			outputs["validations"] = validations
+		}
+	}
+	if progress := appDomainProgressSummary(live.Progress); progress != "" {
+		outputs["progress"] = progress
+	}
+}
+
+func appDomainStatus(phase godo.AppDomainPhase) string {
+	switch phase {
+	case godo.AppJobSpecKindPHASE_Active:
+		return "active"
+	case godo.AppJobSpecKindPHASE_Pending:
+		return "pending"
+	case godo.AppJobSpecKindPHASE_Configuring:
+		return "configuring"
+	case godo.AppJobSpecKindPHASE_Error:
+		return "error"
+	case godo.AppJobSpecKindPHASE_Unknown, "":
+		return "unknown"
+	default:
+		return strings.ToLower(string(phase))
+	}
+}
+
+func liveDomainHealthMessage(live *godo.AppDomain) string {
+	message := fmt.Sprintf("domain phase %s", live.Phase)
+	if progress := appDomainProgressSummary(live.Progress); progress != "" {
+		message += ": " + progress
+	}
+	return message
+}
+
+func appDomainProgressSummary(progress *godo.AppDomainProgress) string {
+	if progress == nil {
+		return ""
+	}
+	var parts []string
+	for _, step := range progress.Steps {
+		collectDomainProgressStep(&parts, step)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func collectDomainProgressStep(parts *[]string, step *godo.AppDomainProgressStep) {
+	if step == nil {
+		return
+	}
+	current := strings.TrimSpace(step.Name)
+	if current == "" {
+		current = "step"
+	}
+	if step.Status != "" {
+		current += ": " + string(step.Status)
+	}
+	if step.Reason != nil {
+		reason := strings.TrimSpace(step.Reason.Code)
+		if step.Reason.Message != "" {
+			if reason != "" {
+				reason += ": "
+			}
+			reason += strings.TrimSpace(step.Reason.Message)
+		}
+		if reason != "" {
+			current += " " + reason
+		}
+	}
+	*parts = append(*parts, current)
+	for _, child := range step.Steps {
+		collectDomainProgressStep(parts, child)
 	}
 }
 

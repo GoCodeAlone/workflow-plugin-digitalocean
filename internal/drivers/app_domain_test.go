@@ -8,6 +8,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func appWithDomains(domains ...*godo.AppDomainSpec) *godo.App {
@@ -102,6 +103,140 @@ func TestAppDomainDriver_CreateRejectsDefaultDomainType(t *testing.T) {
 	}
 	if mock.lastUpdateReq != nil {
 		t.Fatal("DEFAULT validation should fail before App Platform Update")
+	}
+}
+
+func TestAppDomainDriver_ReadIncludesLiveDomainStatus(t *testing.T) {
+	app := appWithDomains(&godo.AppDomainSpec{
+		Domain:   "www.buymywishlist.com",
+		Type:     godo.AppDomainSpecType_Alias,
+		Zone:     "buymywishlist.com",
+		Wildcard: true,
+	})
+	app.Domains = []*godo.AppDomain{{
+		ID:    "domain-1",
+		Spec:  &godo.AppDomainSpec{Domain: "www.buymywishlist.com"},
+		Phase: godo.AppJobSpecKindPHASE_Configuring,
+		Validation: &godo.AppDomainValidation{
+			TXTName:  "_acme-challenge.www",
+			TXTValue: "txt-value",
+		},
+		Validations: []*godo.AppDomainValidation{{
+			TXTName:  "_acme-challenge.www",
+			TXTValue: "txt-value",
+		}},
+		Progress: &godo.AppDomainProgress{Steps: []*godo.AppDomainProgressStep{{
+			Name:   "certificate",
+			Status: godo.AppJobSpecKindProgressStepStatus_Running,
+		}}},
+	}}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppDomainDriverWithClient(mock)
+
+	out, err := d.Read(context.Background(), interfaces.ResourceRef{
+		Name:       "bmw-www-domain",
+		Type:       "infra.app_domain",
+		ProviderID: app.ID + "/www.buymywishlist.com",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if out.Status != "configuring" {
+		t.Fatalf("Status = %q, want configuring", out.Status)
+	}
+	if got := out.Outputs["phase"]; got != "CONFIGURING" {
+		t.Fatalf("phase output = %#v, want CONFIGURING", got)
+	}
+	if got := out.Outputs["validation_txt_name"]; got != "_acme-challenge.www" {
+		t.Fatalf("validation_txt_name = %#v, want TXT name", got)
+	}
+	if got := out.Outputs["validation_txt_value"]; got != "txt-value" {
+		t.Fatalf("validation_txt_value = %#v, want TXT value", got)
+	}
+	if got := out.Outputs["progress"]; got != "certificate: RUNNING" {
+		t.Fatalf("progress = %#v, want certificate progress", got)
+	}
+	if _, err := structpb.NewStruct(out.Outputs); err != nil {
+		t.Fatalf("outputs are not structpb-compatible: %v", err)
+	}
+	validations, ok := out.Outputs["validations"].([]any)
+	if !ok || len(validations) != 1 {
+		t.Fatalf("validations = %#v, want []any with one element", out.Outputs["validations"])
+	}
+	validation, ok := validations[0].(map[string]any)
+	if !ok {
+		t.Fatalf("validations[0] = %#v, want map[string]any", validations[0])
+	}
+	if validation["txt_name"] != "_acme-challenge.www" || validation["txt_value"] != "txt-value" {
+		t.Fatalf("validation = %#v, want TXT details", validation)
+	}
+}
+
+func TestAppDomainDriver_HealthCheckReportsLiveDomainError(t *testing.T) {
+	app := appWithDomains(&godo.AppDomainSpec{Domain: "www.buymywishlist.com", Type: godo.AppDomainSpecType_Alias})
+	app.Domains = []*godo.AppDomain{{
+		Spec:  &godo.AppDomainSpec{Domain: "www.buymywishlist.com"},
+		Phase: godo.AppJobSpecKindPHASE_Error,
+		Progress: &godo.AppDomainProgress{Steps: []*godo.AppDomainProgressStep{{
+			Name:   "certificate",
+			Status: godo.AppJobSpecKindProgressStepStatus_Error,
+			Reason: &godo.AppDomainProgressStepReason{
+				Code:    "validation_failed",
+				Message: "CNAME target is invalid",
+			},
+		}}},
+	}}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppDomainDriverWithClient(mock)
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "bmw-www-domain",
+		Type:       "infra.app_domain",
+		ProviderID: app.ID + "/www.buymywishlist.com",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Fatal("HealthCheck healthy = true, want false")
+	}
+	if !strings.Contains(result.Message, "ERROR") || !strings.Contains(result.Message, "validation_failed") || !strings.Contains(result.Message, "CNAME target is invalid") {
+		t.Fatalf("HealthCheck message = %q, want phase and progress reason", result.Message)
+	}
+}
+
+func TestAppDomainDriver_HealthCheckRequiresLiveDomainActive(t *testing.T) {
+	app := appWithDomains(&godo.AppDomainSpec{Domain: "www.buymywishlist.com", Type: godo.AppDomainSpecType_Alias})
+	app.Domains = []*godo.AppDomain{{
+		Spec:  &godo.AppDomainSpec{Domain: "www.buymywishlist.com"},
+		Phase: godo.AppJobSpecKindPHASE_Pending,
+	}}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppDomainDriverWithClient(mock)
+
+	pending, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "bmw-www-domain",
+		Type:       "infra.app_domain",
+		ProviderID: app.ID + "/www.buymywishlist.com",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck pending: %v", err)
+	}
+	if pending.Healthy || !strings.Contains(pending.Message, "PENDING") {
+		t.Fatalf("pending result = %+v, want unhealthy PENDING", pending)
+	}
+
+	app.Domains[0].Phase = godo.AppJobSpecKindPHASE_Active
+	active, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "bmw-www-domain",
+		Type:       "infra.app_domain",
+		ProviderID: app.ID + "/www.buymywishlist.com",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck active: %v", err)
+	}
+	if !active.Healthy || !strings.Contains(active.Message, "ACTIVE") {
+		t.Fatalf("active result = %+v, want healthy ACTIVE", active)
 	}
 }
 
