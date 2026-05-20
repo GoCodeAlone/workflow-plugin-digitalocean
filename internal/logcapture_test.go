@@ -152,6 +152,57 @@ func TestStreamCaptureLiveURLStreamsMessage(t *testing.T) {
 	}
 }
 
+func TestDOProviderCaptureLogsNormalizesHTTPLiveURL(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	liveSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("live via http url\n")); err != nil {
+			t.Errorf("write websocket message: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+			t.Errorf("write websocket close: %v", err)
+		}
+	}))
+	t.Cleanup(liveSrv.Close)
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/apps":
+			_, _ = w.Write([]byte(`{"apps":[{"id":"app-123","spec":{"name":"bmw-staging"}}]}`))
+		case strings.HasPrefix(r.URL.Path, "/v2/apps/app-123/logs"):
+			_, _ = w.Write([]byte(`{"live_url":"` + liveSrv.URL + `"}`))
+		default:
+			t.Fatalf("unexpected API path: %s", r.URL.String())
+		}
+	}))
+	t.Cleanup(apiSrv.Close)
+
+	p := NewDOProvider()
+	if err := p.Initialize(context.Background(), map[string]any{"token": "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	p.client.BaseURL = mustURL(t, apiSrv.URL+"/v2/")
+
+	var sink captureSink
+	err := p.CaptureLogs(context.Background(), interfaces.LogCaptureRequest{
+		ResourceName: "bmw-staging",
+		ResourceType: "infra.container_service",
+		LogType:      "RUN",
+		Follow:       true,
+	}, &sink)
+	if err != nil {
+		t.Fatalf("CaptureLogs: %v", err)
+	}
+	if got := sink.String(); got != "live via http url\n" {
+		t.Fatalf("captured live logs = %q", got)
+	}
+}
+
 func TestStreamCaptureLiveURLRejectsOversizedMessage(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

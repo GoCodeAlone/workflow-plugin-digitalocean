@@ -132,6 +132,10 @@ func streamCaptureLiveURL(ctx context.Context, liveURL string, sink interfaces.L
 }
 
 func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink interfaces.LogCaptureSink, readLimit int64) error {
+	liveURL, err := normalizeCaptureLiveURL(liveURL)
+	if err != nil {
+		return err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, liveURL, nil)
 	if err != nil {
 		return fmt.Errorf("digitalocean CaptureLogs: connect live logs: %s", redactCaptureURLError(err))
@@ -168,6 +172,25 @@ func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink int
 		if err := sink.WriteLogChunk(interfaces.LogChunk{Data: data, Source: "live"}); err != nil {
 			return err
 		}
+	}
+}
+
+func normalizeCaptureLiveURL(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("digitalocean CaptureLogs: invalid live log URL")
+	}
+	switch u.Scheme {
+	case "ws", "wss":
+		return u.String(), nil
+	case "http":
+		u.Scheme = "ws"
+		return u.String(), nil
+	case "https":
+		u.Scheme = "wss"
+		return u.String(), nil
+	default:
+		return "", fmt.Errorf("digitalocean CaptureLogs: unsupported live log URL scheme %q", u.Scheme)
 	}
 }
 
