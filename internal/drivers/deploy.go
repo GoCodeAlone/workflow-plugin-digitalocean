@@ -79,6 +79,10 @@ func (d *AppDeployDriver) currentTargetDeployment(ctx context.Context, app *godo
 			d.targetDeploymentID = dep.ID
 			return dep, nil
 		}
+		if dep.PreviousDeploymentID == d.targetDeploymentID {
+			d.targetDeploymentID = dep.ID
+			return dep, nil
+		}
 	}
 	deployments, _, err := d.client.ListDeployments(ctx, d.appID, &godo.ListOptions{Page: 1, PerPage: 20})
 	if err != nil {
