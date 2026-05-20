@@ -28,6 +28,7 @@ func makeGodoErr(statusCode int) error {
 type mockAppClient struct {
 	app                    *godo.App
 	err                    error
+	updateErr              error
 	listApps               []*godo.App        // returned by List
 	listErr                error              // error returned by List
 	deployments            []*godo.Deployment // returned by ListDeployments
@@ -60,6 +61,9 @@ func (m *mockAppClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.Ap
 }
 func (m *mockAppClient) Update(_ context.Context, _ string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	m.lastUpdateReq = req
+	if m.updateErr != nil {
+		return m.app, nil, m.updateErr
+	}
 	return m.app, nil, m.err
 }
 func (m *mockAppClient) CreateDeployment(_ context.Context, _ string, reqs ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
@@ -237,7 +241,7 @@ func TestAppPlatformDriver_HealthCheckWaitsForDeploymentTriggeredByUpdate(t *tes
 }
 
 func TestAppPlatformDriver_Update_Error(t *testing.T) {
-	mock := &mockAppClient{err: fmt.Errorf("update failed")}
+	mock := &mockAppClient{app: testApp(), updateErr: fmt.Errorf("update failed")}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
@@ -258,7 +262,7 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 }
 
 func TestAppPlatformDriver_Update_ErrorSentinelPropagates(t *testing.T) {
-	mock := &mockAppClient{err: makeGodoErr(http.StatusTooManyRequests)}
+	mock := &mockAppClient{app: testApp(), updateErr: makeGodoErr(http.StatusTooManyRequests)}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{

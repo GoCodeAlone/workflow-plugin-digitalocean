@@ -14,6 +14,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
@@ -52,12 +53,16 @@ type appPlatformMigrationRepairClient interface {
 
 // AppPlatformDriver manages DigitalOcean App Platform (infra.container_service).
 type AppPlatformDriver struct {
-	client                     AppPlatformClient
-	regClient                  RegistryClient // NEW: image-presence pre-flight; nil-safe (skips check if nil)
-	region                     string
+	client             AppPlatformClient
+	regClient          RegistryClient // NEW: image-presence pre-flight; nil-safe (skips check if nil)
+	region             string
+	deploymentMu       sync.Mutex
+	waitingDeployments map[string]*appDeploymentWaitState
+}
+
+type appDeploymentWaitState struct {
 	targetDeploymentID         string
 	previousActiveDeploymentID string
-	waitingForDeployment       bool
 }
 
 // NewAppPlatformDriver creates an AppPlatformDriver backed by a real godo client.
@@ -174,13 +179,20 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 		return nil, fmt.Errorf("app platform build spec: %w", err)
 	}
 
+	current, _, err := d.client.Get(ctx, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("app platform update %q: read current app: %w", ref.Name, WrapGodoError(err))
+	}
+	previousActiveDeploymentID := deploymentID(current.ActiveDeployment)
+
 	app, _, err := d.client.Update(ctx, providerID, &godo.AppUpdateRequest{Spec: appSpec})
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
-	d.previousActiveDeploymentID = deploymentID(app.ActiveDeployment)
-	d.waitingForDeployment = true
-	d.targetDeploymentID = deploymentID(selectUpdateDeployment(app, d.previousActiveDeploymentID))
+	d.setUpdateDeploymentState(providerID, appDeploymentWaitState{
+		previousActiveDeploymentID: previousActiveDeploymentID,
+		targetDeploymentID:         deploymentID(selectUpdateDeployment(app, previousActiveDeploymentID)),
+	})
 	return appOutput(app), nil
 }
 
@@ -440,17 +452,18 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 	if err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
-	if d.waitingForDeployment {
-		dep, err := d.currentTargetDeployment(ctx, providerID, app)
+	if d.hasUpdateDeploymentState(providerID) {
+		dep, previousActiveDeploymentID, err := d.currentTargetDeployment(ctx, providerID, app)
 		if err != nil {
 			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 		}
 		if dep == nil {
-			return &interfaces.HealthResult{Healthy: false, Message: fmt.Sprintf("waiting for deployment after update: previous active %s", d.previousActiveDeploymentID)}, nil
+			return &interfaces.HealthResult{Healthy: false, Message: fmt.Sprintf("waiting for deployment after update: previous active %s", previousActiveDeploymentID)}, nil
 		}
 		if err := deploymentHealthError(ref.Name, dep); err != nil {
 			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 		}
+		d.clearUpdateDeploymentState(providerID)
 		return &interfaces.HealthResult{Healthy: true}, nil
 	}
 	listFn := func(ctx context.Context, appID string) ([]*godo.Deployment, error) {
@@ -460,30 +473,58 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 	return appHealthResult(ctx, listFn, app), nil
 }
 
-func (d *AppPlatformDriver) currentTargetDeployment(ctx context.Context, providerID string, app *godo.App) (*godo.Deployment, error) {
-	if dep := selectUpdateDeployment(app, d.previousActiveDeploymentID); dep != nil {
-		if d.targetDeploymentID == "" || dep.ID == d.targetDeploymentID {
-			d.targetDeploymentID = dep.ID
-			return dep, nil
+func (d *AppPlatformDriver) setUpdateDeploymentState(providerID string, state appDeploymentWaitState) {
+	d.deploymentMu.Lock()
+	defer d.deploymentMu.Unlock()
+	if d.waitingDeployments == nil {
+		d.waitingDeployments = make(map[string]*appDeploymentWaitState)
+	}
+	stateCopy := state
+	d.waitingDeployments[providerID] = &stateCopy
+}
+
+func (d *AppPlatformDriver) hasUpdateDeploymentState(providerID string) bool {
+	d.deploymentMu.Lock()
+	defer d.deploymentMu.Unlock()
+	return d.waitingDeployments != nil && d.waitingDeployments[providerID] != nil
+}
+
+func (d *AppPlatformDriver) clearUpdateDeploymentState(providerID string) {
+	d.deploymentMu.Lock()
+	defer d.deploymentMu.Unlock()
+	delete(d.waitingDeployments, providerID)
+}
+
+func (d *AppPlatformDriver) currentTargetDeployment(ctx context.Context, providerID string, app *godo.App) (*godo.Deployment, string, error) {
+	d.deploymentMu.Lock()
+	defer d.deploymentMu.Unlock()
+	state := d.waitingDeployments[providerID]
+	if state == nil {
+		return nil, "", nil
+	}
+	if dep := selectUpdateDeployment(app, state.previousActiveDeploymentID); dep != nil {
+		if state.targetDeploymentID == "" || dep.ID == state.targetDeploymentID {
+			state.targetDeploymentID = dep.ID
+			return dep, state.previousActiveDeploymentID, nil
 		}
 	}
 	deployments, _, err := d.client.ListDeployments(ctx, providerID, &godo.ListOptions{Page: 1, PerPage: 20})
 	if err != nil {
-		return nil, fmt.Errorf("list deployments: %w", err)
+		return nil, state.previousActiveDeploymentID, fmt.Errorf("app platform health check %q: list deployments: %w", providerID, WrapGodoError(err))
 	}
 	for _, dep := range deployments {
 		if dep == nil {
 			continue
 		}
-		if d.targetDeploymentID != "" && dep.ID == d.targetDeploymentID {
-			return dep, nil
+		if state.targetDeploymentID != "" && dep.ID == state.targetDeploymentID {
+			return dep, state.previousActiveDeploymentID, nil
 		}
-		if d.targetDeploymentID == "" && isHistoricalUpdateDeployment(dep, d.previousActiveDeploymentID) {
-			d.targetDeploymentID = dep.ID
-			return dep, nil
+		if state.targetDeploymentID == "" && isHistoricalUpdateDeployment(dep, state.previousActiveDeploymentID) {
+			state.targetDeploymentID = dep.ID
+			return dep, state.previousActiveDeploymentID, nil
 		}
 	}
-	return nil, nil
+	return nil, state.previousActiveDeploymentID, nil
 }
 
 // listDeploymentsFn is a function that returns the most recent deployment(s)

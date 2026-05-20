@@ -117,6 +117,11 @@ func TestCreate_ProviderIDIsUUIDFromAPI(t *testing.T) {
 func TestUpdate_UsesUUIDWhenProviderIDIsValid(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	c := &stateHealClient{
+		getApp: &godo.App{
+			ID:               uuid,
+			Spec:             &godo.AppSpec{Name: "bmw-staging"},
+			ActiveDeployment: &godo.Deployment{ID: "dep-old", Phase: godo.DeploymentPhase_Active},
+		},
 		updatedApp: &godo.App{
 			ID:   uuid,
 			Spec: &godo.AppSpec{Name: "bmw-staging"},
@@ -144,6 +149,11 @@ func TestUpdate_UsesUUIDWhenProviderIDIsValid(t *testing.T) {
 func TestUpdate_HealsStaleName(t *testing.T) {
 	const uuid = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
 	c := &stateHealClient{
+		getApp: &godo.App{
+			ID:               uuid,
+			Spec:             &godo.AppSpec{Name: "bmw-staging"},
+			ActiveDeployment: &godo.Deployment{ID: "dep-old", Phase: godo.DeploymentPhase_Active},
+		},
 		// List returns the real app so findAppByName resolves name → UUID.
 		listApps: []*godo.App{
 			{ID: uuid, Spec: &godo.AppSpec{Name: "bmw-staging"}},
@@ -175,6 +185,43 @@ func TestUpdate_HealsStaleName(t *testing.T) {
 	// Returned output must carry the healed UUID.
 	if out.ProviderID != uuid {
 		t.Errorf("ResourceOutput.ProviderID = %q, want UUID %q", out.ProviderID, uuid)
+	}
+}
+
+func TestUpdateDeploymentWaitStateIsScopedPerProviderID(t *testing.T) {
+	const appOne = "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5"
+	const appTwo = "921d821e-12a6-4cb8-a0c1-e131f08af08e"
+	c := &stateHealClient{
+		getApp: &godo.App{
+			ID:               appOne,
+			Spec:             &godo.AppSpec{Name: "bmw-staging"},
+			ActiveDeployment: &godo.Deployment{ID: "dep-old", Phase: godo.DeploymentPhase_Active},
+		},
+		updatedApp: &godo.App{
+			ID:               appOne,
+			Spec:             &godo.AppSpec{Name: "bmw-staging"},
+			ActiveDeployment: &godo.Deployment{ID: "dep-old", Phase: godo.DeploymentPhase_Active},
+		},
+	}
+	d := NewAppPlatformDriverWithClient(c, "nyc3")
+	if _, err := d.Update(context.Background(), interfaces.ResourceRef{Name: "bmw-staging", ProviderID: appOne}, interfaces.ResourceSpec{
+		Name:   "bmw-staging",
+		Config: map[string]any{"image": "docker.io/myorg/myapp:latest"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	c.getApp = &godo.App{
+		ID:               appTwo,
+		Spec:             &godo.AppSpec{Name: "other-app"},
+		ActiveDeployment: &godo.Deployment{ID: "dep-other", Phase: godo.DeploymentPhase_Active},
+	}
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{Name: "other-app", ProviderID: appTwo})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("HealthCheck for unrelated app inherited update wait state: %q", result.Message)
 	}
 }
 
