@@ -146,6 +146,22 @@ func TestDOIaCProviderRequiredServer_AllRPCs(t *testing.T) {
 		t.Errorf("EnumerateAll error %q does not look like a provider-side error; "+
 			"the optional Enumerator service may not be registered", msg)
 	}
+
+	logClient := pb.NewIaCProviderLogCaptureClient(conn)
+	logStream, logErr := logClient.CaptureLogs(ctx, &pb.CaptureLogsRequest{
+		ResourceName: "missing-app",
+		LogType:      pb.LogCaptureType_LOG_CAPTURE_TYPE_RUN,
+	})
+	if logErr == nil {
+		_, logErr = logStream.Recv()
+	}
+	if logErr == nil {
+		t.Fatalf("CaptureLogs: expected provider-side error for uninitialized provider, got nil")
+	}
+	if !containsAny(logErr.Error(), "not initialized", "CaptureLogs") {
+		t.Errorf("CaptureLogs error %q does not look like a provider-side error; "+
+			"the optional LogCapture service may not be registered", logErr.Error())
+	}
 }
 
 // containsAny returns true when s contains any of the provided substrings.

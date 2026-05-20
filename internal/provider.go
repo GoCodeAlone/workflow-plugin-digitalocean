@@ -50,6 +50,7 @@ var _ interfaces.Enumerator = (*DOProvider)(nil)
 var _ interfaces.EnumeratorAll = (*DOProvider)(nil)
 var _ interfaces.DriftConfigDetector = (*DOProvider)(nil)
 var _ interfaces.ProviderCredentialRevoker = (*DOProvider)(nil)
+var _ interfaces.LogCaptureProvider = (*DOProvider)(nil)
 
 // NewDOProvider creates an uninitialised DOProvider.
 func NewDOProvider() *DOProvider {
@@ -156,6 +157,14 @@ func (p *DOProvider) AppsClient() steps.IaCLogsClient {
 // AppsScaleClient returns the godo Apps service as steps.AppsScaleClient for
 // use by step.iac_scale. Returns nil when Initialize has not been called.
 func (p *DOProvider) AppsScaleClient() steps.AppsScaleClient {
+	if p.client == nil {
+		return nil
+	}
+	return p.client.Apps
+}
+
+// AppsLogClient returns the godo Apps service for provider log capture.
+func (p *DOProvider) AppsLogClient() steps.IaCLogsClient {
 	if p.client == nil {
 		return nil
 	}
