@@ -28,6 +28,7 @@ func makeGodoErr(statusCode int) error {
 type mockAppClient struct {
 	app                    *godo.App
 	err                    error
+	updateErr              error
 	listApps               []*godo.App        // returned by List
 	listErr                error              // error returned by List
 	deployments            []*godo.Deployment // returned by ListDeployments
@@ -60,6 +61,9 @@ func (m *mockAppClient) List(_ context.Context, _ *godo.ListOptions) ([]*godo.Ap
 }
 func (m *mockAppClient) Update(_ context.Context, _ string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
 	m.lastUpdateReq = req
+	if m.updateErr != nil {
+		return m.app, nil, m.updateErr
+	}
 	return m.app, nil, m.err
 }
 func (m *mockAppClient) CreateDeployment(_ context.Context, _ string, reqs ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
@@ -194,8 +198,50 @@ func TestAppPlatformDriver_Update_Success(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_HealthCheckWaitsForDeploymentTriggeredByUpdate(t *testing.T) {
+	app := testApp()
+	app.ActiveDeployment.ID = "dep-old"
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}
+
+	if _, err := d.Update(context.Background(), ref, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Fatalf("HealthCheck reported old active deployment healthy while waiting for update deployment")
+	}
+	if !strings.Contains(result.Message, "waiting for deployment after update") {
+		t.Fatalf("HealthCheck message = %q, want waiting for deployment after update", result.Message)
+	}
+
+	mock.deployments = []*godo.Deployment{{
+		ID:                   "dep-new",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-old",
+	}}
+	result, err = d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck after deployment observed: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("HealthCheck after new deployment active Healthy=false, message=%q", result.Message)
+	}
+}
+
 func TestAppPlatformDriver_Update_Error(t *testing.T) {
-	mock := &mockAppClient{err: fmt.Errorf("update failed")}
+	mock := &mockAppClient{app: testApp(), updateErr: fmt.Errorf("update failed")}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
@@ -216,7 +262,7 @@ func TestAppPlatformDriver_Update_Error(t *testing.T) {
 }
 
 func TestAppPlatformDriver_Update_ErrorSentinelPropagates(t *testing.T) {
-	mock := &mockAppClient{err: makeGodoErr(http.StatusTooManyRequests)}
+	mock := &mockAppClient{app: testApp(), updateErr: makeGodoErr(http.StatusTooManyRequests)}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
 
 	_, err := d.Update(context.Background(), interfaces.ResourceRef{
