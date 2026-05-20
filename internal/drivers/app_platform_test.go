@@ -240,6 +240,52 @@ func TestAppPlatformDriver_HealthCheckWaitsForDeploymentTriggeredByUpdate(t *tes
 	}
 }
 
+func TestAppPlatformDriver_HealthCheckRetargetsWhenUpdateDeploymentIsSuperseded(t *testing.T) {
+	app := testApp()
+	app.ActiveDeployment.ID = "dep-old"
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}
+
+	if _, err := d.Update(context.Background(), ref, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	mock.deployments = []*godo.Deployment{{
+		ID:                   "dep-triggered",
+		Phase:                godo.DeploymentPhase_Superseded,
+		Cause:                "app spec updated",
+		PreviousDeploymentID: "dep-old",
+	}}
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck after superseded deployment observed: %v", err)
+	}
+	if result.Healthy {
+		t.Fatalf("HealthCheck should not report healthy while only the superseded deployment is known")
+	}
+
+	mock.app = testApp()
+	mock.app.ActiveDeployment = &godo.Deployment{
+		ID:                   "dep-replacement",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-triggered",
+	}
+	result, err = d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck after replacement deployment active: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("HealthCheck did not retarget to replacement active deployment, message=%q", result.Message)
+	}
+}
+
 func TestAppPlatformDriver_Update_Error(t *testing.T) {
 	mock := &mockAppClient{app: testApp(), updateErr: fmt.Errorf("update failed")}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")

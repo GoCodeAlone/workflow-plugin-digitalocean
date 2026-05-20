@@ -507,6 +507,10 @@ func (d *AppPlatformDriver) currentTargetDeployment(ctx context.Context, provide
 			state.targetDeploymentID = dep.ID
 			return dep, state.previousActiveDeploymentID, nil
 		}
+		if dep.PreviousDeploymentID == state.targetDeploymentID {
+			state.targetDeploymentID = dep.ID
+			return dep, state.previousActiveDeploymentID, nil
+		}
 	}
 	deployments, _, err := d.client.ListDeployments(ctx, providerID, &godo.ListOptions{Page: 1, PerPage: 20})
 	if err != nil {
