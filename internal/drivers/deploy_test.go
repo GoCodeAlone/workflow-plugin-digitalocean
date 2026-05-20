@@ -241,6 +241,36 @@ func TestAppDeployDriver_HealthCheck_WaitsUntilNewDeploymentObserved(t *testing.
 	}
 }
 
+func TestAppDeployDriver_HealthCheck_RetargetsWhenUpdateDeploymentIsSuperseded(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.ActiveDeployment.ID = "dep-old"
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "app-1", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	m.deployments["app-1"] = []*godo.Deployment{{
+		ID:                   "dep-triggered",
+		Phase:                godo.DeploymentPhase_Superseded,
+		Cause:                "app spec updated",
+		PreviousDeploymentID: "dep-old",
+	}}
+	if err := d.HealthCheck(context.Background(), "/health"); err == nil {
+		t.Fatalf("HealthCheck should not pass while only superseded deployment is known")
+	}
+
+	app.ActiveDeployment = &godo.Deployment{
+		ID:                   "dep-replacement",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-triggered",
+	}
+	if err := d.HealthCheck(context.Background(), "/health"); err != nil {
+		t.Fatalf("HealthCheck should retarget to replacement active deployment, got: %v", err)
+	}
+}
+
 func TestAppDeployDriver_HealthCheck_IgnoresUnrelatedHistoricalDeployments(t *testing.T) {
 	m := newDeployMock()
 	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
