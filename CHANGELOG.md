@@ -28,6 +28,11 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ### Fixed
 
+- **`CaptureLogs` live follow tolerates DO websocket EOF after streamed data** —
+  DigitalOcean can close a live log websocket with close code 1006 after useful
+  log chunks have already been delivered. The provider now treats that as a
+  successful bounded capture instead of failing the workflow after the requested
+  follow window.
 - **App Platform worker private image pulls** — `workers[].image` now applies
   `provider_specific.digitalocean.registry_credentials` the same way the
   primary service image does, allowing private GHCR worker components to run

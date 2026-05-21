@@ -152,6 +152,85 @@ func TestStreamCaptureLiveURLStreamsMessage(t *testing.T) {
 	}
 }
 
+func TestStreamCaptureLiveURLReturnsAbnormalCloseForUnboundedCapture(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("live before close\n")); err != nil {
+			t.Errorf("write websocket message: %v", err)
+		}
+		_ = conn.UnderlyingConn().Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	var sink captureSink
+	err := streamCaptureLiveURL(context.Background(), wsURL(srv.URL), &sink)
+	if err == nil {
+		t.Fatal("expected abnormal close error for unbounded live capture")
+	}
+	if !strings.Contains(err.Error(), "close 1006") {
+		t.Fatalf("error = %q, want close 1006", err)
+	}
+	if got := sink.String(); got != "live before close\n" {
+		t.Fatalf("captured live logs = %q", got)
+	}
+}
+
+func TestDOProviderCaptureLogsTreatsBoundedAbnormalCloseAfterDataAsSuccess(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	liveSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("bounded live before close\n")); err != nil {
+			t.Errorf("write websocket message: %v", err)
+		}
+		_ = conn.UnderlyingConn().Close()
+	}))
+	t.Cleanup(liveSrv.Close)
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/apps":
+			_, _ = w.Write([]byte(`{"apps":[{"id":"app-123","spec":{"name":"bmw-staging"}}]}`))
+		case strings.HasPrefix(r.URL.Path, "/v2/apps/app-123/logs"):
+			_, _ = w.Write([]byte(`{"live_url":"` + liveSrv.URL + `"}`))
+		default:
+			t.Fatalf("unexpected API path: %s", r.URL.String())
+		}
+	}))
+	t.Cleanup(apiSrv.Close)
+
+	p := NewDOProvider()
+	if err := p.Initialize(context.Background(), map[string]any{"token": "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	p.client.BaseURL = mustURL(t, apiSrv.URL+"/v2/")
+
+	var sink captureSink
+	err := p.CaptureLogs(context.Background(), interfaces.LogCaptureRequest{
+		ResourceName:    "bmw-staging",
+		ResourceType:    "infra.container_service",
+		LogType:         "RUN",
+		Follow:          true,
+		DurationSeconds: 1,
+	}, &sink)
+	if err != nil {
+		t.Fatalf("CaptureLogs: %v", err)
+	}
+	if got := sink.String(); got != "bounded live before close\n" {
+		t.Fatalf("captured live logs = %q", got)
+	}
+}
+
 func TestDOProviderCaptureLogsNormalizesHTTPLiveURL(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	liveSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +296,7 @@ func TestStreamCaptureLiveURLRejectsOversizedMessage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var sink captureSink
-	err := streamCaptureLiveURLWithLimit(context.Background(), wsURL(srv.URL), &sink, 8)
+	err := streamCaptureLiveURLWithLimit(context.Background(), wsURL(srv.URL), &sink, 8, false)
 	if err == nil {
 		t.Fatal("expected oversized live log frame error")
 	}

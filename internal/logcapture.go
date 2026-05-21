@@ -26,7 +26,8 @@ func (p *DOProvider) CaptureLogs(ctx context.Context, req interfaces.LogCaptureR
 	if client == nil {
 		return fmt.Errorf("digitalocean CaptureLogs: provider not initialized")
 	}
-	if req.Follow && req.DurationSeconds > 0 {
+	boundedFollow := req.Follow && req.DurationSeconds > 0
+	if boundedFollow {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.DurationSeconds)*time.Second)
 		defer cancel()
@@ -67,7 +68,7 @@ func (p *DOProvider) CaptureLogs(ctx context.Context, req interfaces.LogCaptureR
 		}
 	}
 	if req.Follow && appLogs != nil && appLogs.LiveURL != "" {
-		return streamCaptureLiveURL(ctx, appLogs.LiveURL, sink)
+		return streamCaptureLiveURLWithLimit(ctx, appLogs.LiveURL, sink, maxLogCaptureBytes, boundedFollow)
 	}
 	return nil
 }
@@ -128,10 +129,10 @@ func fetchCaptureLogContent(ctx context.Context, rawURL string, tailLines int) (
 }
 
 func streamCaptureLiveURL(ctx context.Context, liveURL string, sink interfaces.LogCaptureSink) error {
-	return streamCaptureLiveURLWithLimit(ctx, liveURL, sink, maxLogCaptureBytes)
+	return streamCaptureLiveURLWithLimit(ctx, liveURL, sink, maxLogCaptureBytes, false)
 }
 
-func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink interfaces.LogCaptureSink, readLimit int64) error {
+func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink interfaces.LogCaptureSink, readLimit int64, allowAbnormalCloseAfterData bool) error {
 	liveURL, err := normalizeCaptureLiveURL(liveURL)
 	if err != nil {
 		return err
@@ -155,6 +156,7 @@ func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink int
 		close(done)
 		_ = conn.Close()
 	}()
+	sawChunk := false
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
@@ -162,6 +164,9 @@ func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink int
 				return nil
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return nil
+			}
+			if allowAbnormalCloseAfterData && sawChunk && websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
 				return nil
 			}
 			return fmt.Errorf("digitalocean CaptureLogs: read live logs: %s", redactCaptureURLError(err))
@@ -172,6 +177,7 @@ func streamCaptureLiveURLWithLimit(ctx context.Context, liveURL string, sink int
 		if err := sink.WriteLogChunk(interfaces.LogChunk{Data: data, Source: "live"}); err != nil {
 			return err
 		}
+		sawChunk = true
 	}
 }
 
