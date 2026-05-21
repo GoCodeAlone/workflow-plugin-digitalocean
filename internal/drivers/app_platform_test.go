@@ -122,6 +122,55 @@ func TestAppPlatformDriver_Create(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_Update_ReconcilesManagedDomainCNAME(t *testing.T) {
+	app := testApp()
+	app.DefaultIngress = "https://my-app-new.ondigitalocean.app"
+	app.Spec = &godo.AppSpec{Name: "my-app"}
+	app.ActiveDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Active}
+	mock := &mockAppClient{app: app}
+	dns := &mockDomainsClient{
+		domain:         &godo.Domain{Name: "example.com"},
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "my-app-old.ondigitalocean.app.", TTL: 1800},
+			{ID: 11, Type: "CNAME", Name: "www", Data: "my-app-new.ondigitalocean.app.", TTL: 1800},
+			{ID: 12, Type: "CNAME", Name: "admin", Data: "my-app-old.ondigitalocean.app.", TTL: 1800},
+		},
+	}
+	d := drivers.NewAppPlatformDriverWithDNSClient(mock, dns, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name: "my-app",
+		Type: "infra.container_service",
+		Config: map[string]any{
+			"image": "registry.digitalocean.com/myrepo/myapp:v1",
+			"domains": []any{
+				map[string]any{"domain": "example.com", "type": "PRIMARY", "zone": "example.com"},
+				map[string]any{"domain": "www.example.com", "type": "ALIAS", "zone": "example.com"},
+				map[string]any{"domain": "admin.example.com", "type": "ALIAS", "zone": "example.com"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dns.deletedRecords) != 1 || dns.deletedRecords[0].id != 10 {
+		t.Fatalf("deleted records = %+v, want stale www CNAME id 10", dns.deletedRecords)
+	}
+	if len(dns.editedRecords) != 1 || dns.editedRecords[0].id != 12 {
+		t.Fatalf("edited records = %+v, want admin CNAME id 12", dns.editedRecords)
+	}
+	if got := dns.editedRecords[0].req.Data; got != "my-app-new.ondigitalocean.app." {
+		t.Fatalf("edited data = %q", got)
+	}
+	if len(dns.createdRecords) != 0 {
+		t.Fatalf("created records = %+v, want none", dns.createdRecords)
+	}
+}
+
 func TestAppPlatformDriver_Read(t *testing.T) {
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
