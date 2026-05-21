@@ -55,6 +55,7 @@ type appPlatformMigrationRepairClient interface {
 type AppPlatformDriver struct {
 	client             AppPlatformClient
 	regClient          RegistryClient // NEW: image-presence pre-flight; nil-safe (skips check if nil)
+	dnsClient          DomainsClient
 	region             string
 	deploymentMu       sync.Mutex
 	waitingDeployments map[string]*appDeploymentWaitState
@@ -67,7 +68,7 @@ type appDeploymentWaitState struct {
 
 // NewAppPlatformDriver creates an AppPlatformDriver backed by a real godo client.
 func NewAppPlatformDriver(c *godo.Client, region string) *AppPlatformDriver {
-	return &AppPlatformDriver{client: c.Apps, regClient: c.Registry, region: region}
+	return &AppPlatformDriver{client: c.Apps, regClient: c.Registry, dnsClient: c.Domains, region: region}
 }
 
 // NewAppPlatformDriverWithClient creates a driver with an injected apps client (for tests).
@@ -79,6 +80,11 @@ func NewAppPlatformDriverWithClient(c AppPlatformClient, region string) *AppPlat
 // NewAppPlatformDriverWithClients creates a driver with both clients injected (for tests).
 func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, region string) *AppPlatformDriver {
 	return &AppPlatformDriver{client: c, regClient: r, region: region}
+}
+
+// NewAppPlatformDriverWithDNSClient creates a test driver with injected app and DNS clients.
+func NewAppPlatformDriverWithDNSClient(c AppPlatformClient, dns DomainsClient, region string) *AppPlatformDriver {
+	return &AppPlatformDriver{client: c, dnsClient: dns, region: region}
 }
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -109,6 +115,9 @@ func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.Resource
 	}
 	if app == nil || app.ID == "" {
 		return nil, fmt.Errorf("app platform create %q: API returned app with empty ID", spec.Name)
+	}
+	if err := d.reconcileAppDomainCNAMEs(ctx, app, appSpec.Domains); err != nil {
+		return nil, err
 	}
 	return appOutput(app), nil
 }
@@ -193,6 +202,9 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 		previousActiveDeploymentID: previousActiveDeploymentID,
 		targetDeploymentID:         deploymentID(selectUpdateDeployment(app, previousActiveDeploymentID)),
 	})
+	if err := d.reconcileAppDomainCNAMEs(ctx, app, appSpec.Domains); err != nil {
+		return nil, err
+	}
 	return appOutput(app), nil
 }
 
@@ -206,6 +218,144 @@ func (d *AppPlatformDriver) Delete(ctx context.Context, ref interfaces.ResourceR
 		return fmt.Errorf("app platform delete %q: %w", ref.Name, WrapGodoError(err))
 	}
 	return nil
+}
+
+func (d *AppPlatformDriver) reconcileAppDomainCNAMEs(ctx context.Context, app *godo.App, domains []*godo.AppDomainSpec) error {
+	if d.dnsClient == nil || app == nil || len(domains) == 0 {
+		return nil
+	}
+	target := appDefaultIngressCNAME(app.DefaultIngress)
+	if target == "" {
+		return nil
+	}
+	for _, domain := range domains {
+		if domain == nil || strings.TrimSpace(domain.Zone) == "" {
+			continue
+		}
+		name, ok := appDomainDNSRecordName(domain.Domain, domain.Zone)
+		if !ok {
+			continue
+		}
+		if err := d.reconcileAppDomainCNAME(ctx, domain.Zone, name, target); err != nil {
+			return fmt.Errorf("app platform reconcile DNS %q: %w", domain.Domain, err)
+		}
+	}
+	return nil
+}
+
+func (d *AppPlatformDriver) reconcileAppDomainCNAME(ctx context.Context, zone, name, target string) error {
+	records, err := listAppDomainRecords(ctx, d.dnsClient, zone)
+	if err != nil {
+		return err
+	}
+	var matching []godo.DomainRecord
+	for _, record := range records {
+		if !strings.EqualFold(record.Type, "CNAME") || record.Name != name {
+			continue
+		}
+		matching = append(matching, record)
+	}
+	if len(matching) == 0 {
+		_, _, err := d.dnsClient.CreateRecord(ctx, zone, &godo.DomainRecordEditRequest{
+			Type: "CNAME",
+			Name: name,
+			Data: target,
+			TTL:  1800,
+		})
+		if err != nil {
+			return fmt.Errorf("dns create app domain CNAME %q/%s: %w", zone, name, WrapGodoError(err))
+		}
+		return nil
+	}
+
+	hasTarget := false
+	for _, record := range matching {
+		if dnsRecordDataEqual(record.Data, target) {
+			hasTarget = true
+			break
+		}
+	}
+
+	keptTarget := hasTarget
+	for i, record := range matching {
+		if dnsRecordDataEqual(record.Data, target) {
+			if keptTarget {
+				keptTarget = false
+				continue
+			}
+		}
+		if !hasTarget && i == 0 {
+			_, _, err := d.dnsClient.EditRecord(ctx, zone, record.ID, &godo.DomainRecordEditRequest{
+				Type: "CNAME",
+				Name: name,
+				Data: target,
+				TTL:  1800,
+			})
+			if err != nil {
+				return fmt.Errorf("dns update app domain CNAME %q/%s: %w", zone, name, WrapGodoError(err))
+			}
+			hasTarget = true
+			continue
+		}
+		if _, err := d.dnsClient.DeleteRecord(ctx, zone, record.ID); err != nil {
+			return fmt.Errorf("dns delete stale app domain CNAME %q/%s id %d: %w", zone, name, record.ID, WrapGodoError(err))
+		}
+	}
+	return nil
+}
+
+func listAppDomainRecords(ctx context.Context, client DomainsClient, domain string) ([]godo.DomainRecord, error) {
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	var out []godo.DomainRecord
+	for {
+		records, resp, err := client.Records(ctx, domain, opts)
+		if err != nil {
+			return nil, fmt.Errorf("dns list records %q: %w", domain, WrapGodoError(err))
+		}
+		out = append(out, records...)
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return out, nil
+}
+
+func appDefaultIngressCNAME(defaultIngress string) string {
+	defaultIngress = strings.TrimSpace(defaultIngress)
+	if defaultIngress == "" {
+		return ""
+	}
+	if u, err := url.Parse(defaultIngress); err == nil && u.Host != "" {
+		defaultIngress = u.Host
+	}
+	defaultIngress = strings.TrimSuffix(defaultIngress, "/")
+	defaultIngress = strings.TrimSuffix(defaultIngress, ".")
+	if defaultIngress == "" {
+		return ""
+	}
+	return strings.ToLower(defaultIngress) + "."
+}
+
+func appDomainDNSRecordName(domain, zone string) (string, bool) {
+	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	zone = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zone)), ".")
+	if domain == "" || zone == "" || domain == zone {
+		return "", false
+	}
+	suffix := "." + zone
+	if !strings.HasSuffix(domain, suffix) {
+		return "", false
+	}
+	name := strings.TrimSuffix(domain, suffix)
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+func dnsRecordDataEqual(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(a), "."), strings.TrimSuffix(strings.TrimSpace(b), "."))
 }
 
 // resolveProviderID returns a UUID-like ProviderID for the given ref.
