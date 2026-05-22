@@ -198,9 +198,20 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
+	targetDeployment := selectUpdateDeployment(app, previousActiveDeploymentID)
+	if targetDeployment == nil && previousActiveDeploymentID == "" && appHasNoDeploymentSlots(app) {
+		dep, _, err := d.client.CreateDeployment(ctx, providerID, &godo.DeploymentCreateRequest{})
+		if err != nil {
+			return nil, fmt.Errorf("app platform update %q: create deployment for undeployed app: %w", ref.Name, WrapGodoError(err))
+		}
+		targetDeployment = dep
+		if app != nil {
+			app.InProgressDeployment = dep
+		}
+	}
 	d.setUpdateDeploymentState(providerID, appDeploymentWaitState{
 		previousActiveDeploymentID: previousActiveDeploymentID,
-		targetDeploymentID:         deploymentID(selectUpdateDeployment(app, previousActiveDeploymentID)),
+		targetDeploymentID:         deploymentID(targetDeployment),
 	})
 	if err := d.reconcileAppDomainCNAMEs(ctx, app, appSpec.Domains); err != nil {
 		return nil, err
@@ -241,6 +252,10 @@ func (d *AppPlatformDriver) reconcileAppDomainCNAMEs(ctx context.Context, app *g
 		}
 	}
 	return nil
+}
+
+func appHasNoDeploymentSlots(app *godo.App) bool {
+	return app == nil || (app.ActiveDeployment == nil && app.InProgressDeployment == nil && app.PendingDeployment == nil)
 }
 
 func (d *AppPlatformDriver) reconcileAppDomainCNAME(ctx context.Context, zone, name, target string) error {
@@ -613,6 +628,9 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 		if err := deploymentHealthError(ref.Name, dep); err != nil {
 			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 		}
+		if err := d.reconcileAppDomainCNAMEs(ctx, app, appDomains(app)); err != nil {
+			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+		}
 		d.clearUpdateDeploymentState(providerID)
 		return &interfaces.HealthResult{Healthy: true}, nil
 	}
@@ -620,7 +638,20 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 		deps, _, err := d.client.ListDeployments(ctx, appID, &godo.ListOptions{Page: 1, PerPage: 1})
 		return deps, err
 	}
-	return appHealthResult(ctx, listFn, app), nil
+	result := appHealthResult(ctx, listFn, app)
+	if result != nil && result.Healthy {
+		if err := d.reconcileAppDomainCNAMEs(ctx, app, appDomains(app)); err != nil {
+			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+		}
+	}
+	return result, nil
+}
+
+func appDomains(app *godo.App) []*godo.AppDomainSpec {
+	if app == nil || app.Spec == nil {
+		return nil
+	}
+	return app.Spec.Domains
 }
 
 func (d *AppPlatformDriver) setUpdateDeploymentState(providerID string, state appDeploymentWaitState) {
