@@ -13,6 +13,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/steps"
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/GoCodeAlone/workflow/module"
 	"github.com/GoCodeAlone/workflow/platform"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
@@ -51,6 +52,9 @@ var _ interfaces.EnumeratorAll = (*DOProvider)(nil)
 var _ interfaces.DriftConfigDetector = (*DOProvider)(nil)
 var _ interfaces.ProviderCredentialRevoker = (*DOProvider)(nil)
 var _ interfaces.LogCaptureProvider = (*DOProvider)(nil)
+var _ module.DeployDriverProvider = (*DOProvider)(nil)
+var _ module.BlueGreenDriverProvider = (*DOProvider)(nil)
+var _ module.CanaryDriverProvider = (*DOProvider)(nil)
 
 // NewDOProvider creates an uninitialised DOProvider.
 func NewDOProvider() *DOProvider {
@@ -178,6 +182,35 @@ func (p *DOProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 		return nil, fmt.Errorf("digitalocean: unsupported resource type %q", resourceType)
 	}
 	return d, nil
+}
+
+// ProvideDeployDriver exposes a provider-native App Platform deploy driver to
+// Workflow deployment steps. The resource name is resolved to the DO app ID at
+// execution time so callers do not need to persist provider IDs in pipeline YAML.
+func (p *DOProvider) ProvideDeployDriver(resourceName string) module.DeployDriver {
+	if p.client == nil || resourceName == "" {
+		return nil
+	}
+	return drivers.NewAppDeployDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
+}
+
+// ProvideBlueGreenDriver exposes App Platform blue/green deployment support to
+// Workflow deployment steps.
+func (p *DOProvider) ProvideBlueGreenDriver(resourceName string) module.BlueGreenDriver {
+	if p.client == nil || resourceName == "" {
+		return nil
+	}
+	return drivers.NewAppBlueGreenDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
+}
+
+// ProvideCanaryDriver exposes App Platform canary lifecycle support. App
+// Platform does not support weighted traffic, so the driver reports a clear
+// unsupported error for traffic-split operations.
+func (p *DOProvider) ProvideCanaryDriver(resourceName string) module.CanaryDriver {
+	if p.client == nil || resourceName == "" {
+		return nil
+	}
+	return drivers.NewAppCanaryDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
 }
 
 func (p *DOProvider) RepairDirtyMigration(ctx context.Context, req interfaces.MigrationRepairRequest) (*interfaces.MigrationRepairResult, error) {

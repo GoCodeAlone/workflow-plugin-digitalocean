@@ -14,6 +14,7 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/GoCodeAlone/workflow/module"
 	"github.com/digitalocean/godo"
 	"golang.org/x/oauth2"
 )
@@ -33,6 +34,9 @@ func TestMain(m *testing.M) {
 
 // compile-time interface check
 var _ interfaces.IaCProvider = (*DOProvider)(nil)
+var _ module.DeployDriverProvider = (*DOProvider)(nil)
+var _ module.BlueGreenDriverProvider = (*DOProvider)(nil)
+var _ module.CanaryDriverProvider = (*DOProvider)(nil)
 
 func TestDOProvider_Name(t *testing.T) {
 	p := NewDOProvider()
