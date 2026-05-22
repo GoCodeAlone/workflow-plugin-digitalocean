@@ -198,6 +198,9 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 	if err != nil {
 		return nil, fmt.Errorf("app platform update %q: %w", ref.Name, WrapGodoError(err))
 	}
+	if app == nil {
+		return nil, fmt.Errorf("app platform update %q: API returned nil app", ref.Name)
+	}
 	targetDeployment := selectUpdateDeployment(app, previousActiveDeploymentID)
 	if targetDeployment == nil && previousActiveDeploymentID == "" && appHasNoDeploymentSlots(app) {
 		dep, _, err := d.client.CreateDeployment(ctx, providerID, &godo.DeploymentCreateRequest{})
@@ -205,9 +208,7 @@ func (d *AppPlatformDriver) Update(ctx context.Context, ref interfaces.ResourceR
 			return nil, fmt.Errorf("app platform update %q: create deployment for undeployed app: %w", ref.Name, WrapGodoError(err))
 		}
 		targetDeployment = dep
-		if app != nil {
-			app.InProgressDeployment = dep
-		}
+		app.InProgressDeployment = dep
 	}
 	d.setUpdateDeploymentState(providerID, appDeploymentWaitState{
 		previousActiveDeploymentID: previousActiveDeploymentID,
@@ -255,7 +256,7 @@ func (d *AppPlatformDriver) reconcileAppDomainCNAMEs(ctx context.Context, app *g
 }
 
 func appHasNoDeploymentSlots(app *godo.App) bool {
-	return app == nil || (app.ActiveDeployment == nil && app.InProgressDeployment == nil && app.PendingDeployment == nil)
+	return app != nil && app.ActiveDeployment == nil && app.InProgressDeployment == nil && app.PendingDeployment == nil
 }
 
 func (d *AppPlatformDriver) reconcileAppDomainCNAME(ctx context.Context, zone, name, target string) error {
