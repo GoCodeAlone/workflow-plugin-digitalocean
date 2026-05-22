@@ -171,6 +171,45 @@ func TestAppPlatformDriver_Update_ReconcilesManagedDomainCNAME(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_HealthCheck_ReconcilesManagedDomainCNAME(t *testing.T) {
+	app := testApp()
+	app.DefaultIngress = "https://my-app-new.ondigitalocean.app"
+	app.Spec = &godo.AppSpec{
+		Name: "my-app",
+		Domains: []*godo.AppDomainSpec{
+			{Domain: "example.com", Type: godo.AppDomainSpecType_Primary, Zone: "example.com"},
+			{Domain: "www.example.com", Type: godo.AppDomainSpecType_Alias, Zone: "example.com"},
+		},
+	}
+	app.ActiveDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Active}
+	mock := &mockAppClient{app: app}
+	dns := &mockDomainsClient{
+		domain:         &godo.Domain{Name: "example.com"},
+		expectedDomain: "example.com",
+		records: []godo.DomainRecord{
+			{ID: 10, Type: "CNAME", Name: "www", Data: "my-app-old.ondigitalocean.app.", TTL: 1800},
+		},
+	}
+	d := drivers.NewAppPlatformDriverWithDNSClient(mock, dns, "nyc3")
+
+	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	})
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result == nil || !result.Healthy {
+		t.Fatalf("HealthCheck result = %+v, want healthy", result)
+	}
+	if len(dns.editedRecords) != 1 || dns.editedRecords[0].id != 10 {
+		t.Fatalf("edited records = %+v, want www CNAME edit", dns.editedRecords)
+	}
+	if got := dns.editedRecords[0].req.Data; got != "my-app-new.ondigitalocean.app." {
+		t.Fatalf("edited data = %q", got)
+	}
+}
+
 func TestAppPlatformDriver_Read(t *testing.T) {
 	mock := &mockAppClient{app: testApp()}
 	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
@@ -395,6 +434,30 @@ func TestAppPlatformDriver_Update_DoesNotCreateDuplicateDeployment(t *testing.T)
 	}
 	if mock.createDeploymentCalled {
 		t.Error("CreateDeployment should not be called after Apps.Update; DigitalOcean already creates an app-spec deployment for the update")
+	}
+}
+
+func TestAppPlatformDriver_Update_CreatesDeploymentForUndeployedApp(t *testing.T) {
+	mock := &mockAppClient{app: &godo.App{
+		ID:   "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+		Spec: &godo.AppSpec{Name: "my-app"},
+	}}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+
+	_, err := d.Update(context.Background(), interfaces.ResourceRef{
+		Name: "my-app", ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if mock.lastUpdateReq == nil {
+		t.Fatal("expected Update API to be called")
+	}
+	if !mock.createDeploymentCalled {
+		t.Fatal("expected CreateDeployment for an app with no deployment slots")
 	}
 }
 
