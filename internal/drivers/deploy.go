@@ -13,6 +13,7 @@ import (
 // It manages a single App Platform application identified by its app ID.
 type AppDeployDriver struct {
 	client                     AppPlatformClient
+	regClient                  RegistryClient
 	region                     string
 	appID                      string
 	appName                    string
@@ -26,13 +27,30 @@ func NewAppDeployDriver(c AppPlatformClient, region, appID, appName string) *App
 	return &AppDeployDriver{client: c, region: region, appID: appID, appName: appName}
 }
 
+// NewAppDeployDriverWithRegistry creates a DeployDriver with a DOCR image
+// presence pre-flight. The registry client may be nil to skip the check.
+func NewAppDeployDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, appID, appName string) *AppDeployDriver {
+	return &AppDeployDriver{client: c, regClient: r, region: region, appID: appID, appName: appName}
+}
+
 func (d *AppDeployDriver) Update(ctx context.Context, image string) error {
-	app, _, err := d.client.Get(ctx, d.appID)
+	if d.regClient != nil {
+		if err := verifyImagePresentInDOCR(ctx, d.regClient, image); err != nil {
+			return err
+		}
+	}
+	app, err := d.getApp(ctx)
 	if err != nil {
 		return fmt.Errorf("app deploy: get %q: %w", d.appName, err)
 	}
 	d.previousActiveDeploymentID = deploymentID(app.ActiveDeployment)
-	spec := app.Spec
+	spec, err := cloneAppSpec(app.Spec)
+	if err != nil {
+		return fmt.Errorf("app deploy: clone app spec %q: %w", d.appName, err)
+	}
+	if spec == nil {
+		return fmt.Errorf("app deploy: %q has no app spec", d.appName)
+	}
 	for _, svc := range spec.Services {
 		if svc.Image != nil {
 			svc.Image.Repository = imageRepo(image)
@@ -49,7 +67,7 @@ func (d *AppDeployDriver) Update(ctx context.Context, image string) error {
 }
 
 func (d *AppDeployDriver) HealthCheck(ctx context.Context, _ string) error {
-	app, _, err := d.client.Get(ctx, d.appID)
+	app, err := d.getApp(ctx)
 	if err != nil {
 		return fmt.Errorf("app deploy: health check %q: %w", d.appName, err)
 	}
@@ -84,7 +102,11 @@ func (d *AppDeployDriver) currentTargetDeployment(ctx context.Context, app *godo
 			return dep, nil
 		}
 	}
-	deployments, _, err := d.client.ListDeployments(ctx, d.appID, &godo.ListOptions{Page: 1, PerPage: 20})
+	appID, err := d.resolveAppID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	deployments, _, err := d.client.ListDeployments(ctx, appID, &godo.ListOptions{Page: 1, PerPage: 20})
 	if err != nil {
 		return nil, fmt.Errorf("app deploy: list deployments %q: %w", d.appName, err)
 	}
@@ -162,7 +184,7 @@ func deploymentID(dep *godo.Deployment) string {
 }
 
 func (d *AppDeployDriver) CurrentImage(ctx context.Context) (string, error) {
-	app, _, err := d.client.Get(ctx, d.appID)
+	app, err := d.getApp(ctx)
 	if err != nil {
 		return "", fmt.Errorf("app deploy: current image %q: %w", d.appName, err)
 	}
@@ -177,7 +199,7 @@ func (d *AppDeployDriver) CurrentImage(ctx context.Context) (string, error) {
 }
 
 func (d *AppDeployDriver) ReplicaCount(ctx context.Context) (int, error) {
-	app, _, err := d.client.Get(ctx, d.appID)
+	app, err := d.getApp(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("app deploy: replica count %q: %w", d.appName, err)
 	}
@@ -185,6 +207,42 @@ func (d *AppDeployDriver) ReplicaCount(ctx context.Context) (int, error) {
 		return 1, nil
 	}
 	return int(app.Spec.Services[0].InstanceCount), nil
+}
+
+func (d *AppDeployDriver) getApp(ctx context.Context) (*godo.App, error) {
+	appID, err := d.resolveAppID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	app, _, err := d.client.Get(ctx, appID)
+	return app, err
+}
+
+func (d *AppDeployDriver) resolveAppID(ctx context.Context) (string, error) {
+	if d.appID != "" {
+		return d.appID, nil
+	}
+	if d.appName == "" {
+		return "", fmt.Errorf("app deploy: app ID or app name is required")
+	}
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		apps, resp, err := d.client.List(ctx, opts)
+		if err != nil {
+			return "", err
+		}
+		for _, app := range apps {
+			if app != nil && app.Spec != nil && app.Spec.Name == d.appName {
+				d.appID = app.ID
+				return d.appID, nil
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		opts.Page++
+	}
+	return "", fmt.Errorf("app %q not found", d.appName)
 }
 
 // ─── AppBlueGreenDriver ───────────────────────────────────────────────────────
@@ -199,6 +257,7 @@ func (d *AppDeployDriver) ReplicaCount(ctx context.Context) (int, error) {
 // The green app's live URL is returned from GreenEndpoint.
 type AppBlueGreenDriver struct {
 	client      AppPlatformClient
+	regClient   RegistryClient
 	region      string
 	blueID      string
 	blueName    string
@@ -212,6 +271,12 @@ type AppBlueGreenDriver struct {
 // NewAppBlueGreenDriver creates a BlueGreenDriver for DO App Platform.
 func NewAppBlueGreenDriver(c AppPlatformClient, region, blueID, blueName string) *AppBlueGreenDriver {
 	return &AppBlueGreenDriver{client: c, region: region, blueID: blueID, blueName: blueName}
+}
+
+// NewAppBlueGreenDriverWithRegistry creates a BlueGreenDriver with DOCR image
+// presence pre-flight. The registry client may be nil to skip the check.
+func NewAppBlueGreenDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, blueID, blueName string) *AppBlueGreenDriver {
+	return &AppBlueGreenDriver{client: c, regClient: r, region: region, blueID: blueID, blueName: blueName}
 }
 
 // DeployDriver methods delegate to the blue (stable) app.
@@ -238,12 +303,23 @@ func (d *AppBlueGreenDriver) ReplicaCount(ctx context.Context) (int, error) {
 // CreateGreen creates a new App Platform app with the "-green" name suffix and
 // the given image, recording the green app ID and live URL for later use.
 func (d *AppBlueGreenDriver) CreateGreen(ctx context.Context, image string) error {
-	blueApp, _, err := d.client.Get(ctx, d.blueID)
+	if d.regClient != nil {
+		if err := verifyImagePresentInDOCR(ctx, d.regClient, image); err != nil {
+			return err
+		}
+	}
+	blueApp, err := d.blueDriver().getApp(ctx)
 	if err != nil {
 		return fmt.Errorf("app blue-green: get blue %q: %w", d.blueName, err)
 	}
 
-	greenSpec := blueApp.Spec
+	greenSpec, err := cloneAppSpec(blueApp.Spec)
+	if err != nil {
+		return fmt.Errorf("app blue-green: clone blue spec %q: %w", d.blueName, err)
+	}
+	if greenSpec == nil {
+		return fmt.Errorf("app blue-green: blue app %q has no app spec", d.blueName)
+	}
 	greenSpec.Name = d.blueName + "-green"
 	for _, svc := range greenSpec.Services {
 		if svc.Image != nil {
@@ -258,7 +334,7 @@ func (d *AppBlueGreenDriver) CreateGreen(ctx context.Context, image string) erro
 	}
 	d.greenID = greenApp.ID
 	d.greenURL = greenApp.LiveURL
-	d.greenDeploy = NewAppDeployDriver(d.client, d.region, d.greenID, d.blueName+"-green")
+	d.greenDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.greenID, d.blueName+"-green")
 	d.stableCheck = false
 	return nil
 }
@@ -302,14 +378,14 @@ func (d *AppBlueGreenDriver) GreenEndpoint(_ context.Context) (string, error) {
 
 func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
 	if d.blueDeploy == nil {
-		d.blueDeploy = NewAppDeployDriver(d.client, d.region, d.blueID, d.blueName)
+		d.blueDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.blueID, d.blueName)
 	}
 	return d.blueDeploy
 }
 
 func (d *AppBlueGreenDriver) greenDriver() *AppDeployDriver {
 	if d.greenDeploy == nil {
-		d.greenDeploy = NewAppDeployDriver(d.client, d.region, d.greenID, d.blueName+"-green")
+		d.greenDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.greenID, d.blueName+"-green")
 	}
 	return d.greenDeploy
 }
@@ -326,6 +402,7 @@ func (d *AppBlueGreenDriver) greenDriver() *AppDeployDriver {
 // create/promote/delete pattern using two separate apps.
 type AppCanaryDriver struct {
 	client       AppPlatformClient
+	regClient    RegistryClient
 	region       string
 	stableID     string
 	stableName   string
@@ -337,6 +414,12 @@ type AppCanaryDriver struct {
 // NewAppCanaryDriver creates a CanaryDriver for DO App Platform.
 func NewAppCanaryDriver(c AppPlatformClient, region, stableID, stableName string) *AppCanaryDriver {
 	return &AppCanaryDriver{client: c, region: region, stableID: stableID, stableName: stableName}
+}
+
+// NewAppCanaryDriverWithRegistry creates a CanaryDriver with DOCR image
+// presence pre-flight. The registry client may be nil to skip the check.
+func NewAppCanaryDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, stableID, stableName string) *AppCanaryDriver {
+	return &AppCanaryDriver{client: c, regClient: r, region: region, stableID: stableID, stableName: stableName}
 }
 
 // DeployDriver methods delegate to the stable app.
@@ -363,12 +446,23 @@ func (d *AppCanaryDriver) ReplicaCount(ctx context.Context) (int, error) {
 // CreateCanary creates a new App Platform app with the "-canary" name suffix
 // and the given image.
 func (d *AppCanaryDriver) CreateCanary(ctx context.Context, image string) error {
-	stableApp, _, err := d.client.Get(ctx, d.stableID)
+	if d.regClient != nil {
+		if err := verifyImagePresentInDOCR(ctx, d.regClient, image); err != nil {
+			return err
+		}
+	}
+	stableApp, err := d.stableDriver().getApp(ctx)
 	if err != nil {
 		return fmt.Errorf("app canary: get stable %q: %w", d.stableName, err)
 	}
 
-	canarySpec := stableApp.Spec
+	canarySpec, err := cloneAppSpec(stableApp.Spec)
+	if err != nil {
+		return fmt.Errorf("app canary: clone stable spec %q: %w", d.stableName, err)
+	}
+	if canarySpec == nil {
+		return fmt.Errorf("app canary: stable app %q has no app spec", d.stableName)
+	}
 	canarySpec.Name = d.stableName + "-canary"
 	for _, svc := range canarySpec.Services {
 		if svc.Image != nil {
@@ -382,7 +476,7 @@ func (d *AppCanaryDriver) CreateCanary(ctx context.Context, image string) error 
 		return fmt.Errorf("app canary: create canary: %w", err)
 	}
 	d.canaryID = canaryApp.ID
-	d.canaryDeploy = NewAppDeployDriver(d.client, d.region, d.canaryID, d.stableName+"-canary")
+	d.canaryDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.canaryID, d.stableName+"-canary")
 	return nil
 }
 
@@ -428,14 +522,14 @@ func (d *AppCanaryDriver) DestroyCanary(ctx context.Context) error {
 
 func (d *AppCanaryDriver) stableDriver() *AppDeployDriver {
 	if d.stableDeploy == nil {
-		d.stableDeploy = NewAppDeployDriver(d.client, d.region, d.stableID, d.stableName)
+		d.stableDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.stableID, d.stableName)
 	}
 	return d.stableDeploy
 }
 
 func (d *AppCanaryDriver) canaryDriver() *AppDeployDriver {
 	if d.canaryDeploy == nil {
-		d.canaryDeploy = NewAppDeployDriver(d.client, d.region, d.canaryID, d.stableName+"-canary")
+		d.canaryDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.canaryID, d.stableName+"-canary")
 	}
 	return d.canaryDeploy
 }

@@ -167,6 +167,23 @@ func TestAppDeployDriver_Update(t *testing.T) {
 	}
 }
 
+func TestAppDeployDriver_Update_ResolvesAppByNameWhenIDEmpty(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+
+	d := drivers.NewAppDeployDriver(m, "nyc3", "", "myapp")
+	if err := d.Update(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	img, err := d.CurrentImage(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentImage: %v", err)
+	}
+	if img != "registry.digitalocean.com/myrepo/myapp:v2" {
+		t.Errorf("CurrentImage = %q, want v2", img)
+	}
+}
+
 func TestAppDeployDriver_HealthCheck_WaitsForUpdateDeployment(t *testing.T) {
 	m := newDeployMock()
 	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
@@ -364,6 +381,19 @@ func TestAppBlueGreenDriver_CreateGreen(t *testing.T) {
 	}
 	if ep == "" {
 		t.Error("expected non-empty green endpoint")
+	}
+}
+
+func TestAppBlueGreenDriver_CreateGreen_ResolvesBlueByNameWhenIDEmpty(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc3", "", "myapp")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/myapp:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if len(m.apps) != 2 {
+		t.Errorf("expected 2 apps after CreateGreen, got %d", len(m.apps))
 	}
 }
 
