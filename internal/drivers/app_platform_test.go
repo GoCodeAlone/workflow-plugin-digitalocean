@@ -181,6 +181,10 @@ func TestAppPlatformDriver_HealthCheck_ReconcilesManagedDomainCNAME(t *testing.T
 			{Domain: "www.example.com", Type: godo.AppDomainSpecType_Alias, Zone: "example.com"},
 		},
 	}
+	app.Domains = []*godo.AppDomain{
+		{Spec: app.Spec.Domains[0], Phase: godo.AppJobSpecKindPHASE_Active},
+		{Spec: app.Spec.Domains[1], Phase: godo.AppJobSpecKindPHASE_Active},
+	}
 	app.ActiveDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Active}
 	mock := &mockAppClient{app: app}
 	dns := &mockDomainsClient{
@@ -190,7 +194,9 @@ func TestAppPlatformDriver_HealthCheck_ReconcilesManagedDomainCNAME(t *testing.T
 			{ID: 10, Type: "CNAME", Name: "www", Data: "my-app-old.ondigitalocean.app.", TTL: 1800},
 		},
 	}
-	d := drivers.NewAppPlatformDriverWithDNSClient(mock, dns, "nyc3")
+	d := drivers.NewAppPlatformDriverWithDNSClientAndDomainProbe(mock, dns, "nyc3", func(context.Context, string, string) error {
+		return nil
+	})
 
 	result, err := d.HealthCheck(context.Background(), interfaces.ResourceRef{
 		Name:       "my-app",
@@ -325,6 +331,104 @@ func TestAppPlatformDriver_HealthCheckWaitsForDeploymentTriggeredByUpdate(t *tes
 	}
 	if !result.Healthy {
 		t.Fatalf("HealthCheck after new deployment active Healthy=false, message=%q", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheckWaitsForCustomDomainPhaseAfterUpdate(t *testing.T) {
+	app := testApp()
+	app.ActiveDeployment.ID = "dep-old"
+	app.Spec.Domains = []*godo.AppDomainSpec{{
+		Domain: "example.com",
+		Type:   godo.AppDomainSpecType_Primary,
+	}}
+	app.Domains = []*godo.AppDomain{{
+		Spec:  app.Spec.Domains[0],
+		Phase: godo.AppJobSpecKindPHASE_Configuring,
+	}}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc3")
+	ref := interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}
+
+	if _, err := d.Update(context.Background(), ref, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	mock.deployments = []*godo.Deployment{{
+		ID:                   "dep-new",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-old",
+	}}
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Fatalf("HealthCheck should wait for custom domain phase before reporting healthy")
+	}
+	if !strings.Contains(result.Message, "example.com") || !strings.Contains(result.Message, "CONFIGURING") {
+		t.Fatalf("HealthCheck message = %q, want domain and phase", result.Message)
+	}
+}
+
+func TestAppPlatformDriver_HealthCheckWaitsForCustomDomainHTTPSAfterUpdate(t *testing.T) {
+	app := testApp()
+	app.ActiveDeployment.ID = "dep-old"
+	app.Spec.Services = []*godo.AppServiceSpec{{
+		Name: "web",
+		HealthCheck: &godo.AppServiceSpecHealthCheck{
+			HTTPPath: "/healthz",
+		},
+	}}
+	app.Spec.Domains = []*godo.AppDomainSpec{{
+		Domain: "example.com",
+		Type:   godo.AppDomainSpecType_Primary,
+	}}
+	app.Domains = []*godo.AppDomain{{
+		Spec:  app.Spec.Domains[0],
+		Phase: godo.AppJobSpecKindPHASE_Active,
+	}}
+	mock := &mockAppClient{app: app}
+	var probeCalls []string
+	probeErr := errors.New("tls handshake failed")
+	d := drivers.NewAppPlatformDriverWithDomainProbe(mock, "nyc3", func(_ context.Context, domain, path string) error {
+		probeCalls = append(probeCalls, domain+path)
+		return probeErr
+	})
+	ref := interfaces.ResourceRef{
+		Name:       "my-app",
+		ProviderID: "f8b6200c-3bba-48a7-8bf1-7a3e3a885eb5",
+	}
+
+	if _, err := d.Update(context.Background(), ref, interfaces.ResourceSpec{
+		Name:   "my-app",
+		Config: map[string]any{"image": "registry.digitalocean.com/myrepo/myapp:v2"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	mock.deployments = []*godo.Deployment{{
+		ID:                   "dep-new",
+		Phase:                godo.DeploymentPhase_Active,
+		PreviousDeploymentID: "dep-old",
+	}}
+	result, err := d.HealthCheck(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if result.Healthy {
+		t.Fatalf("HealthCheck should wait for custom domain HTTPS before reporting healthy")
+	}
+	if !strings.Contains(result.Message, "example.com") || !strings.Contains(result.Message, "tls handshake failed") {
+		t.Fatalf("HealthCheck message = %q, want domain and TLS error", result.Message)
+	}
+	if len(probeCalls) != 1 || probeCalls[0] != "example.com/healthz" {
+		t.Fatalf("probe calls = %#v, want example.com/healthz", probeCalls)
 	}
 }
 

@@ -57,6 +57,7 @@ type AppPlatformDriver struct {
 	regClient          RegistryClient // NEW: image-presence pre-flight; nil-safe (skips check if nil)
 	dnsClient          DomainsClient
 	region             string
+	domainProbe        AppPlatformDomainProbe
 	deploymentMu       sync.Mutex
 	waitingDeployments map[string]*appDeploymentWaitState
 }
@@ -77,6 +78,12 @@ func NewAppPlatformDriverWithClient(c AppPlatformClient, region string) *AppPlat
 	return &AppPlatformDriver{client: c, region: region}
 }
 
+// NewAppPlatformDriverWithDomainProbe creates a test driver with an injected
+// custom-domain readiness probe.
+func NewAppPlatformDriverWithDomainProbe(c AppPlatformClient, region string, probe AppPlatformDomainProbe) *AppPlatformDriver {
+	return &AppPlatformDriver{client: c, region: region, domainProbe: probe}
+}
+
 // NewAppPlatformDriverWithClients creates a driver with both clients injected (for tests).
 func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, region string) *AppPlatformDriver {
 	return &AppPlatformDriver{client: c, regClient: r, region: region}
@@ -85,6 +92,12 @@ func NewAppPlatformDriverWithClients(c AppPlatformClient, r RegistryClient, regi
 // NewAppPlatformDriverWithDNSClient creates a test driver with injected app and DNS clients.
 func NewAppPlatformDriverWithDNSClient(c AppPlatformClient, dns DomainsClient, region string) *AppPlatformDriver {
 	return &AppPlatformDriver{client: c, dnsClient: dns, region: region}
+}
+
+// NewAppPlatformDriverWithDNSClientAndDomainProbe creates a test driver with
+// injected app, DNS, and custom-domain readiness clients.
+func NewAppPlatformDriverWithDNSClientAndDomainProbe(c AppPlatformClient, dns DomainsClient, region string, probe AppPlatformDomainProbe) *AppPlatformDriver {
+	return &AppPlatformDriver{client: c, dnsClient: dns, region: region, domainProbe: probe}
 }
 
 func (d *AppPlatformDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
@@ -632,6 +645,9 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 		if err := d.reconcileAppDomainCNAMEs(ctx, app, appDomains(app)); err != nil {
 			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 		}
+		if err := appPlatformCustomDomainReadinessError(ctx, ref.Name, app, d.domainProbe, ""); err != nil {
+			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+		}
 		d.clearUpdateDeploymentState(providerID)
 		return &interfaces.HealthResult{Healthy: true}, nil
 	}
@@ -642,6 +658,9 @@ func (d *AppPlatformDriver) HealthCheck(ctx context.Context, ref interfaces.Reso
 	result := appHealthResult(ctx, listFn, app)
 	if result != nil && result.Healthy {
 		if err := d.reconcileAppDomainCNAMEs(ctx, app, appDomains(app)); err != nil {
+			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
+		}
+		if err := appPlatformCustomDomainReadinessError(ctx, ref.Name, app, d.domainProbe, ""); err != nil {
 			return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 		}
 	}

@@ -17,6 +17,7 @@ type AppDeployDriver struct {
 	region                     string
 	appID                      string
 	appName                    string
+	domainProbe                AppPlatformDomainProbe
 	targetDeploymentID         string
 	previousActiveDeploymentID string
 	waitingForDeployment       bool
@@ -31,6 +32,12 @@ func NewAppDeployDriver(c AppPlatformClient, region, appID, appName string) *App
 // presence pre-flight. The registry client may be nil to skip the check.
 func NewAppDeployDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, appID, appName string) *AppDeployDriver {
 	return &AppDeployDriver{client: c, regClient: r, region: region, appID: appID, appName: appName}
+}
+
+// NewAppDeployDriverWithDomainProbe creates a DeployDriver with an injected
+// custom-domain readiness probe for tests.
+func NewAppDeployDriverWithDomainProbe(c AppPlatformClient, region, appID, appName string, probe AppPlatformDomainProbe) *AppDeployDriver {
+	return &AppDeployDriver{client: c, region: region, appID: appID, appName: appName, domainProbe: probe}
 }
 
 func (d *AppDeployDriver) Update(ctx context.Context, image string) error {
@@ -66,7 +73,7 @@ func (d *AppDeployDriver) Update(ctx context.Context, image string) error {
 	return nil
 }
 
-func (d *AppDeployDriver) HealthCheck(ctx context.Context, _ string) error {
+func (d *AppDeployDriver) HealthCheck(ctx context.Context, path string) error {
 	app, err := d.getApp(ctx)
 	if err != nil {
 		return fmt.Errorf("app deploy: health check %q: %w", d.appName, err)
@@ -79,7 +86,10 @@ func (d *AppDeployDriver) HealthCheck(ctx context.Context, _ string) error {
 		if dep == nil {
 			return fmt.Errorf("app deploy: %q waiting for deployment after update", d.appName)
 		}
-		return deploymentHealthError(d.appName, dep)
+		if err := deploymentHealthError(d.appName, dep); err != nil {
+			return err
+		}
+		return appPlatformCustomDomainReadinessError(ctx, d.appName, app, d.domainProbe, path)
 	}
 	if app.ActiveDeployment == nil || app.ActiveDeployment.Phase != godo.DeploymentPhase_Active {
 		phase := ""
@@ -88,7 +98,7 @@ func (d *AppDeployDriver) HealthCheck(ctx context.Context, _ string) error {
 		}
 		return fmt.Errorf("app deploy: %q not active (phase: %q)", d.appName, phase)
 	}
-	return nil
+	return appPlatformCustomDomainReadinessError(ctx, d.appName, app, d.domainProbe, path)
 }
 
 func (d *AppDeployDriver) currentTargetDeployment(ctx context.Context, app *godo.App) (*godo.Deployment, error) {

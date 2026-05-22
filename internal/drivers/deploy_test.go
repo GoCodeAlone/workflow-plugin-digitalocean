@@ -258,6 +258,33 @@ func TestAppDeployDriver_HealthCheck_WaitsUntilNewDeploymentObserved(t *testing.
 	}
 }
 
+func TestAppDeployDriver_HealthCheck_WaitsForCustomDomainHTTPS(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{{
+		Domain: "example.com",
+		Type:   godo.AppDomainSpecType_Primary,
+	}}
+	app.Domains = []*godo.AppDomain{{
+		Spec:  app.Spec.Domains[0],
+		Phase: godo.AppJobSpecKindPHASE_Active,
+	}}
+	var probeCalls []string
+	d := drivers.NewAppDeployDriverWithDomainProbe(m, "nyc3", "app-1", "myapp", func(_ context.Context, domain, path string) error {
+		probeCalls = append(probeCalls, domain+path)
+		return fmt.Errorf("tls handshake failed")
+	})
+
+	if err := d.HealthCheck(context.Background(), "/healthz"); err == nil ||
+		!strings.Contains(err.Error(), "example.com") ||
+		!strings.Contains(err.Error(), "tls handshake failed") {
+		t.Fatalf("HealthCheck should wait for custom domain HTTPS, got: %v", err)
+	}
+	if len(probeCalls) != 1 || probeCalls[0] != "example.com/healthz" {
+		t.Fatalf("probe calls = %#v, want example.com/healthz", probeCalls)
+	}
+}
+
 func TestAppDeployDriver_HealthCheck_RetargetsWhenUpdateDeploymentIsSuperseded(t *testing.T) {
 	m := newDeployMock()
 	app := seedApp(m, "app-1", "myapp", "registry.digitalocean.com/myrepo/myapp:v1")
