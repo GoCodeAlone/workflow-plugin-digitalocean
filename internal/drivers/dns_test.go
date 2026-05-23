@@ -297,8 +297,9 @@ func recordPageResponse(domain string, page, pageCount int) *godo.Response {
 
 func testDomain() *godo.Domain {
 	return &godo.Domain{
-		Name: "example.com",
-		TTL:  1800,
+		Name:     "example.com",
+		TTL:      1800,
+		ZoneFile: "$ORIGIN example.com.\n",
 	}
 }
 
@@ -337,6 +338,22 @@ func TestDNSDriver_Create(t *testing.T) {
 	}
 	if got := records[0]["data"]; got != "1.2.3.4" {
 		t.Errorf("created output record data = %v, want 1.2.3.4", got)
+	}
+	if got := records[0]["id"]; got == nil {
+		t.Errorf("created output record id missing from %+v", records[0])
+	}
+	if got := out.Outputs["zone_file"]; got != "$ORIGIN example.com.\n" {
+		t.Errorf("zone_file = %q, want exported zone file", got)
+	}
+	if got := out.Outputs["record_count"]; got != 1 {
+		t.Errorf("record_count = %v, want 1", got)
+	}
+	ns, ok := out.Outputs["authoritative_nameservers"].([]string)
+	if !ok {
+		t.Fatalf("authoritative_nameservers = %T, want []string", out.Outputs["authoritative_nameservers"])
+	}
+	if len(ns) != 3 || ns[0] != "ns1.digitalocean.com" {
+		t.Fatalf("authoritative_nameservers = %#v", ns)
 	}
 }
 

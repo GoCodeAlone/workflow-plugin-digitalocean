@@ -1216,8 +1216,11 @@ func dnsCanonicalRecordData(recordType, data string) string {
 
 func dnsOutput(dom *godo.Domain, name string, records []godo.DomainRecord) *interfaces.ResourceOutput {
 	outputs := map[string]any{
-		"domain": dom.Name,
-		"ttl":    dom.TTL,
+		"domain":                    dom.Name,
+		"ttl":                       dom.TTL,
+		"zone_file":                 dom.ZoneFile,
+		"record_count":              len(records),
+		"authoritative_nameservers": digitalOceanAuthoritativeNameservers(),
 	}
 	if records != nil {
 		outputs["records"] = dnsRecordOutputs(records)
@@ -1235,6 +1238,7 @@ func dnsRecordOutputs(records []godo.DomainRecord) []map[string]any {
 	out := make([]map[string]any, 0, len(records))
 	for _, record := range records {
 		out = append(out, map[string]any{
+			"id":       record.ID,
 			"type":     record.Type,
 			"name":     record.Name,
 			"data":     record.Data,
@@ -1247,6 +1251,10 @@ func dnsRecordOutputs(records []godo.DomainRecord) []map[string]any {
 		})
 	}
 	return out
+}
+
+func digitalOceanAuthoritativeNameservers() []string {
+	return []string{"ns1.digitalocean.com", "ns2.digitalocean.com", "ns3.digitalocean.com"}
 }
 
 func (d *DNSDriver) SensitiveKeys() []string { return nil }
