@@ -558,7 +558,7 @@ func TestDOProvider_Plan_DNSDriverDiffNoopsWhenImportedRecordStateMatches(t *tes
 
 func TestDOProvider_Import_DNSIncludesExistingRecords(t *testing.T) {
 	mock := &providerDNSMock{
-		domain:  &godo.Domain{Name: "example.com"},
+		domain:  &godo.Domain{Name: "example.com", ZoneFile: "$ORIGIN example.com.\n"},
 		records: []godo.DomainRecord{{ID: 10, Type: "TXT", Name: "@", Data: "imported", TTL: 300}},
 	}
 	p := &DOProvider{drivers: map[string]interfaces.ResourceDriver{
@@ -575,6 +575,15 @@ func TestDOProvider_Import_DNSIncludesExistingRecords(t *testing.T) {
 	}
 	if len(records) != 1 || records[0]["data"] != "imported" {
 		t.Fatalf("records = %#v, want imported TXT record", records)
+	}
+	if records[0]["id"] != 10 {
+		t.Fatalf("record id = %#v, want 10", records[0]["id"])
+	}
+	if state.Outputs["zone_file"] != "$ORIGIN example.com.\n" {
+		t.Fatalf("zone_file = %#v, want exported zone", state.Outputs["zone_file"])
+	}
+	if state.Outputs["record_count"] != 1 {
+		t.Fatalf("record_count = %#v, want 1", state.Outputs["record_count"])
 	}
 }
 
