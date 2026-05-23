@@ -760,3 +760,69 @@ func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
 		t.Errorf("progress steps not appended: %v", err)
 	}
 }
+
+// ─── Issue #159: pin prevalidated-rolling B/G semantics ──────────────────────
+
+func TestAppBlueGreenDriver_SwitchTraffic_UpdatesBlueSpec(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if err := d.SwitchTraffic(context.Background()); err != nil {
+		t.Fatalf("SwitchTraffic: %v", err)
+	}
+	if m.lastUpdateRequest == nil {
+		t.Fatal("Update was not invoked on blue (SwitchTraffic should in-place-update blue's spec)")
+	}
+	got := m.lastUpdateRequest.Spec.Services[0].Image.Tag
+	if got != "v2" {
+		t.Errorf("blue spec tag after SwitchTraffic = %q, want %q (in-place update, not promotion)", got, "v2")
+	}
+}
+
+func TestAppBlueGreenDriver_GreenURL_IsDefaultIngress_NotCustomDomain(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "r:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary}}
+	m.createLiveURL = "https://blue-green-abc123.ondigitalocean.app"
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	got, err := d.GreenEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("GreenEndpoint: %v", err)
+	}
+	if !strings.Contains(got, "ondigitalocean.app") {
+		t.Errorf("GreenEndpoint = %q, expected default DO ingress (NOT a custom domain)", got)
+	}
+	if strings.Contains(got, "blue.example.com") {
+		t.Errorf("GreenEndpoint = %q, custom domain leaked to green clone", got)
+	}
+}
+
+func TestAppBlueGreenDriver_DestroyBlue_DeletesGreenNotBlue(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if err := d.DestroyBlue(context.Background()); err != nil {
+		t.Fatalf("DestroyBlue: %v", err)
+	}
+	if _, blueLives := m.apps["blue-id"]; !blueLives {
+		t.Errorf("blue was deleted; DestroyBlue is misleadingly named — should delete green only")
+	}
+	if len(m.deletedAppIDs) == 0 {
+		t.Errorf("expected green clone to be deleted; deletedAppIDs=%v", m.deletedAppIDs)
+	}
+	for _, id := range m.deletedAppIDs {
+		if id == "blue-id" {
+			t.Errorf("DestroyBlue deleted blue (%q); must delete green clone only", id)
+		}
+	}
+}

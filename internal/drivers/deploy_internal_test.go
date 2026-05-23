@@ -203,6 +203,35 @@ func TestAppDeployDriver_HealthCheck_DuringBuildPhaseSkipsProbe(t *testing.T) {
 	}
 }
 
+// ─── Issue #159: pin post-SwitchTraffic HealthCheck delegates to blue ───────
+
+func TestAppBlueGreenDriver_HealthCheck_PostSwitchProbesBlueDeployment(t *testing.T) {
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v2"}}},
+			},
+			InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Deploying},
+		},
+	}
+	d := NewAppBlueGreenDriverWithDomainProbe(stub, nil, "nyc1", "blue-id", "blue", nil)
+	// Simulate the state after CreateGreen + SwitchTraffic without exercising
+	// the full path (already tested in deploy_test.go SwitchTraffic test).
+	d.greenID = "green-id"
+	d.stableCheck = true
+	d.blueDriver().waitingForDeployment = true
+	d.blueDriver().targetDeploymentID = "dep-2"
+
+	err := d.HealthCheck(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected in-progress error for blue's new deployment")
+	}
+	if !strings.Contains(err.Error(), "deployment in progress: DEPLOYING") {
+		t.Errorf("error did not surface blue's in-progress deployment: %v", err)
+	}
+}
+
 // silence unused-import warnings in case future patches add more tests below.
 var (
 	_ = fmt.Sprintf
