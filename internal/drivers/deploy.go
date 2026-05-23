@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/digitalocean/godo"
 )
@@ -149,7 +150,7 @@ func deploymentHealthError(appName string, dep *godo.Deployment) error {
 		godo.DeploymentPhase_Building,
 		godo.DeploymentPhase_PendingDeploy,
 		godo.DeploymentPhase_Deploying:
-		return fmt.Errorf("app deploy: %q deployment in progress: %s (%s)", appName, dep.Phase, dep.ID)
+		return fmt.Errorf("app deploy: %q deployment in progress: %s (%s)%s", appName, dep.Phase, dep.ID, deploymentProgressString(dep))
 	case godo.DeploymentPhase_Error,
 		godo.DeploymentPhase_Canceled,
 		godo.DeploymentPhase_Superseded:
@@ -575,6 +576,30 @@ func (d *AppCanaryDriver) canaryDriver() *AppDeployDriver {
 		d.canaryDeploy.domainProbe = d.domainProbe
 	}
 	return d.canaryDeploy
+}
+
+// deploymentProgressString formats a stateless summary of a deployment's step
+// progress for inclusion in an in-progress error message. Returns the empty
+// string when Progress is nil (common during early Build phases) so the
+// existing message format is unchanged when no Progress is available.
+//
+// "Completed" is SuccessSteps + ErrorSteps because both represent steps DO is
+// no longer actively running; "updated Xs ago" is derived from UpdatedAt and
+// is stateless on our side.
+func deploymentProgressString(dep *godo.Deployment) string {
+	if dep == nil || dep.Progress == nil {
+		return ""
+	}
+	completed := dep.Progress.SuccessSteps + dep.Progress.ErrorSteps
+	age := ""
+	if !dep.UpdatedAt.IsZero() {
+		secs := int(time.Since(dep.UpdatedAt).Round(time.Second).Seconds())
+		if secs < 0 {
+			secs = 0
+		}
+		age = fmt.Sprintf("; updated %ds ago", secs)
+	}
+	return fmt.Sprintf(" [%d/%d steps%s]", completed, dep.Progress.TotalSteps, age)
 }
 
 // isInProgressPhase reports whether a deployment phase is one where the rolling

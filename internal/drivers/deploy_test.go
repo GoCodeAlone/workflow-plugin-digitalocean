@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/digitalocean/godo"
@@ -710,5 +711,52 @@ func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testi
 	}
 	if len(m.lastCreateRequest.Spec.Domains) != 0 {
 		t.Fatalf("canary clone inherited stable's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+
+// ─── Issue #159: deploymentProgressString + deploymentHealthError enrichment ─
+
+func TestDeploymentProgressString_NilProgressIsEmpty(t *testing.T) {
+	got := drivers.DeploymentProgressStringForTest(&godo.Deployment{Phase: godo.DeploymentPhase_Deploying})
+	if got != "" {
+		t.Fatalf("expected empty string for nil Progress, got %q", got)
+	}
+}
+
+func TestDeploymentProgressString_UpdatedAtAgeFormatting(t *testing.T) {
+	dep := &godo.Deployment{
+		Phase:     godo.DeploymentPhase_Deploying,
+		UpdatedAt: time.Now().Add(-12 * time.Second),
+		Progress: &godo.DeploymentProgress{
+			SuccessSteps: 2,
+			ErrorSteps:   1,
+			TotalSteps:   5,
+		},
+	}
+	got := drivers.DeploymentProgressStringForTest(dep)
+	if !strings.Contains(got, "3/5 steps") {
+		t.Errorf("missing steps fragment (2 success + 1 error = 3/5): %q", got)
+	}
+	if !strings.Contains(got, "updated 12s ago") {
+		t.Errorf("missing updated-age fragment: %q", got)
+	}
+}
+
+func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
+	dep := &godo.Deployment{
+		ID:        "dep-9",
+		Phase:     godo.DeploymentPhase_Deploying,
+		UpdatedAt: time.Now().Add(-7 * time.Second),
+		Progress:  &godo.DeploymentProgress{SuccessSteps: 1, TotalSteps: 4},
+	}
+	err := drivers.DeploymentHealthErrorForTest("myapp", dep)
+	if err == nil {
+		t.Fatal("expected error for DEPLOYING phase")
+	}
+	if !strings.Contains(err.Error(), "deployment in progress: DEPLOYING (dep-9)") {
+		t.Errorf("original prefix not preserved: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1/4 steps") {
+		t.Errorf("progress steps not appended: %v", err)
 	}
 }
