@@ -129,29 +129,9 @@ Verify nothing else needs to read these fields; the additions are purely additiv
 
 **Step 2: Write the failing tests**
 
-Append to `internal/drivers/deploy_test.go`:
+Append to `internal/drivers/deploy_test.go`. (The Ingress-preservation test lives in the white-box file added in Task 2, where the unexported helper is directly callable; the two per-driver tests below stay in `deploy_test.go` and assert the public effect.)
 
 ```go
-func TestSanitizeClonedSpecForCreate_PreservesIngress(t *testing.T) {
-	spec := &godo.AppSpec{
-		Name: "blue",
-		Domains: []*godo.AppDomainSpec{
-			{Domain: "example.com", Type: godo.AppDomainSpecType_Primary},
-		},
-		Services: []*godo.AppServiceSpec{{Name: "web"}},
-	}
-	// Snapshot Ingress before sanitize to confirm preservation. AppIngressSpec
-	// is fine as a nil sentinel; if it becomes used, future test versions can
-	// populate it and assert equality.
-	drivers.SanitizeClonedSpecForCreateForTest(spec)
-	if len(spec.Domains) != 0 {
-		t.Fatalf("Domains not cleared, got %d entries", len(spec.Domains))
-	}
-	if len(spec.Services) != 1 {
-		t.Fatalf("Services altered, got %d entries", len(spec.Services))
-	}
-}
-
 func TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec(t *testing.T) {
 	m := newDeployMock()
 	app := seedApp(m, "blue-id", "blue", "registry.digitalocean.com/myrepo/app:v1")
@@ -190,10 +170,6 @@ func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testi
 	}
 }
 ```
-
-The Ingress-preservation test depends on a tiny test-only export — added in Step 3 as part of the white-box test file (not in `package drivers_test`). For now in `package drivers_test`, the per-driver tests assert the public effect (Create request Spec.Domains is empty after sanitization runs inside CreateGreen/CreateCanary).
-
-Actually simpler: **move** `TestSanitizeClonedSpecForCreate_PreservesIngress` into the white-box file added in Task 2, where the unexported helper is directly callable. The two per-driver tests above stay in `deploy_test.go`.
 
 **Step 3: Run tests to verify they fail**
 
@@ -287,8 +263,8 @@ func TestSanitizeClonedSpecForCreate_PreservesIngress(t *testing.T) {
 		},
 		Ingress: &godo.AppIngressSpec{
 			Rules: []*godo.AppIngressSpecRule{
-				{Match: &godo.AppIngressSpecRuleRoutingMatch{Path: &godo.AppIngressSpecRuleStringMatch{Prefix: "/api"}}},
-				{Match: &godo.AppIngressSpecRuleRoutingMatch{Path: &godo.AppIngressSpecRuleStringMatch{Prefix: "/"}}},
+				{Match: &godo.AppIngressSpecRuleMatch{Path: &godo.AppIngressSpecRuleStringMatch{Prefix: "/api"}}},
+				{Match: &godo.AppIngressSpecRuleMatch{Path: &godo.AppIngressSpecRuleStringMatch{Prefix: "/"}}},
 			},
 		},
 		Services: []*godo.AppServiceSpec{{Name: "web"}},
@@ -782,21 +758,21 @@ func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
 }
 ```
 
-The `*ForTest` wrappers are needed because `deploymentProgressString` and `deploymentHealthError` are unexported and the test file is `package drivers_test`. Add to a new file `internal/drivers/export_for_test.go`:
+The `*ForTest` wrappers are needed because `deploymentProgressString` and `deploymentHealthError` are unexported and the test file is `package drivers_test`. Add to a new file `internal/drivers/export_test.go` — the `_test.go` suffix is **required** so these exports only exist during `go test` and never leak into the production binary:
 
 ```go
 package drivers
 
-import "github.com/digitalocean/godo"
-
-// Test-only exports. Kept here so they live in package drivers but are
-// only referenced from _test files.
-var DeploymentProgressStringForTest = deploymentProgressString
-var DeploymentHealthErrorForTest = deploymentHealthError
-var SanitizeClonedSpecForCreateForTest = sanitizeClonedSpecForCreate
+// Test-only exports. The _test.go suffix ensures these are only compiled
+// during `go test`, never into the production binary.
+var (
+	DeploymentProgressStringForTest    = deploymentProgressString
+	DeploymentHealthErrorForTest       = deploymentHealthError
+	SanitizeClonedSpecForCreateForTest = sanitizeClonedSpecForCreate
+)
 ```
 
-(Plain `var = funcName` would expose the function value; using the same name avoids name collisions with internal tests.)
+(No imports needed — the `var = funcName` pattern just rebinds the unexported function value to an exported name.)
 
 Add `"time"` to the imports of `deploy_test.go`.
 
@@ -966,7 +942,6 @@ func TestAppBlueGreenDriver_HealthCheck_PostSwitchProbesBlueDeployment(t *testin
 	// the full path (already tested in deploy_test.go SwitchTraffic test).
 	d.greenID = "green-id"
 	d.stableCheck = true
-	d.blueDeploy = nil // force re-create through accessor on next HealthCheck
 	d.blueDriver().waitingForDeployment = true
 	d.blueDriver().targetDeploymentID = "dep-2"
 
