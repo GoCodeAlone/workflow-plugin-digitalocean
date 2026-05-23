@@ -830,7 +830,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add internal/drivers/deploy.go internal/drivers/deploy_test.go internal/drivers/export_for_test.go
+git add internal/drivers/deploy.go internal/drivers/deploy_test.go internal/drivers/export_test.go
 git commit -m "feat(app-platform): append deployment progress signal to in-progress error (#159)
 
 [completed/total steps; updated Xs ago] now appended to the deployment
