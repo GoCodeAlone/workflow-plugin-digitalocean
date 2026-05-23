@@ -33,7 +33,7 @@
 |------|-------|-------|--------|
 | 1 | fix(app-platform): strip custom domains from green/canary clones + in-rollout probe + progress signal (#159) | Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 8 | feat/159-bg-validation-and-rollout-probe |
 
-**Status:** Draft
+**Status:** Locked 2026-05-23T15:56:31Z
 
 ---
 
