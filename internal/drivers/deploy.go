@@ -331,6 +331,7 @@ func (d *AppBlueGreenDriver) CreateGreen(ctx context.Context, image string) erro
 		return fmt.Errorf("app blue-green: blue app %q has no app spec", d.blueName)
 	}
 	greenSpec.Name = d.blueName + "-green"
+	sanitizeClonedSpecForCreate(greenSpec)
 	for _, svc := range greenSpec.Services {
 		if svc.Image != nil {
 			svc.Image.Repository = imageRepo(image)
@@ -474,6 +475,7 @@ func (d *AppCanaryDriver) CreateCanary(ctx context.Context, image string) error 
 		return fmt.Errorf("app canary: stable app %q has no app spec", d.stableName)
 	}
 	canarySpec.Name = d.stableName + "-canary"
+	sanitizeClonedSpecForCreate(canarySpec)
 	for _, svc := range canarySpec.Services {
 		if svc.Image != nil {
 			svc.Image.Repository = imageRepo(image)
@@ -542,4 +544,16 @@ func (d *AppCanaryDriver) canaryDriver() *AppDeployDriver {
 		d.canaryDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.canaryID, d.stableName+"-canary")
 	}
 	return d.canaryDeploy
+}
+
+// sanitizeClonedSpecForCreate prepares a spec that was deep-copied from another
+// app for use in an Apps.Create call. It clears only the custom-domain claim
+// field that would collide with the source app on DO App Platform; everything
+// else (Services / Workers / Jobs / Functions / StaticSites / Ingress) is left
+// untouched so the new app is a faithful image-swapped clone.
+func sanitizeClonedSpecForCreate(spec *godo.AppSpec) {
+	if spec == nil {
+		return
+	}
+	spec.Domains = nil
 }

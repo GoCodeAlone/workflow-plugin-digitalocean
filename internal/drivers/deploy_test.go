@@ -14,10 +14,14 @@ import (
 
 // deployMockClient supports stateful create/get/update/delete for deploy tests.
 type deployMockClient struct {
-	apps        map[string]*godo.App
-	deployments map[string][]*godo.Deployment
-	err         error
-	nextID      int
+	apps              map[string]*godo.App
+	deployments       map[string][]*godo.Deployment
+	err               error
+	nextID            int
+	lastCreateRequest *godo.AppCreateRequest
+	lastUpdateRequest *godo.AppUpdateRequest
+	deletedAppIDs     []string
+	createLiveURL     string // override for LiveURL returned by Create; empty → derived from name
 }
 
 func newDeployMock() *deployMockClient {
@@ -33,11 +37,16 @@ func (m *deployMockClient) Create(_ context.Context, req *godo.AppCreateRequest)
 	if m.err != nil {
 		return nil, nil, m.err
 	}
+	m.lastCreateRequest = req
 	id := fmt.Sprintf("app-%d", m.nextID)
 	m.nextID++
+	live := m.createLiveURL
+	if live == "" {
+		live = "https://" + req.Spec.Name + ".example.com"
+	}
 	app := &godo.App{
 		ID:      id,
-		LiveURL: "https://" + req.Spec.Name + ".example.com",
+		LiveURL: live,
 		Spec:    req.Spec,
 		ActiveDeployment: &godo.Deployment{
 			Phase: godo.DeploymentPhase_Active,
@@ -62,6 +71,7 @@ func (m *deployMockClient) Update(_ context.Context, appID string, req *godo.App
 	if m.err != nil {
 		return nil, nil, m.err
 	}
+	m.lastUpdateRequest = req
 	app, ok := m.apps[appID]
 	if !ok {
 		return nil, nil, fmt.Errorf("app %q not found", appID)
@@ -98,6 +108,7 @@ func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Respon
 	if m.err != nil {
 		return nil, m.err
 	}
+	m.deletedAppIDs = append(m.deletedAppIDs, appID)
 	delete(m.apps, appID)
 	return nil, nil
 }
@@ -659,5 +670,45 @@ func TestAppCanaryDriver_PromoteCanary_NoCanary(t *testing.T) {
 	d := drivers.NewAppCanaryDriver(m, "nyc3", "app-1", "myapp")
 	if err := d.PromoteCanary(context.Background()); err == nil {
 		t.Fatal("expected error when no canary exists")
+	}
+}
+
+// ─── Issue #159: prevalidated-rolling B/G + Canary Domains-strip safety ───────
+
+func TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("green clone inherited blue's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+
+func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "stable-id", "stable", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "stable.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppCanaryDriver(m, "nyc1", "stable-id", "stable")
+	if err := d.CreateCanary(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateCanary: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("canary clone inherited stable's Domains: %#v", m.lastCreateRequest.Spec.Domains)
 	}
 }
