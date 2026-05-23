@@ -18,6 +18,11 @@ jobs:
           go-version-file: go.mod
       - name: Configure Git for private repos
         run: git config --global url."https://x-access-token:${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - uses: GoCodeAlone/setup-wfctl@v1
+        with:
+          version: v0.61.0
+      - name: Validate plugin contract for publish (pre-build)
+        run: wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -25,6 +30,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify shipped plugin.json carries tag (post-build)
+        run: |
+          if [ -f .release/plugin.json ]; then
+            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir .release .
+          else
+            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir . .
+          fi
       - name: Publish release (was draft during asset upload)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
