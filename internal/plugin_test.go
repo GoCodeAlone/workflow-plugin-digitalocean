@@ -14,7 +14,6 @@ package internal
 import (
 	"archive/tar"
 	"compress/gzip"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,25 +26,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
+// TestPluginGoReleaserArchiveShape verifies the GoReleaser archive
+// structure (one tar.gz per goos/goarch with plugin.json +
+// plugin.contracts.json bundled). The pre-758 cross-check that
+// committed plugin.json.downloads URLs equal {{ .ProjectName }}-{{ .Os }}-{{ .Arch }}
+// .tar.gz under v$Version was retired in workflow#758 — the committed
+// .version field is a "0.0.0" sentinel and the goreleaser before-hook
+// rewrites .release/plugin.json with the actual tag; the tarball-shipped
+// URLs are what matters, and `wfctl plugin validate-contract
+// --release-dir .release --for-publish --tag <vX.Y.Z>` enforces that
+// invariant at release time (workflow#758 Layer 1).
+func TestPluginGoReleaserArchiveShape(t *testing.T) {
 	repoRoot := testRepoRoot(t)
-	var manifest struct {
-		Name      string `json:"name"`
-		Version   string `json:"version"`
-		Downloads []struct {
-			OS   string `json:"os"`
-			Arch string `json:"arch"`
-			URL  string `json:"url"`
-		} `json:"downloads"`
-	}
-	manifestData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
-	if err != nil {
-		t.Fatalf("read plugin.json: %v", err)
-	}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		t.Fatalf("parse plugin.json: %v", err)
-	}
-
 	var releaseCfg struct {
 		Builds []struct {
 			ID     string   `yaml:"id"`
@@ -75,7 +67,7 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	build := releaseCfg.Builds[0]
 	archive := releaseCfg.Archives[0]
 	if archive.NameTemplate != "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}" {
-		t.Fatalf("unsupported archive name_template %q; update download manifest generation/test", archive.NameTemplate)
+		t.Fatalf("unsupported archive name_template %q", archive.NameTemplate)
 	}
 	if len(archive.IDs) != 1 || archive.IDs[0] != build.ID {
 		t.Fatalf("archive ids = %v, want [%s]", archive.IDs, build.ID)
@@ -87,33 +79,10 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 		t.Fatalf("archive files = %v, want plugin.contracts.json", archive.Files)
 	}
 
-	want := make(map[string]string)
-	for _, goos := range build.Goos {
-		for _, goarch := range build.Goarch {
-			key := goos + "/" + goarch
-			want[key] = fmt.Sprintf(
-				"https://github.com/GoCodeAlone/%s/releases/download/v%s/%s-%s-%s.tar.gz",
-				manifest.Name,
-				manifest.Version,
-				manifest.Name,
-				goos,
-				goarch,
-			)
-		}
+	manifestData, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
 	}
-	got := make(map[string]string, len(manifest.Downloads))
-	for _, dl := range manifest.Downloads {
-		got[dl.OS+"/"+dl.Arch] = dl.URL
-	}
-	if len(got) != len(want) {
-		t.Fatalf("download count = %d, want %d (%v)", len(got), len(want), want)
-	}
-	for key, wantURL := range want {
-		if gotURL := got[key]; gotURL != wantURL {
-			t.Errorf("download %s = %q, want %q", key, gotURL, wantURL)
-		}
-	}
-
 	archivePath := filepath.Join(t.TempDir(), "plugin.tar.gz")
 	if err := writeTestArchive(repoRoot, archivePath, archive.Files, map[string][]byte{
 		".release/plugin.json": manifestData,
@@ -122,23 +91,6 @@ func TestPluginDownloadsMatchGoReleaserArchives(t *testing.T) {
 	}
 	if !tarGzContains(archivePath, "plugin.contracts.json") {
 		t.Fatal("test release archive missing plugin.contracts.json")
-	}
-}
-
-func TestSyncPluginVersionWorkflowUpdatesDownloads(t *testing.T) {
-	repoRoot := testRepoRoot(t)
-	body, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "sync-plugin-version.yml"))
-	if err != nil {
-		t.Fatalf("read sync workflow: %v", err)
-	}
-	text := string(body)
-	for _, want := range []string{
-		"dl['url'] = f'https://github.com/GoCodeAlone/{name}/releases/download/{tag}/{name}-{goos}-{goarch}.tar.gz'",
-		"p['version'] = '$TARGET'",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("sync workflow must update manifest downloads with release tag, missing %q", want)
-		}
 	}
 }
 

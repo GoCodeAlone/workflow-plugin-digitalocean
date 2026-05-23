@@ -1,12 +1,12 @@
 {
   "name": "workflow-plugin-digitalocean",
-  "version": "2.0.15",
+  "version": "0.0.0",
   "description": "DigitalOcean IaC provider: App Platform, App Platform domains, DOKS, databases, Redis cache, load balancers, VPC, firewall, DNS, Spaces, DOCR, certificates, Droplets, Block Storage volumes, IAM (declared), and API gateway",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
   "tier": "community",
-  "minEngineVersion": "0.60.7",
+  "minEngineVersion": "0.61.0",
   "keywords": [
     "digitalocean",
     "iac",
