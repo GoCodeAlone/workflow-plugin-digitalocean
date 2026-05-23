@@ -70,6 +70,45 @@ func TestNewAppCanaryDriverWithDomainProbe_InjectsIntoInnerDrivers(t *testing.T)
 	}
 }
 
+// ─── Issue #159: appPlatformProbeCustomDomains helper ───────────────────────
+
+func TestAppPlatformProbeCustomDomains_CountsReachable(t *testing.T) {
+	app := &godo.App{
+		Spec: &godo.AppSpec{
+			Domains: []*godo.AppDomainSpec{
+				{Domain: "a.example.com"},
+				{Domain: "b.example.com"},
+				{Domain: "c.example.com", Wildcard: true}, // excluded
+			},
+		},
+	}
+	var calls []string
+	probe := func(_ context.Context, domain, _ string) error {
+		calls = append(calls, domain)
+		if domain == "b.example.com" {
+			return fmt.Errorf("simulated 503")
+		}
+		return nil
+	}
+	reachable, total := appPlatformProbeCustomDomains(context.Background(), app, probe, "/healthz")
+	if total != 2 {
+		t.Fatalf("total = %d, want 2 (wildcard excluded)", total)
+	}
+	if reachable != 1 {
+		t.Fatalf("reachable = %d, want 1", reachable)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("probe called %d times, want 2", len(calls))
+	}
+}
+
+func TestAppPlatformProbeCustomDomains_EmptyApp(t *testing.T) {
+	r, total := appPlatformProbeCustomDomains(context.Background(), &godo.App{}, nil, "")
+	if total != 0 || r != 0 {
+		t.Fatalf("expected (0,0) for app with no domains, got (%d, %d)", r, total)
+	}
+}
+
 // silence unused-import warnings in case future patches add more tests below.
 var (
 	_ = fmt.Sprintf

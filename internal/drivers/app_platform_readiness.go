@@ -49,6 +49,33 @@ func appPlatformCustomDomainReadinessError(ctx context.Context, appName string, 
 	return nil
 }
 
+// appPlatformProbeCustomDomains GETs each non-wildcard custom domain on app
+// and returns how many were reachable (probe returned nil) and how many were
+// attempted in total. Wildcard entries are excluded (no concrete host). Empty
+// or nil custom-domain list returns (0, 0). Intended for in-rollout health
+// observation; the post-Active gate continues to use
+// appPlatformCustomDomainReadinessError.
+func appPlatformProbeCustomDomains(ctx context.Context, app *godo.App, probe AppPlatformDomainProbe, pathOverride string) (reachable, total int) {
+	domains := appPlatformCustomDomains(app)
+	if len(domains) == 0 {
+		return 0, 0
+	}
+	if probe == nil {
+		probe = defaultAppPlatformDomainProbe
+	}
+	path := appPlatformReadinessPath(app, pathOverride)
+	for _, spec := range domains {
+		if spec.Wildcard {
+			continue
+		}
+		total++
+		if err := probe(ctx, spec.Domain, path); err == nil {
+			reachable++
+		}
+	}
+	return reachable, total
+}
+
 func appPlatformCustomDomains(app *godo.App) []*godo.AppDomainSpec {
 	if app == nil || app.Spec == nil {
 		return nil
