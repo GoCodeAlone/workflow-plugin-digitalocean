@@ -27,15 +27,16 @@ That gate is **post-Active only**. Nothing probes availability while the rolling
 
 ## Proposed changes
 
-### 1. Code fix — strip custom domains + ingress from cloned spec in BG + Canary
+### 1. Code fix — strip custom domains from cloned spec in BG + Canary
 
 `CreateGreen` and `CreateCanary` are the only call sites of `cloneAppSpec` that hand the result to `Apps.Create`. The other call sites (`Update` in deploy.go:54, the migration-repair helpers) hand to `Apps.Update` on the **same** app, where Domains pass-through is desired. Add `sanitizeClonedSpecForCreate(spec)` invoked from CreateGreen + CreateCanary that:
 
-- Clears `spec.Domains` (the legacy field) and per-domain entries in `spec.Ingress.Rules` that reference custom domains.
-- Resets `spec.Name` and `spec.Region` to caller-supplied values (already done outside the helper).
+- Clears **only** `spec.Domains`. This is the primary mechanism by which DO claims a custom domain for an app (still read by `app_platform_readiness.go:58` and written by current buildspec); the only sense in which it is "legacy" is relative to the newer per-route `Ingress` model — both are live in the API today.
+- Leaves `spec.Ingress` **untouched** — `godo.AppIngressSpecRule` carries `Match.Path` / `Match.Authority` / `Redirect.Authority` and has no per-domain claim field; the green clone needs the ingress rules to route its own traffic (otherwise post-CreateGreen HealthCheck against the green clone would succeed on "deployment Active" but the green app would 404 every real path, defeating the prevalidation value).
 - Leaves Services / Workers / Jobs / Functions / Static Sites otherwise intact (image swap happens after).
+- Caller continues to set `spec.Name` to `<blueName>-green` / `<stableName>-canary` (already done outside the helper, line `deploy.go:333` / `:476`).
 
-This is a small, surgical fix; the alternative — deferring to a follow-up — leaves the BG/Canary drivers footgun-laden while we ship "honest documentation" claiming they're safe. Better to fix the foot.
+A dedicated test (§4) asserts `spec.Ingress` survives sanitization. This is a small, surgical fix; the alternative — deferring to a follow-up — leaves the BG/Canary drivers footgun-laden while we ship "honest documentation" claiming they're safe. Better to fix the foot.
 
 ### 2. In-rollout availability probe — fire during `waitingForDeployment`
 
@@ -43,9 +44,26 @@ Today `HealthCheck` returns early on non-Active phase, so no domain probe runs w
 
 - For each non-wildcard custom domain on the App spec, `GET https://<domain><readiness path>` with the same 5s timeout the post-Active probe already uses.
 - Failures are **not** elevated to errors — they're appended to the existing in-progress error message as `; domain probe: X/Y custom domains reachable` so wfctl --wait surfaces rollout-time downtime windows in operator logs without changing the gate semantics. (The gate continues to be "deployment Phase = Active + post-Active domain probe.")
+- **Phase-gated:** the probe runs only when `deploymentHealthError` returns its in-progress sentinel — i.e. `Phase` is `PendingDeploy` or `Deploying`. During `PendingBuild` / `Building` the old code is still serving and the probe would always succeed; running it there is log noise that trains operators to ignore the field. Terminal phases (`Error`, `Canceled`, `Superseded`) already return their own failure message and the probe is skipped.
 - When no custom domains are attached (typical of green clones after §1 sanitization) the in-rollout probe is a no-op.
 
-Implementation: extract the existing probe loop into `appPlatformProbeCustomDomains(ctx, app, probe, path) (reachable int, total int, lastErr error)` and call it from both the post-Active path (where lastErr already becomes the returned error) and the waitingForDeployment path (where the reachable/total is suffixed to the in-progress message).
+**Where in `HealthCheck` the probe composes.** Today, `HealthCheck` at `deploy.go:81-93` evaluates `deploymentHealthError(...)`; if non-nil it returns immediately. The probe sits **between** that check and the early return:
+
+```
+if err := deploymentHealthError(d.appName, dep); err != nil {
+    if isInProgressPhase(dep.Phase) {        // PendingDeploy or Deploying only
+        reachable, total := appPlatformProbeCustomDomains(ctx, app, d.domainProbe, path)
+        if total > 0 {
+            return fmt.Errorf("%w; domain probe: %d/%d custom domains reachable", err, reachable, total)
+        }
+    }
+    return err
+}
+```
+
+`%w` preserves `errors.Is`/`errors.As` semantics for any caller that unwraps. The original `deploymentHealthError` string (prefix `app deploy: ... deployment in progress: ` and the parenthesized deployment ID) is untouched (A5). `appPlatformProbeCustomDomains(ctx, app, probe, path) (reachable, total int)` is extracted from the existing post-Active loop in `app_platform_readiness.go:23`; the post-Active path continues to derive its error from the same loop's last failure.
+
+**Scope honesty** (acknowledging cycle 2 review's user-intent observation): by §1, green clones have no custom domains, so the in-rollout probe is a no-op against green. The probe meaningfully fires on **blue's post-`SwitchTraffic` re-deploy**, which is the only window where a custom-domain-attached app is rolling under traffic. This is documented in §5 alongside the prevalidated-rolling explanation so operators understand what `domain probe: X/Y` actually observes.
 
 ### 3. Progress signal in deployment-in-progress error
 
@@ -71,6 +89,7 @@ In `internal/drivers/deploy_test.go`:
 
 - `TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec` — seed blue with a non-default `Spec.Domains` entry; assert the `AppCreateRequest.Spec.Domains` passed to `client.Create` is empty after §1.
 - `TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec` — same for canary.
+- `TestSanitizeClonedSpecForCreate_PreservesIngress` — seed `spec.Ingress.Rules` with route rules; assert post-sanitize they are byte-identical to pre-sanitize (only `Domains` is touched).
 - `TestAppBlueGreenDriver_SwitchTraffic_UpdatesBlueSpec` — assert post-SwitchTraffic, blue's spec image equals the green image (in-place update, not promotion).
 - `TestAppBlueGreenDriver_GreenURL_IsDefaultIngress_NotCustomDomain` — assert `GreenEndpoint()` returns the green clone's `*.ondigitalocean.app` URL, not any custom domain attached to blue.
 - `TestAppBlueGreenDriver_DestroyBlue_DeletesGreenNotBlue` — explicit assertion about the misleading method name's actual behavior.
@@ -79,7 +98,11 @@ In `internal/drivers/deploy_test.go`:
 - `TestDeploymentProgressString_NilProgressIsEmpty` — explicit nil-Progress safety.
 - `TestDeploymentProgressString_UpdatedAtAgeFormatting` — recent UpdatedAt → "Xs ago".
 
-Constructor surface change (required to make the probe-injection tests work): add `NewAppBlueGreenDriverWithDomainProbe(client, regClient, region, blueID, blueName, probe)` and `NewAppCanaryDriverWithDomainProbe(...)`, each wiring the probe into the inner `*AppDeployDriver` constructions via a new package-private setter. The existing `NewAppBlueGreenDriver` + `NewAppBlueGreenDriverWithRegistry` continue to work unchanged (probe is nil → falls back to `defaultAppPlatformDomainProbe`, same as today).
+Constructor surface change (required to make the probe-injection tests work):
+
+- `NewAppBlueGreenDriverWithDomainProbe(client, regClient, region, blueID, blueName, probe) *AppBlueGreenDriver` — wires `probe` into the inner blue + green `*AppDeployDriver` constructions via a new package-private setter.
+- `NewAppCanaryDriverWithDomainProbe(client, regClient, region, stableID, stableName, probe) *AppCanaryDriver` — same shape for canary; `AppCanaryDriver.HealthCheck` already delegates to the stable or canary inner driver depending on `canaryID` (deploy.go:441-446), so the injected probe rides through whichever inner driver is active.
+- Existing `NewAppBlueGreenDriver` + `NewAppBlueGreenDriverWithRegistry` + `NewAppCanaryDriver` + `NewAppCanaryDriverWithRegistry` continue to work unchanged (probe is nil → falls back to `defaultAppPlatformDomainProbe`, same as today).
 
 ### 5. Documentation — `docs/DEPLOYMENT_STRATEGIES.md` (new)
 
@@ -118,6 +141,14 @@ A6. `cloneAppSpec` is used by both same-app-Update paths (where Domains pass-thr
 - `go test ./internal/drivers/... -count=1 -race` green.
 - Full repo `go test ./... -count=1` green.
 - Manual live-validation against gocodealone-multisite is **not** required for this PR — the changes are observation-only (probe, log enrichment) + a strictly-safer spec sanitization. Live validation of true zero-downtime guarantees belongs to the deferred front-door design.
+
+## Adversarial cycle 2 — addressed
+
+- C1 partial (sanitization scope vague + Ingress ambiguity): **addressed** — §1 now constrains sanitization to `spec.Domains` only, explicitly leaves `spec.Ingress` untouched, and §4 adds `TestSanitizeClonedSpecForCreate_PreservesIngress` to pin the boundary.
+- C2 partial (composition mechanic in HealthCheck not specified): **addressed** — §2 now spells out the exact code shape (`%w`-wrap between `deploymentHealthError` check and early return, phase-gated to `PendingDeploy`/`Deploying`), preserving `errors.Is` semantics and the original error string verbatim.
+- New I (Build-phase probe noise): **addressed** — §2 phase-gate `isInProgressPhase(dep.Phase)` excludes `PendingBuild`/`Building`.
+- New I (canary constructor not enumerated): **addressed** — §4 constructor paragraph now lists both `NewAppBlueGreenDriverWithDomainProbe` and `NewAppCanaryDriverWithDomainProbe` with the canary HealthCheck delegation note.
+- User-intent caveat (probe never fires on green clone): **addressed** — §2 "Scope honesty" paragraph + §5 docs explain that the probe meaningfully fires on blue's post-SwitchTraffic re-deploy.
 
 ## Adversarial cycle 1 — addressed
 
