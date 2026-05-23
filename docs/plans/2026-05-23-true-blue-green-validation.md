@@ -6,7 +6,7 @@
 
 **Architecture:** Surgical fix at the green/canary clone Create call sites (strip `Spec.Domains` only; leave `Ingress` untouched) + a probe-loop extraction so the existing post-Active custom-domain probe can also fire during the `Deploying`/`PendingDeploy` window without changing the gate semantics. Error-string enrichment is purely additive — original prefix and parenthesized deployment ID preserved verbatim, `%w`-wrapping preserves `errors.Is`/`errors.As`.
 
-**Tech Stack:** Go 1.26, `github.com/digitalocean/godo` v1.178, standard testing + table-driven tests; no new dependencies.
+**Tech Stack:** Go 1.26, `github.com/digitalocean/godo` v1.175.0, standard testing + table-driven tests; no new dependencies.
 
 **Base branch:** main
 
@@ -25,6 +25,7 @@
 - Live availability probe SLOs, alerting integrations, dashboards.
 - Changes to `wfctl infra apply --wait` polling cadence.
 - Stuck-deploy heuristic (dropped per adversarial cycle 1 I1/I2).
+- Mutating the committed design doc with post-merge issue numbers (deferred per plan adversarial cycle 1 I5).
 
 **PR Grouping:**
 
@@ -36,19 +37,248 @@
 
 ---
 
-### Task 1: `sanitizeClonedSpecForCreate` + Domains-strip in BG/Canary Create paths
+## Verified API surface (read this before writing code)
 
-Closes critical C1 from adversarial cycle 1. Adds the sanitization helper and invokes it from `CreateGreen` + `CreateCanary` so the cloned spec the green/canary `Apps.Create` receives no longer carries blue/stable's custom `Spec.Domains`.
+The plan code samples below were verified against the actual repository on cycle-2 revision:
+
+- **Existing fake client:** `deployMockClient` constructed via `newDeployMock()` (deploy_test.go:23) with `seedApp(m, id, name, image)` helper (deploy_test.go:109). The mock's `Create` (deploy_test.go:32) currently does NOT capture the request — it returns `{ID, LiveURL, Spec, ActiveDeployment}` and stores into `m.apps`. **Step 0 of Task 1 extends the mock** with `lastCreateRequest *godo.AppCreateRequest`, `lastUpdateRequest *godo.AppUpdateRequest`, `deletedAppIDs []string`, and `createLiveURL string` (override) fields, captured in the corresponding methods. This is the ONLY code change in the mock and is shared by Tasks 1/2/4/6.
+- **`godo.DeploymentProgress` fields** (apps.gen.go:956): `PendingSteps`, `RunningSteps`, `SuccessSteps`, `ErrorSteps`, `TotalSteps`. There is **no** `StepsCompleted`/`StepsTotal`. Plan uses `SuccessSteps+ErrorSteps` for "completed" and `TotalSteps` for "total".
+- **Live custom domain status** lives at `app.Domains []*godo.AppDomain` (used at app_domain_test.go:116, app_platform_test.go:184, deploy_test.go:268). **There is no `LiveDomains` field.** Spec-side claims live at `app.Spec.Domains []*godo.AppDomainSpec`.
+- **`NewAppDeployDriverWithDomainProbe`** at deploy.go:39 signature: `(c AppPlatformClient, region, appID, appName string, probe AppPlatformDomainProbe)` — 5 args, NO `RegistryClient`. Plan does NOT call this from BG/Canary accessors; instead BG/Canary store the probe and post-assign `inner.domainProbe = d.domainProbe` after `NewAppDeployDriverWithRegistry(...)` returns (same package, `domainProbe` is unexported but accessible).
+- **Test package boundary:** existing `internal/drivers/deploy_test.go` and `internal/drivers/app_platform_test.go` are both `package drivers_test` (black-box). Tests that need to touch unexported fields (`d.domainProbe`, `d.greenID`, `d.waitingForDeployment`, the `appPlatformProbeCustomDomains` helper) are added to a NEW white-box file `internal/drivers/deploy_internal_test.go` in `package drivers`. Tests that only use the public API stay in `deploy_test.go`.
+
+---
+
+### Task 1: Extend mock + `sanitizeClonedSpecForCreate` + Domains-strip in BG/Canary Create paths
+
+Closes critical C1 from design adversarial cycle 1. Also extends the shared mock with request-capture fields used by later tasks.
 
 **Files:**
-- Modify: `internal/drivers/deploy.go` (CreateGreen ~line 326; CreateCanary ~line 469)
-- Test: `internal/drivers/deploy_test.go` (3 new tests)
+- Modify: `internal/drivers/deploy_test.go` (extend `deployMockClient`)
+- Modify: `internal/drivers/deploy.go` (add helper, call from CreateGreen ~line 326 + CreateCanary ~line 469)
+- Test: `internal/drivers/deploy_test.go` (3 new tests in `package drivers_test`)
 
-**Step 1: Write failing tests**
+**Step 1: Extend the mock with capture fields**
 
-Add to `internal/drivers/deploy_test.go`:
+In `internal/drivers/deploy_test.go`, extend `deployMockClient`:
 
 ```go
+type deployMockClient struct {
+	apps              map[string]*godo.App
+	deployments       map[string][]*godo.Deployment
+	err               error
+	nextID            int
+	lastCreateRequest *godo.AppCreateRequest
+	lastUpdateRequest *godo.AppUpdateRequest
+	deletedAppIDs     []string
+	createLiveURL     string // override for the LiveURL returned by Create; empty → derived from name
+}
+```
+
+Update `Create` to capture + honor override:
+
+```go
+func (m *deployMockClient) Create(_ context.Context, req *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	m.lastCreateRequest = req
+	id := fmt.Sprintf("app-%d", m.nextID)
+	m.nextID++
+	live := m.createLiveURL
+	if live == "" {
+		live = "https://" + req.Spec.Name + ".example.com"
+	}
+	app := &godo.App{
+		ID:      id,
+		LiveURL: live,
+		Spec:    req.Spec,
+		ActiveDeployment: &godo.Deployment{Phase: godo.DeploymentPhase_Active},
+	}
+	m.apps[id] = app
+	return app, nil, nil
+}
+```
+
+Update `Update` and `Delete`:
+
+```go
+func (m *deployMockClient) Update(_ context.Context, appID string, req *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	m.lastUpdateRequest = req
+	app, ok := m.apps[appID]
+	if !ok {
+		return nil, nil, fmt.Errorf("app %q not found", appID)
+	}
+	app.Spec = req.Spec
+	return app, nil, nil
+}
+func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Response, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	m.deletedAppIDs = append(m.deletedAppIDs, appID)
+	delete(m.apps, appID)
+	return nil, nil
+}
+```
+
+Verify nothing else needs to read these fields; the additions are purely additive.
+
+**Step 2: Write the failing tests**
+
+Append to `internal/drivers/deploy_test.go`:
+
+```go
+func TestSanitizeClonedSpecForCreate_PreservesIngress(t *testing.T) {
+	spec := &godo.AppSpec{
+		Name: "blue",
+		Domains: []*godo.AppDomainSpec{
+			{Domain: "example.com", Type: godo.AppDomainSpecType_Primary},
+		},
+		Services: []*godo.AppServiceSpec{{Name: "web"}},
+	}
+	// Snapshot Ingress before sanitize to confirm preservation. AppIngressSpec
+	// is fine as a nil sentinel; if it becomes used, future test versions can
+	// populate it and assert equality.
+	drivers.SanitizeClonedSpecForCreateForTest(spec)
+	if len(spec.Domains) != 0 {
+		t.Fatalf("Domains not cleared, got %d entries", len(spec.Domains))
+	}
+	if len(spec.Services) != 1 {
+		t.Fatalf("Services altered, got %d entries", len(spec.Services))
+	}
+}
+
+func TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("green clone inherited blue's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+
+func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "stable-id", "stable", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "stable.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppCanaryDriver(m, "nyc1", "stable-id", "stable")
+	if err := d.CreateCanary(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateCanary: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("canary clone inherited stable's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+```
+
+The Ingress-preservation test depends on a tiny test-only export — added in Step 3 as part of the white-box test file (not in `package drivers_test`). For now in `package drivers_test`, the per-driver tests assert the public effect (Create request Spec.Domains is empty after sanitization runs inside CreateGreen/CreateCanary).
+
+Actually simpler: **move** `TestSanitizeClonedSpecForCreate_PreservesIngress` into the white-box file added in Task 2, where the unexported helper is directly callable. The two per-driver tests above stay in `deploy_test.go`.
+
+**Step 3: Run tests to verify they fail**
+
+```
+GOWORK=off go test ./internal/drivers/... -run 'TestAppBlueGreenDriver_CreateGreen_StripsCustomDomains|TestAppCanaryDriver_CreateCanary_StripsCustomDomains' -count=1
+```
+Expected: FAIL — Domains pass through to lastCreateRequest unmodified.
+
+**Step 4: Add `sanitizeClonedSpecForCreate` + call sites**
+
+In `internal/drivers/deploy.go`:
+
+```go
+// sanitizeClonedSpecForCreate prepares a spec that was deep-copied from another
+// app for use in an Apps.Create call. It clears only the custom-domain claim
+// fields that would collide with the source app on DO App Platform; everything
+// else (Services / Workers / Jobs / Functions / StaticSites / Ingress) is left
+// untouched so the new app is a faithful image-swapped clone.
+func sanitizeClonedSpecForCreate(spec *godo.AppSpec) {
+	if spec == nil {
+		return
+	}
+	spec.Domains = nil
+}
+```
+
+In `CreateGreen`, after `greenSpec.Name = d.blueName + "-green"`:
+
+```go
+sanitizeClonedSpecForCreate(greenSpec)
+```
+
+In `CreateCanary`, after `canarySpec.Name = d.stableName + "-canary"`:
+
+```go
+sanitizeClonedSpecForCreate(canarySpec)
+```
+
+**Step 5: Run tests + full driver suite**
+
+```
+GOWORK=off go test ./internal/drivers/... -count=1
+```
+Expected: PASS.
+
+**Step 6: Commit**
+
+```bash
+git add internal/drivers/deploy.go internal/drivers/deploy_test.go
+git commit -m "fix(app-platform): strip custom Domains from green/canary cloned spec (#159)
+
+CreateGreen and CreateCanary deep-cloned blue/stable's Spec via cloneAppSpec,
+including Spec.Domains. DO App Platform rejects creating a second app that
+claims an already-attached custom domain. sanitizeClonedSpecForCreate now
+clears only Spec.Domains; Ingress and all other surface is preserved.
+Mock client extended to capture lastCreateRequest / lastUpdateRequest /
+deletedAppIDs / createLiveURL for these and downstream tests.
+
+Rollback: revert commit; purely additive (strictly fewer fields populated)."
+```
+
+---
+
+### Task 2: `NewAppBlueGreenDriverWithDomainProbe` + `NewAppCanaryDriverWithDomainProbe` + white-box test file
+
+Required so the in-rollout probe tests (Task 4) and the helper-direct test (Task 3) can touch unexported state.
+
+**Files:**
+- Modify: `internal/drivers/deploy.go` (add `domainProbe` field to BG + Canary structs; add constructors; update accessors to propagate probe)
+- Create: `internal/drivers/deploy_internal_test.go` (NEW; `package drivers`; white-box)
+
+**Step 1: Write the failing tests in the new white-box file**
+
+Create `internal/drivers/deploy_internal_test.go`:
+
+```go
+package drivers
+
+import (
+	"context"
+	"testing"
+
+	"github.com/digitalocean/godo"
+)
+
 func TestSanitizeClonedSpecForCreate_PreservesIngress(t *testing.T) {
 	spec := &godo.AppSpec{
 		Name: "blue",
@@ -70,137 +300,10 @@ func TestSanitizeClonedSpecForCreate_PreservesIngress(t *testing.T) {
 	if spec.Ingress == nil || len(spec.Ingress.Rules) != 2 {
 		t.Fatalf("Ingress.Rules altered, got %#v", spec.Ingress)
 	}
-	if len(spec.Services) != 1 {
-		t.Fatalf("Services altered, got %d entries", len(spec.Services))
-	}
 }
 
-func TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec(t *testing.T) {
-	blueSpec := &godo.AppSpec{
-		Name: "blue",
-		Domains: []*godo.AppDomainSpec{
-			{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary},
-		},
-		Services: []*godo.AppServiceSpec{{
-			Name:  "web",
-			Image: &godo.ImageSourceSpec{Repository: "old", Tag: "v1"},
-		}},
-	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", &godo.App{ID: "blue-id", Spec: blueSpec, LiveURL: "https://blue.example.com"})
-
-	d := NewAppBlueGreenDriver(client, "nyc1", "blue-id", "blue")
-	if err := d.CreateGreen(context.Background(), "registry.example.com/img:v2"); err != nil {
-		t.Fatalf("CreateGreen: %v", err)
-	}
-
-	if len(client.lastCreateRequest.Spec.Domains) != 0 {
-		t.Fatalf("green clone inherited blue's Domains: %#v", client.lastCreateRequest.Spec.Domains)
-	}
-}
-
-func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testing.T) {
-	stableSpec := &godo.AppSpec{
-		Name: "stable",
-		Domains: []*godo.AppDomainSpec{
-			{Domain: "stable.example.com", Type: godo.AppDomainSpecType_Primary},
-		},
-		Services: []*godo.AppServiceSpec{{
-			Name:  "web",
-			Image: &godo.ImageSourceSpec{Repository: "old", Tag: "v1"},
-		}},
-	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("stable-id", &godo.App{ID: "stable-id", Spec: stableSpec, LiveURL: "https://stable.example.com"})
-
-	d := NewAppCanaryDriver(client, "nyc1", "stable-id", "stable")
-	if err := d.CreateCanary(context.Background(), "registry.example.com/img:v2"); err != nil {
-		t.Fatalf("CreateCanary: %v", err)
-	}
-
-	if len(client.lastCreateRequest.Spec.Domains) != 0 {
-		t.Fatalf("canary clone inherited stable's Domains: %#v", client.lastCreateRequest.Spec.Domains)
-	}
-}
-```
-
-If `lastCreateRequest` is not already captured by the existing fake, also add the capture in the fake's `Create` method (verify by reading the existing fake in `internal/drivers/deploy_test.go` first; reuse if available).
-
-**Step 2: Run tests to verify they fail**
-
-```
-GOWORK=off go test ./internal/drivers/... -run 'TestSanitize|TestAppBlueGreenDriver_CreateGreen_StripsCustomDomains|TestAppCanaryDriver_CreateCanary_StripsCustomDomains' -count=1
-```
-Expected: FAIL — `sanitizeClonedSpecForCreate undefined` and the Domains assertions fail (current code passes Domains through).
-
-**Step 3: Add `sanitizeClonedSpecForCreate` + call sites**
-
-In `internal/drivers/deploy.go`:
-
-```go
-// sanitizeClonedSpecForCreate prepares a spec that was deep-copied from another
-// app for use in an Apps.Create call. It clears only the custom-domain claim
-// fields that would collide with the source app on DO App Platform; everything
-// else (Services / Workers / Jobs / Functions / StaticSites / Ingress) is left
-// untouched so the new app is a faithful image-swapped clone.
-func sanitizeClonedSpecForCreate(spec *godo.AppSpec) {
-	if spec == nil {
-		return
-	}
-	spec.Domains = nil
-}
-```
-
-Then in `CreateGreen`, after `greenSpec.Name = d.blueName + "-green"`:
-
-```go
-sanitizeClonedSpecForCreate(greenSpec)
-```
-
-And in `CreateCanary`, after `canarySpec.Name = d.stableName + "-canary"`:
-
-```go
-sanitizeClonedSpecForCreate(canarySpec)
-```
-
-**Step 4: Run tests to verify they pass + run full driver tests for regressions**
-
-```
-GOWORK=off go test ./internal/drivers/... -count=1
-```
-Expected: PASS, no regressions.
-
-**Step 5: Commit**
-
-```bash
-git add internal/drivers/deploy.go internal/drivers/deploy_test.go
-git commit -m "fix(app-platform): strip custom Domains from green/canary cloned spec (#159)
-
-CreateGreen and CreateCanary deep-cloned blue/stable's Spec via cloneAppSpec,
-including Spec.Domains. DO App Platform rejects creating a second app that
-claims an already-attached custom domain. sanitizeClonedSpecForCreate now
-clears only Spec.Domains; Ingress and all other surface is preserved."
-```
-
----
-
-### Task 2: Add `*WithDomainProbe` constructors for BG + Canary drivers
-
-Required to make the in-rollout probe tests (Task 4) injectable. Mirrors the existing `NewAppDeployDriverWithDomainProbe` pattern.
-
-**Files:**
-- Modify: `internal/drivers/deploy.go` (AppBlueGreenDriver + AppCanaryDriver structs + constructor block)
-- Test: `internal/drivers/deploy_test.go`
-
-**Step 1: Write the failing test**
-
-```go
 func TestNewAppBlueGreenDriverWithDomainProbe_InjectsIntoInnerDrivers(t *testing.T) {
-	var calls int
-	probe := func(_ context.Context, _, _ string) error {
-		calls++
-		return nil
-	}
+	probe := func(_ context.Context, _, _ string) error { return nil }
 	d := NewAppBlueGreenDriverWithDomainProbe(nil, nil, "nyc1", "blue-id", "blue", probe)
 	if d.blueDriver().domainProbe == nil {
 		t.Fatal("blue driver missing injected probe")
@@ -209,7 +312,6 @@ func TestNewAppBlueGreenDriverWithDomainProbe_InjectsIntoInnerDrivers(t *testing
 	if d.greenDriver().domainProbe == nil {
 		t.Fatal("green driver missing injected probe")
 	}
-	_ = calls
 }
 
 func TestNewAppCanaryDriverWithDomainProbe_InjectsIntoInnerDrivers(t *testing.T) {
@@ -225,62 +327,119 @@ func TestNewAppCanaryDriverWithDomainProbe_InjectsIntoInnerDrivers(t *testing.T)
 }
 ```
 
+If `Ingress` field uses different godo names in v1.175.0, adjust to whatever fields the actual `godo.AppIngressSpecRule` provides (the helper only needs to assert the Ingress block survives sanitization byte-for-byte; structural shape is incidental).
+
 **Step 2: Run tests to verify they fail**
 
 ```
-GOWORK=off go test ./internal/drivers/... -run 'TestNewAppBlueGreenDriverWithDomainProbe|TestNewAppCanaryDriverWithDomainProbe' -count=1
+GOWORK=off go test ./internal/drivers/... -run 'TestNewAppBlueGreenDriverWithDomainProbe|TestNewAppCanaryDriverWithDomainProbe|TestSanitizeClonedSpecForCreate_PreservesIngress' -count=1
 ```
-Expected: FAIL — constructors undefined.
+Expected: FAIL — constructors undefined; `sanitizeClonedSpecForCreate` undefined unless Task 1 has already shipped.
 
-**Step 3: Add constructors + plumbing**
+**Step 3: Add `domainProbe` field + constructors + accessor propagation**
 
-Add a `domainProbe AppPlatformDomainProbe` field to `AppBlueGreenDriver` and `AppCanaryDriver` structs. Add constructors:
+In `internal/drivers/deploy.go`, add field to `AppBlueGreenDriver`:
 
 ```go
-func NewAppBlueGreenDriverWithDomainProbe(c AppPlatformClient, reg DOCRClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppBlueGreenDriver {
-	d := NewAppBlueGreenDriverWithRegistry(c, reg, region, blueID, blueName)
+type AppBlueGreenDriver struct {
+	client      AppPlatformClient
+	regClient   RegistryClient
+	region      string
+	blueID      string
+	blueName    string
+	greenID     string
+	greenURL    string
+	stableCheck bool
+	blueDeploy  *AppDeployDriver
+	greenDeploy *AppDeployDriver
+	domainProbe AppPlatformDomainProbe // optional; nil → default HTTPS probe
+}
+```
+
+And to `AppCanaryDriver`:
+
+```go
+type AppCanaryDriver struct {
+	client       AppPlatformClient
+	regClient    RegistryClient
+	region       string
+	stableID     string
+	stableName   string
+	canaryID     string
+	stableDeploy *AppDeployDriver
+	canaryDeploy *AppDeployDriver
+	domainProbe  AppPlatformDomainProbe
+}
+```
+
+Add constructors:
+
+```go
+// NewAppBlueGreenDriverWithDomainProbe is like NewAppBlueGreenDriverWithRegistry
+// but also injects probe into both inner *AppDeployDriver instances; used in
+// unit tests to substitute the HTTPS probe.
+func NewAppBlueGreenDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppBlueGreenDriver {
+	d := NewAppBlueGreenDriverWithRegistry(c, r, region, blueID, blueName)
 	d.domainProbe = probe
 	return d
 }
 
-func NewAppCanaryDriverWithDomainProbe(c AppPlatformClient, reg DOCRClient, region, stableID, stableName string, probe AppPlatformDomainProbe) *AppCanaryDriver {
-	d := NewAppCanaryDriverWithRegistry(c, reg, region, stableID, stableName)
+func NewAppCanaryDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, stableID, stableName string, probe AppPlatformDomainProbe) *AppCanaryDriver {
+	d := NewAppCanaryDriverWithRegistry(c, r, region, stableID, stableName)
 	d.domainProbe = probe
 	return d
 }
 ```
 
-Modify `blueDriver()` / `greenDriver()` / `stableDriver()` / `canaryDriver()` accessors so that when they lazily build an inner `*AppDeployDriver` they call `NewAppDeployDriverWithDomainProbe` (the existing variant) when `d.domainProbe != nil`, else fall back to `NewAppDeployDriverWithRegistry`. Verify `NewAppDeployDriverWithDomainProbe` exists at `deploy.go:39` (mentioned in design); if signature differs, adjust.
+Modify the four accessors so they propagate `d.domainProbe` into the inner driver after `NewAppDeployDriverWithRegistry` returns:
+
+```go
+func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
+	if d.blueDeploy == nil {
+		d.blueDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.blueID, d.blueName)
+		d.blueDeploy.domainProbe = d.domainProbe
+	}
+	return d.blueDeploy
+}
+```
+
+Same shape for `greenDriver()`, `stableDriver()`, `canaryDriver()`. (Verify the existing struct already has `regClient` — it does per deploy.go:391.)
 
 **Step 4: Run tests to verify they pass**
 
 ```
 GOWORK=off go test ./internal/drivers/... -count=1
 ```
-Expected: PASS, no regressions.
+Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add internal/drivers/deploy.go internal/drivers/deploy_test.go
-git commit -m "feat(app-platform): NewAppBlueGreenDriver/CanaryDriverWithDomainProbe constructors (#159)
+git add internal/drivers/deploy.go internal/drivers/deploy_internal_test.go
+git commit -m "feat(app-platform): NewAppBlueGreenDriver/CanaryDriverWithDomainProbe + white-box test file (#159)
 
-Mirrors NewAppDeployDriverWithDomainProbe. Required so the in-rollout
-custom-domain probe added in a follow-up task is injectable in unit tests
-without rewriting the http client. Existing constructors unchanged."
+Adds domainProbe field to AppBlueGreenDriver and AppCanaryDriver, with
+WithDomainProbe constructors that propagate the probe into both inner
+*AppDeployDriver instances via the existing accessors. Existing constructors
+unchanged. New white-box test file deploy_internal_test.go for tests that
+need to touch unexported state.
+
+Rollback: revert commit; constructors are additive surface."
 ```
 
 ---
 
 ### Task 3: Extract `appPlatformProbeCustomDomains` from post-Active loop
 
-Refactor: pull the per-domain probe loop out of `appPlatformCustomDomainReadinessError` (`app_platform_readiness.go:23`) into a stateless `appPlatformProbeCustomDomains(ctx, app, probe, path) (reachable, total int)` helper. The post-Active path continues to derive its error from the loop's last failure. No behavior change for the existing post-Active gate.
+Refactor: pull the per-domain probe loop into a stateless `appPlatformProbeCustomDomains(ctx, app, probe, pathOverride) (reachable, total int)` helper. Post-Active path continues to derive its error from the loop's last failure. No behavior change for the existing post-Active gate.
 
 **Files:**
 - Modify: `internal/drivers/app_platform_readiness.go`
-- Test: `internal/drivers/app_platform_test.go` (add one helper-direct test; verify existing post-Active tests still pass)
+- Test: `internal/drivers/deploy_internal_test.go` (white-box; same file from Task 2)
 
 **Step 1: Write the failing test**
+
+Append to `internal/drivers/deploy_internal_test.go`:
 
 ```go
 func TestAppPlatformProbeCustomDomains_CountsReachable(t *testing.T) {
@@ -289,7 +448,7 @@ func TestAppPlatformProbeCustomDomains_CountsReachable(t *testing.T) {
 			Domains: []*godo.AppDomainSpec{
 				{Domain: "a.example.com"},
 				{Domain: "b.example.com"},
-				{Domain: "c.example.com", Wildcard: true}, // skipped per existing loop
+				{Domain: "c.example.com", Wildcard: true}, // excluded
 			},
 		},
 	}
@@ -314,21 +473,23 @@ func TestAppPlatformProbeCustomDomains_CountsReachable(t *testing.T) {
 }
 ```
 
+Add `"fmt"` to the imports of `deploy_internal_test.go` if not already present.
+
 **Step 2: Run test to verify it fails**
 
 ```
 GOWORK=off go test ./internal/drivers/... -run TestAppPlatformProbeCustomDomains_CountsReachable -count=1
 ```
-Expected: FAIL — `appPlatformProbeCustomDomains undefined`.
+Expected: FAIL.
 
-**Step 3: Add helper + refactor post-Active loop**
+**Step 3: Add helper + refactor**
 
-In `app_platform_readiness.go`:
+In `internal/drivers/app_platform_readiness.go`:
 
 ```go
 // appPlatformProbeCustomDomains GETs each non-wildcard custom domain on app
-// and returns how many were reachable (2xx/3xx within the probe timeout).
-// total excludes wildcard entries because there is no concrete host to probe.
+// and returns how many were reachable (probe returned nil) and how many were
+// attempted in total. Wildcard entries are excluded (no concrete host).
 func appPlatformProbeCustomDomains(ctx context.Context, app *godo.App, probe AppPlatformDomainProbe, pathOverride string) (reachable, total int) {
 	domains := appPlatformCustomDomains(app)
 	if len(domains) == 0 {
@@ -351,61 +512,67 @@ func appPlatformProbeCustomDomains(ctx context.Context, app *godo.App, probe App
 }
 ```
 
-Refactor `appPlatformCustomDomainReadinessError` so its probe loop uses the same iteration but returns the first error encountered (preserves existing behavior). Verify the existing post-Active tests pass unchanged.
+Refactor `appPlatformCustomDomainReadinessError` so its probe loop returns the first error encountered (preserves existing behavior). Verify existing post-Active tests still pass unchanged.
 
-**Step 4: Run full driver suite to verify no regression**
+**Step 4: Run full driver suite**
 
 ```
 GOWORK=off go test ./internal/drivers/... -count=1
 ```
-Expected: PASS including all existing readiness tests.
+Expected: PASS including the existing readiness tests.
 
 **Step 5: Commit**
 
 ```bash
-git add internal/drivers/app_platform_readiness.go internal/drivers/app_platform_test.go
+git add internal/drivers/app_platform_readiness.go internal/drivers/deploy_internal_test.go
 git commit -m "refactor(app-platform): extract appPlatformProbeCustomDomains (#159)
 
-No behavior change. The probe loop is now reusable by both the post-Active
-readiness gate and the in-rollout availability probe added in a follow-up
-task. Existing tests pin the post-Active semantics."
+Stateless helper reusable by both the post-Active readiness gate and the
+in-rollout availability probe added in a follow-up task. No behavior change;
+existing tests pin the post-Active semantics.
+
+Rollback: revert commit; helper is purely additive."
 ```
 
 ---
 
 ### Task 4: Wire in-rollout probe into `AppDeployDriver.HealthCheck`
 
-Closes critical C2 from adversarial cycle 1. Composes the new probe helper with `deploymentHealthError` only when the phase is `PendingDeploy` or `Deploying` (the routing-affecting window). Uses `%w` so `errors.Is`/`errors.As` continue to work for any consumer that unwraps.
+Closes critical C2. Composes the new probe helper with `deploymentHealthError` only when phase is `PendingDeploy` or `Deploying`. Uses `%w` so `errors.Is`/`errors.As` continue to work.
 
 **Files:**
 - Modify: `internal/drivers/deploy.go` (HealthCheck composition + new `isInProgressPhase` helper)
-- Test: `internal/drivers/deploy_test.go`
+- Test: `internal/drivers/deploy_internal_test.go` (white-box; same file)
 
-**Step 1: Write the failing test**
+**Step 1: Write failing tests**
+
+Append to `internal/drivers/deploy_internal_test.go`:
 
 ```go
 func TestAppDeployDriver_HealthCheck_DuringRolloutProbesDomain(t *testing.T) {
-	app := &godo.App{
-		ID:   "blue-id",
-		Spec: &godo.AppSpec{
-			Domains: []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
-			Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v2"}}},
+	// Use a tiny stub client inline; the deployMockClient isn't accessible
+	// from package drivers (it lives in package drivers_test). For the
+	// targeted HealthCheck tests we need only Get + ListDeployments.
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Domains: []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
+				Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v2"}}},
+			},
+			InProgressDeployment: &godo.Deployment{
+				ID:    "dep-2",
+				Phase: godo.DeploymentPhase_Deploying,
+			},
+			Domains: []*godo.AppDomain{{Spec: &godo.AppDomainSpec{Domain: "blue.example.com"}, Phase: godo.AppJobSpecKindPHASE_Active}},
 		},
-		InProgressDeployment: &godo.Deployment{
-			ID:    "dep-2",
-			Phase: godo.DeploymentPhase_Deploying,
-		},
-		LiveDomains: []*godo.AppDomain{{Spec: &godo.AppDomainSpec{Domain: "blue.example.com"}, Phase: godo.AppJobSpecKindPHASE_Active}},
 	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", app)
-
 	var probeCalls int
-	probe := func(_ context.Context, domain, _ string) error {
+	probe := func(_ context.Context, _, _ string) error {
 		probeCalls++
 		return fmt.Errorf("simulated downtime")
 	}
-	d := NewAppDeployDriverWithDomainProbe(client, nil, "nyc1", "blue-id", "blue", probe)
+	d := NewAppDeployDriverWithDomainProbe(stub, "nyc1", "blue-id", "blue", probe)
 	d.waitingForDeployment = true
 	d.targetDeploymentID = "dep-2"
 
@@ -425,20 +592,19 @@ func TestAppDeployDriver_HealthCheck_DuringRolloutProbesDomain(t *testing.T) {
 }
 
 func TestAppDeployDriver_HealthCheck_DuringBuildPhaseSkipsProbe(t *testing.T) {
-	app := &godo.App{
-		ID: "blue-id",
-		Spec: &godo.AppSpec{
-			Domains: []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
-			Services: []*godo.AppServiceSpec{{Name: "web"}},
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Domains: []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
+				Services: []*godo.AppServiceSpec{{Name: "web"}},
+			},
+			InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Building},
 		},
-		InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Building},
 	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", app)
-
 	var probeCalls int
 	probe := func(_ context.Context, _, _ string) error { probeCalls++; return nil }
-	d := NewAppDeployDriverWithDomainProbe(client, nil, "nyc1", "blue-id", "blue", probe)
+	d := NewAppDeployDriverWithDomainProbe(stub, "nyc1", "blue-id", "blue", probe)
 	d.waitingForDeployment = true
 	d.targetDeploymentID = "dep-2"
 
@@ -447,20 +613,60 @@ func TestAppDeployDriver_HealthCheck_DuringBuildPhaseSkipsProbe(t *testing.T) {
 		t.Fatalf("probe fired during BUILDING phase (%d calls); should be skipped", probeCalls)
 	}
 }
+
+// healthCheckProbeStub is the minimum AppPlatformClient surface the
+// HealthCheck probe tests need. It returns the same app for every Get and
+// an empty deployments list. Defined in deploy_internal_test.go to avoid
+// pulling the deployMockClient (which lives in package drivers_test).
+type healthCheckProbeStub struct{ app *godo.App }
+
+func (s *healthCheckProbeStub) Create(_ context.Context, _ *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
+	return s.app, nil, nil
+}
+func (s *healthCheckProbeStub) Update(_ context.Context, _ string, _ *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
+	return s.app, nil, nil
+}
+func (s *healthCheckProbeStub) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	return []*godo.App{s.app}, nil, nil
+}
+func (s *healthCheckProbeStub) CreateDeployment(_ context.Context, _ string, _ ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) ListDeployments(_ context.Context, _ string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) Delete(_ context.Context, _ string) (*godo.Response, error) {
+	return nil, nil
+}
+func (s *healthCheckProbeStub) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
 ```
+
+Add `"strings"` to the imports if not already present.
+
+If the `AppPlatformClient` interface has more methods than the stub above implements, the build will surface them at compile time — extend the stub minimally to satisfy. Read the interface definition in `internal/drivers/app_platform_client.go` (or wherever it lives) before running.
 
 **Step 2: Run tests to verify they fail**
 
 ```
 GOWORK=off go test ./internal/drivers/... -run 'TestAppDeployDriver_HealthCheck_DuringRollout|TestAppDeployDriver_HealthCheck_DuringBuild' -count=1
 ```
-Expected: FAIL — no probe runs during in-progress.
+Expected: FAIL.
 
 **Step 3: Add `isInProgressPhase` + wire the probe**
 
 In `internal/drivers/deploy.go`:
 
 ```go
+// isInProgressPhase is the set of deployment phases where the rolling
+// replace is materially affecting routing, and so probing the custom
+// domain mid-rollout will surface availability windows. Build phases are
+// excluded because the old code is still serving and the probe would
+// always succeed there, producing log noise.
 func isInProgressPhase(p godo.AppDeploymentPhase) bool {
 	switch p {
 	case godo.DeploymentPhase_PendingDeploy, godo.DeploymentPhase_Deploying:
@@ -471,7 +677,7 @@ func isInProgressPhase(p godo.AppDeploymentPhase) bool {
 }
 ```
 
-Modify `AppDeployDriver.HealthCheck` (current `deploy.go:81-93` block):
+Modify `AppDeployDriver.HealthCheck`'s in-progress branch (current `deploy.go:81-93`):
 
 ```go
 if d.waitingForDeployment {
@@ -495,7 +701,7 @@ if d.waitingForDeployment {
 }
 ```
 
-**Step 4: Run tests to verify they pass + full driver suite**
+**Step 4: Run tests + full suite**
 
 ```
 GOWORK=off go test ./internal/drivers/... -count=1
@@ -505,52 +711,51 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add internal/drivers/deploy.go internal/drivers/deploy_test.go
+git add internal/drivers/deploy.go internal/drivers/deploy_internal_test.go
 git commit -m "feat(app-platform): in-rollout custom-domain probe during DEPLOYING (#159)
 
 HealthCheck now invokes the custom-domain probe during PendingDeploy/Deploying
-and appends reachable/total to the in-progress error message via %w-wrap. Old
-error string prefix and parenthesized deployment ID preserved verbatim.
-PendingBuild/Building phases skip the probe to avoid log noise from the
-unchanged-routing window.
+and appends reachable/total to the in-progress error via %w-wrap. Old error
+string prefix and parenthesized deployment ID preserved verbatim. Build
+phases skip the probe to avoid noise from the unchanged-routing window.
 
-Rollback: revert commit; reverts purely additive error-string enrichment +
-probe call; no plugin contract change."
+Rollback: revert commit; purely additive error-string enrichment + probe call;
+no contract change."
 ```
 
 ---
 
 ### Task 5: `deploymentProgressString` + wire into `deploymentHealthError`
 
-Adds stateless `[N/M steps; updated Ns ago]` suffix to the in-progress error. Uses `godo.Deployment.Progress` + `Deployment.UpdatedAt`; nil-safe.
+Adds `[completed/total steps; updated Ns ago]` suffix using actual godo fields.
 
 **Files:**
 - Modify: `internal/drivers/deploy.go` (deploymentHealthError + new deploymentProgressString)
-- Test: `internal/drivers/deploy_test.go`
+- Test: `internal/drivers/deploy_test.go` (`package drivers_test`; uses public surface only)
 
-**Step 1: Write the failing tests**
+**Step 1: Write failing tests in `deploy_test.go`**
 
 ```go
 func TestDeploymentProgressString_NilProgressIsEmpty(t *testing.T) {
-	got := deploymentProgressString(&godo.Deployment{Phase: godo.DeploymentPhase_Deploying})
+	got := drivers.DeploymentProgressStringForTest(&godo.Deployment{Phase: godo.DeploymentPhase_Deploying})
 	if got != "" {
 		t.Fatalf("expected empty string for nil Progress, got %q", got)
 	}
 }
 
 func TestDeploymentProgressString_UpdatedAtAgeFormatting(t *testing.T) {
-	now := time.Now()
 	dep := &godo.Deployment{
 		Phase:     godo.DeploymentPhase_Deploying,
-		UpdatedAt: now.Add(-12 * time.Second),
+		UpdatedAt: time.Now().Add(-12 * time.Second),
 		Progress: &godo.DeploymentProgress{
-			StepsCompleted: 3,
-			StepsTotal:     5,
+			SuccessSteps: 2,
+			ErrorSteps:   1,
+			TotalSteps:   5,
 		},
 	}
-	got := deploymentProgressString(dep)
+	got := drivers.DeploymentProgressStringForTest(dep)
 	if !strings.Contains(got, "3/5 steps") {
-		t.Errorf("missing steps fragment: %q", got)
+		t.Errorf("missing steps fragment (2 success + 1 error = 3/5): %q", got)
 	}
 	if !strings.Contains(got, "updated 12s ago") {
 		t.Errorf("missing updated-age fragment: %q", got)
@@ -562,9 +767,9 @@ func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
 		ID:        "dep-9",
 		Phase:     godo.DeploymentPhase_Deploying,
 		UpdatedAt: time.Now().Add(-7 * time.Second),
-		Progress:  &godo.DeploymentProgress{StepsCompleted: 1, StepsTotal: 4},
+		Progress:  &godo.DeploymentProgress{SuccessSteps: 1, TotalSteps: 4},
 	}
-	err := deploymentHealthError("myapp", dep)
+	err := drivers.DeploymentHealthErrorForTest("myapp", dep)
 	if err == nil {
 		t.Fatal("expected error for DEPLOYING phase")
 	}
@@ -577,6 +782,24 @@ func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
 }
 ```
 
+The `*ForTest` wrappers are needed because `deploymentProgressString` and `deploymentHealthError` are unexported and the test file is `package drivers_test`. Add to a new file `internal/drivers/export_for_test.go`:
+
+```go
+package drivers
+
+import "github.com/digitalocean/godo"
+
+// Test-only exports. Kept here so they live in package drivers but are
+// only referenced from _test files.
+var DeploymentProgressStringForTest = deploymentProgressString
+var DeploymentHealthErrorForTest = deploymentHealthError
+var SanitizeClonedSpecForCreateForTest = sanitizeClonedSpecForCreate
+```
+
+(Plain `var = funcName` would expose the function value; using the same name avoids name collisions with internal tests.)
+
+Add `"time"` to the imports of `deploy_test.go`.
+
 **Step 2: Run tests to verify they fail**
 
 ```
@@ -586,11 +809,17 @@ Expected: FAIL.
 
 **Step 3: Add helper + wire it**
 
+In `internal/drivers/deploy.go`:
+
 ```go
+// deploymentProgressString formats a stateless summary of a deployment's
+// step progress for inclusion in an in-progress error message. Returns
+// the empty string when Progress is nil (common during early Build phases).
 func deploymentProgressString(dep *godo.Deployment) string {
 	if dep == nil || dep.Progress == nil {
 		return ""
 	}
+	completed := dep.Progress.SuccessSteps + dep.Progress.ErrorSteps
 	age := ""
 	if !dep.UpdatedAt.IsZero() {
 		secs := int(time.Since(dep.UpdatedAt).Round(time.Second).Seconds())
@@ -599,25 +828,23 @@ func deploymentProgressString(dep *godo.Deployment) string {
 		}
 		age = fmt.Sprintf("; updated %ds ago", secs)
 	}
-	return fmt.Sprintf(" [%d/%d steps%s]", dep.Progress.StepsCompleted, dep.Progress.StepsTotal, age)
+	return fmt.Sprintf(" [%d/%d steps%s]", completed, dep.Progress.TotalSteps, age)
 }
 ```
 
-Modify `deploymentHealthError`'s in-progress branch (currently `deploy.go:142-146`) to append `deploymentProgressString(dep)` to the error string. **Preserve the existing string exactly up to and including the parenthesized deployment ID** — append only after.
+Modify the in-progress branch of `deploymentHealthError`:
 
-Example before:
-
-```
-app deploy: "myapp" deployment in progress: DEPLOYING (dep-9)
-```
-
-After:
-
-```
-app deploy: "myapp" deployment in progress: DEPLOYING (dep-9) [1/4 steps; updated 7s ago]
+```go
+case godo.DeploymentPhase_PendingBuild,
+	godo.DeploymentPhase_Building,
+	godo.DeploymentPhase_PendingDeploy,
+	godo.DeploymentPhase_Deploying:
+	return fmt.Errorf("app deploy: %q deployment in progress: %s (%s)%s", appName, dep.Phase, dep.ID, deploymentProgressString(dep))
 ```
 
-**Step 4: Run tests + full driver suite**
+Original prefix `app deploy: %q deployment in progress: %s (%s)` is unchanged; `%s` of `deploymentProgressString(dep)` appends either `""` or ` [N/M steps; updated Xs ago]`. Add `"time"` import to deploy.go if not already present.
+
+**Step 4: Run tests + full suite**
 
 ```
 GOWORK=off go test ./internal/drivers/... -count=1
@@ -627,61 +854,59 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add internal/drivers/deploy.go internal/drivers/deploy_test.go
+git add internal/drivers/deploy.go internal/drivers/deploy_test.go internal/drivers/export_for_test.go
 git commit -m "feat(app-platform): append deployment progress signal to in-progress error (#159)
 
-[N/M steps; updated Xs ago] now appended to the deploymentHealthError
+[completed/total steps; updated Xs ago] now appended to the deployment
 in-progress message. Stateless: derives 'updated Ns ago' from godo
-Deployment.UpdatedAt, no counter state on the driver. Original error prefix
-and parenthesized deployment ID preserved verbatim so downstream substring
-matchers continue to work."
+Deployment.UpdatedAt, completed from SuccessSteps + ErrorSteps. Original
+error prefix and parenthesized deployment ID preserved verbatim so
+downstream substring matchers continue to work.
+
+Rollback: revert commit; format additive."
 ```
 
 ---
 
 ### Task 6: Pin prevalidated-rolling semantics with explicit tests
 
-Closes the user's "Add tests that distinguish in-place image updates from true traffic handoff semantics" ask. These tests deliberately encode what the BG driver does today so a future maintainer cannot silently regress toward "true promotion" without updating the tests.
+Tests that explicitly encode current BG behavior so a future maintainer cannot silently regress toward "true promotion." Split: black-box tests go in `deploy_test.go`; tests needing unexported state go in `deploy_internal_test.go`.
 
 **Files:**
-- Test: `internal/drivers/deploy_test.go`
+- Test: `internal/drivers/deploy_test.go` (black-box; uses public API + mock fields from Task 1)
+- Test: `internal/drivers/deploy_internal_test.go` (white-box; needs `d.greenID` and post-SwitchTraffic state)
 
 **Step 1: Add the four pinning tests**
 
+Append to `internal/drivers/deploy_test.go` (`package drivers_test`):
+
 ```go
 func TestAppBlueGreenDriver_SwitchTraffic_UpdatesBlueSpec(t *testing.T) {
-	blueSpec := &godo.AppSpec{
-		Name: "blue",
-		Services: []*godo.AppServiceSpec{{
-			Name:  "web",
-			Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v1"},
-		}},
-	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", &godo.App{ID: "blue-id", Spec: blueSpec})
-	d := NewAppBlueGreenDriver(client, "nyc1", "blue-id", "blue")
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
 	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
 		t.Fatalf("CreateGreen: %v", err)
 	}
 	if err := d.SwitchTraffic(context.Background()); err != nil {
 		t.Fatalf("SwitchTraffic: %v", err)
 	}
-	// Assert blue's spec was updated to v2 (in-place), not that traffic moved to green.
-	if got := client.lastUpdateRequest.Spec.Services[0].Image.Tag; got != "v2" {
+	if m.lastUpdateRequest == nil {
+		t.Fatal("Update was not invoked on blue (SwitchTraffic should in-place-update blue's spec)")
+	}
+	got := m.lastUpdateRequest.Spec.Services[0].Image.Tag
+	if got != "v2" {
 		t.Errorf("blue spec tag after SwitchTraffic = %q, want %q (in-place update, not promotion)", got, "v2")
 	}
 }
 
 func TestAppBlueGreenDriver_GreenURL_IsDefaultIngress_NotCustomDomain(t *testing.T) {
-	blueSpec := &godo.AppSpec{
-		Name: "blue",
-		Domains: []*godo.AppDomainSpec{{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary}},
-		Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v1"}}},
-	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", &godo.App{ID: "blue-id", Spec: blueSpec})
-	client.createLiveURL = "https://blue-green-abc123.ondigitalocean.app"
-	d := NewAppBlueGreenDriver(client, "nyc1", "blue-id", "blue")
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "r:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary}}
+	m.createLiveURL = "https://blue-green-abc123.ondigitalocean.app"
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
 	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
 		t.Fatalf("CreateGreen: %v", err)
 	}
@@ -698,68 +923,77 @@ func TestAppBlueGreenDriver_GreenURL_IsDefaultIngress_NotCustomDomain(t *testing
 }
 
 func TestAppBlueGreenDriver_DestroyBlue_DeletesGreenNotBlue(t *testing.T) {
-	blueSpec := &godo.AppSpec{Name: "blue", Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v1"}}}}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", &godo.App{ID: "blue-id", Spec: blueSpec})
-	d := NewAppBlueGreenDriver(client, "nyc1", "blue-id", "blue")
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
 	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
 		t.Fatalf("CreateGreen: %v", err)
 	}
-	greenID := d.greenID
 	if err := d.DestroyBlue(context.Background()); err != nil {
 		t.Fatalf("DestroyBlue: %v", err)
 	}
-	if !slices.Contains(client.deletedAppIDs, greenID) {
-		t.Errorf("expected green %q to be deleted; deletedAppIDs=%v", greenID, client.deletedAppIDs)
-	}
-	if slices.Contains(client.deletedAppIDs, "blue-id") {
+	// blue-id must still be present; the green clone (the one with an "app-N"
+	// ID generated by Create) must be deleted.
+	if _, blueLives := m.apps["blue-id"]; !blueLives {
 		t.Errorf("blue was deleted; DestroyBlue is misleadingly named — should delete green only")
 	}
+	if len(m.deletedAppIDs) == 0 {
+		t.Errorf("expected green clone to be deleted; deletedAppIDs=%v", m.deletedAppIDs)
+	}
+	for _, id := range m.deletedAppIDs {
+		if id == "blue-id" {
+			t.Errorf("DestroyBlue deleted blue (%q); must delete green clone only", id)
+		}
+	}
 }
+```
 
+Append to `internal/drivers/deploy_internal_test.go` (`package drivers`; needs unexported state):
+
+```go
 func TestAppBlueGreenDriver_HealthCheck_PostSwitchProbesBlueDeployment(t *testing.T) {
-	blueSpec := &godo.AppSpec{
-		Name: "blue",
-		Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v1"}}},
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v2"}}},
+			},
+			InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Deploying},
+		},
 	}
-	client := newFakeAppPlatformClient(t)
-	client.seedApp("blue-id", &godo.App{
-		ID: "blue-id", Spec: blueSpec,
-		InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Deploying},
-	})
-	d := NewAppBlueGreenDriver(client, "nyc1", "blue-id", "blue")
-	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
-		t.Fatalf("CreateGreen: %v", err)
-	}
-	if err := d.SwitchTraffic(context.Background()); err != nil {
-		t.Fatalf("SwitchTraffic: %v", err)
-	}
+	d := NewAppBlueGreenDriverWithDomainProbe(stub, nil, "nyc1", "blue-id", "blue", nil)
+	// Simulate the state after CreateGreen + SwitchTraffic without exercising
+	// the full path (already tested in deploy_test.go SwitchTraffic test).
+	d.greenID = "green-id"
+	d.stableCheck = true
+	d.blueDeploy = nil // force re-create through accessor on next HealthCheck
+	d.blueDriver().waitingForDeployment = true
+	d.blueDriver().targetDeploymentID = "dep-2"
+
 	err := d.HealthCheck(context.Background(), "")
 	if err == nil {
 		t.Fatal("expected in-progress error for blue's new deployment")
 	}
-	if !strings.Contains(err.Error(), "blue") {
-		t.Errorf("error not from blue driver: %v", err)
+	if !strings.Contains(err.Error(), "deployment in progress: DEPLOYING") {
+		t.Errorf("error did not surface blue's in-progress deployment: %v", err)
 	}
 }
 ```
 
-If the existing fake doesn't capture `lastUpdateRequest`, `deletedAppIDs`, or `createLiveURL`, extend it minimally to do so. Read the existing fake first.
-
-**Step 2: Run tests to verify they pass (or fail naturally where the fake needs extension)**
+**Step 2: Run tests to verify they pass**
 
 ```
 GOWORK=off go test ./internal/drivers/... -run TestAppBlueGreenDriver_ -count=1
 ```
-Expected: PASS (tests assert current behavior; no production code changes here other than fake extensions).
+Expected: PASS (these tests assert current production behavior + the new sanitization fix from Task 1).
 
 **Step 3: Commit**
 
 ```bash
-git add internal/drivers/deploy_test.go
+git add internal/drivers/deploy_test.go internal/drivers/deploy_internal_test.go
 git commit -m "test(app-platform): pin prevalidated-rolling B/G semantics (#159)
 
-Adds 4 tests that explicitly encode what AppBlueGreenDriver does today:
+4 tests explicitly encode what AppBlueGreenDriver does today:
 SwitchTraffic updates blue's spec in-place (not a promotion), GreenEndpoint
 returns the default DO ingress (not a custom domain), DestroyBlue deletes
 the green clone (misleading method name), HealthCheck after SwitchTraffic
@@ -772,11 +1006,9 @@ interpretation will fail these tests."
 
 ### Task 7: Documentation — `docs/DEPLOYMENT_STRATEGIES.md` + README link
 
-Closes the user's "Document the supported guarantees and any DO platform limitations" ask. Single-page operator-facing doc; honest about what each strategy does.
-
 **Files:**
 - Create: `docs/DEPLOYMENT_STRATEGIES.md`
-- Modify: `README.md` (add one link in a "Deployment strategies" subsection)
+- Modify: `README.md` (one link in an appropriate section; locate by inspection)
 
 **Step 1: Write `docs/DEPLOYMENT_STRATEGIES.md`**
 
@@ -801,7 +1033,7 @@ until:
 
 1. The target deployment reaches `godo.DeploymentPhase_Active`.
 2. Every non-default custom domain on the App spec has `Phase == PHASE_Active`
-   in `LiveDomains`.
+   in `app.Domains` (the live status array).
 3. Every non-wildcard custom domain returns 2xx/3xx on
    `GET https://<domain><readiness path>` within 5s.
 
@@ -870,19 +1102,17 @@ canary traffic splitting.
 - The deployment-in-progress error message includes
   `[N/M steps; updated Xs ago]` (when `Deployment.Progress` is populated by
   DO) so `wfctl infra apply --wait` shows whether the rollout is moving.
-
-Verified against `workflow-plugin-digitalocean` v2.0.16.
 ```
 
 **Step 2: Add README link**
 
-In `README.md`, add to the existing TOC / sections (locate by reading the file first):
+In `README.md`, locate an appropriate section (e.g., a "Documentation" or "Reference" subsection; if none exists, append after the existing top-level intro). Add:
 
 ```markdown
 - [Deployment strategies](docs/DEPLOYMENT_STRATEGIES.md) — what `AppDeployDriver`, `AppBlueGreenDriver`, and `AppCanaryDriver` actually do on DO App Platform, including the in-rollout availability probe.
 ```
 
-**Step 3: Verify with `go test ./...` (no test impact) + visual review**
+**Step 3: Verify**
 
 ```
 GOWORK=off go test ./... -count=1
@@ -905,12 +1135,12 @@ door follow-up for true B/G."
 
 ---
 
-### Task 8: File follow-up issues (front-door + interface rename)
+### Task 8: File follow-up issues + capture numbers in PR body (do NOT mutate the design doc)
 
-The two deferred items must have GitHub issues so they are not lost. Follow-up filing is in scope per the design § "Follow-ups filed."
+Per plan adversarial cycle 1 finding I5, the design doc is treated as immutable after cycle-3 PASS. Follow-up issue numbers go into the PR body (and the post-merge retro), not back into the design file.
 
 **Files:**
-- (No code changes; uses `gh issue create`.)
+- (No file changes; uses `gh issue create`.)
 
 **Step 1: File front-door follow-up**
 
@@ -918,7 +1148,7 @@ The two deferred items must have GitHub issues so they are not lost. Follow-up f
 gh issue create --title "True B/G via DO Load Balancer + Droplets or external front-door (deferred from #159)" --body "$(cat <<'EOF'
 ## Context
 
-Issue #159 confirmed that \`AppBlueGreenDriver\` on DO App Platform is
+Issue #159 confirmed that `AppBlueGreenDriver` on DO App Platform is
 prevalidated rolling, not true traffic-switching. True B/G with
 zero-downtime custom-domain handoff requires either:
 
@@ -928,16 +1158,16 @@ zero-downtime custom-domain handoff requires either:
    the custom domain to one of multiple backing apps and atomically swap.
 
 Both approaches involve real complexity: provisioning, TLS handoff,
-session-affinity decisions, drain behavior, observability. None of them
-were implemented as part of #159 (scope B: audit + tests + rollout-probe).
+session-affinity decisions, drain behavior, observability. None were
+implemented as part of #159 (scope B: audit + tests + rollout-probe).
 
 ## Acceptance criteria for a follow-up design
 
 - [ ] Choose between DO LB + Droplets vs external proxy (or support both)
-- [ ] Design \`AppPrevalidatedRollingDriver\` (current behavior) vs
-      \`AppTrueBlueGreenDriver\` (new) split
+- [ ] Design `AppPrevalidatedRollingDriver` (current behavior) vs
+      `AppTrueBlueGreenDriver` (new) split
 - [ ] Live validation against gocodealone-multisite or similar real app
-- [ ] Documented strategy selection guidance (\`when to use which\`)
+- [ ] Documented strategy selection guidance (`when to use which`)
 
 ## References
 
@@ -953,13 +1183,13 @@ EOF
 gh issue create --title "Rename AppBlueGreenDriver → AppPrevalidatedRollingDriver (workflow-engine interface coordination)" --body "$(cat <<'EOF'
 ## Context
 
-\`AppBlueGreenDriver\` implements \`module.BlueGreenDriver\` from the
+`AppBlueGreenDriver` implements `module.BlueGreenDriver` from the
 workflow-engine. The name is misleading — it does prevalidated rolling, not
 true traffic-switching (see #159 + docs/DEPLOYMENT_STRATEGIES.md).
 
 Renaming requires a coordinated workflow-engine cycle:
 
-1. Engine introduces \`module.PrevalidatedRollingDriver\` interface (alias
+1. Engine introduces `module.PrevalidatedRollingDriver` interface (alias
    or new contract).
 2. DO plugin (and any other plugin implementing the old interface) migrates.
 3. Old name deprecated for at least one minor release.
@@ -977,18 +1207,8 @@ EOF
 ```
 gh issue list --state open --search 'true B/G OR Rename AppBlueGreenDriver' --limit 5
 ```
-Expected: both issues present.
+Expected: both issues present. Record the issue numbers; they will be cited in the PR body when PR is opened.
 
-**Step 4: Commit (no code changes; commit a one-line update to the design doc cross-linking the follow-ups)**
+**Step 4: No commit**
 
-Edit `docs/plans/2026-05-23-true-blue-green-validation-design.md` § "Follow-ups filed":
-
-```
-- True B/G via DO LB+Droplets or external front-door — separate design (filed as #NNN).
-- Rename `AppBlueGreenDriver` → `AppPrevalidatedRollingDriver` — requires workflow-engine interface rename; coordinated cycle (filed as #NNN).
-```
-
-```bash
-git add docs/plans/2026-05-23-true-blue-green-validation-design.md
-git commit -m "docs(plan): link filed follow-up issues (#159)"
-```
+Task 8 produces no code or doc changes — the issue numbers are captured in the eventual PR body, not in any committed file. The design doc remains immutable.
