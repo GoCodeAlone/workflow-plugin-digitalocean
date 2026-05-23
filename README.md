@@ -52,6 +52,10 @@ resources:
 
 `data` is optional. When omitted, every record matching `type` and `name` is deleted. When set for hostname-like records such as `CNAME`, `MX`, `NS`, and `SRV`, matching ignores case and a trailing dot.
 
+## Deployment strategies
+
+- [Deployment strategies](docs/DEPLOYMENT_STRATEGIES.md) — what `AppDeployDriver`, `AppBlueGreenDriver`, and `AppCanaryDriver` actually do on DO App Platform, including the in-rollout availability probe and the InstanceCount<2 single-instance non-guarantee.
+
 ## Requirements
 
 - workflow engine ≥ `0.57.1`
