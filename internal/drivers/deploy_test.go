@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/digitalocean/godo"
@@ -14,10 +15,14 @@ import (
 
 // deployMockClient supports stateful create/get/update/delete for deploy tests.
 type deployMockClient struct {
-	apps        map[string]*godo.App
-	deployments map[string][]*godo.Deployment
-	err         error
-	nextID      int
+	apps              map[string]*godo.App
+	deployments       map[string][]*godo.Deployment
+	err               error
+	nextID            int
+	lastCreateRequest *godo.AppCreateRequest
+	lastUpdateRequest *godo.AppUpdateRequest
+	deletedAppIDs     []string
+	createLiveURL     string // override for LiveURL returned by Create; empty → derived from name
 }
 
 func newDeployMock() *deployMockClient {
@@ -33,11 +38,16 @@ func (m *deployMockClient) Create(_ context.Context, req *godo.AppCreateRequest)
 	if m.err != nil {
 		return nil, nil, m.err
 	}
+	m.lastCreateRequest = req
 	id := fmt.Sprintf("app-%d", m.nextID)
 	m.nextID++
+	live := m.createLiveURL
+	if live == "" {
+		live = "https://" + req.Spec.Name + ".example.com"
+	}
 	app := &godo.App{
 		ID:      id,
-		LiveURL: "https://" + req.Spec.Name + ".example.com",
+		LiveURL: live,
 		Spec:    req.Spec,
 		ActiveDeployment: &godo.Deployment{
 			Phase: godo.DeploymentPhase_Active,
@@ -62,6 +72,7 @@ func (m *deployMockClient) Update(_ context.Context, appID string, req *godo.App
 	if m.err != nil {
 		return nil, nil, m.err
 	}
+	m.lastUpdateRequest = req
 	app, ok := m.apps[appID]
 	if !ok {
 		return nil, nil, fmt.Errorf("app %q not found", appID)
@@ -98,6 +109,7 @@ func (m *deployMockClient) Delete(_ context.Context, appID string) (*godo.Respon
 	if m.err != nil {
 		return nil, m.err
 	}
+	m.deletedAppIDs = append(m.deletedAppIDs, appID)
 	delete(m.apps, appID)
 	return nil, nil
 }
@@ -659,5 +671,158 @@ func TestAppCanaryDriver_PromoteCanary_NoCanary(t *testing.T) {
 	d := drivers.NewAppCanaryDriver(m, "nyc3", "app-1", "myapp")
 	if err := d.PromoteCanary(context.Background()); err == nil {
 		t.Fatal("expected error when no canary exists")
+	}
+}
+
+// ─── Issue #159: prevalidated-rolling B/G + Canary Domains-strip safety ───────
+
+func TestAppBlueGreenDriver_CreateGreen_StripsCustomDomainsFromGreenSpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("green clone inherited blue's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+
+func TestAppCanaryDriver_CreateCanary_StripsCustomDomainsFromCanarySpec(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "stable-id", "stable", "registry.digitalocean.com/myrepo/app:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{
+		{Domain: "stable.example.com", Type: godo.AppDomainSpecType_Primary},
+	}
+
+	d := drivers.NewAppCanaryDriver(m, "nyc1", "stable-id", "stable")
+	if err := d.CreateCanary(context.Background(), "registry.digitalocean.com/myrepo/app:v2"); err != nil {
+		t.Fatalf("CreateCanary: %v", err)
+	}
+	if m.lastCreateRequest == nil {
+		t.Fatal("Create was not invoked")
+	}
+	if len(m.lastCreateRequest.Spec.Domains) != 0 {
+		t.Fatalf("canary clone inherited stable's Domains: %#v", m.lastCreateRequest.Spec.Domains)
+	}
+}
+
+// ─── Issue #159: deploymentProgressString + deploymentHealthError enrichment ─
+
+func TestDeploymentProgressString_NilProgressIsEmpty(t *testing.T) {
+	got := drivers.DeploymentProgressStringForTest(&godo.Deployment{Phase: godo.DeploymentPhase_Deploying})
+	if got != "" {
+		t.Fatalf("expected empty string for nil Progress, got %q", got)
+	}
+}
+
+func TestDeploymentProgressString_UpdatedAtAgeFormatting(t *testing.T) {
+	dep := &godo.Deployment{
+		Phase:     godo.DeploymentPhase_Deploying,
+		UpdatedAt: time.Now().Add(-12 * time.Second),
+		Progress: &godo.DeploymentProgress{
+			SuccessSteps: 2,
+			ErrorSteps:   1,
+			TotalSteps:   5,
+		},
+	}
+	got := drivers.DeploymentProgressStringForTest(dep)
+	if !strings.Contains(got, "3/5 steps") {
+		t.Errorf("missing steps fragment (2 success + 1 error = 3/5): %q", got)
+	}
+	if !strings.Contains(got, "updated 12s ago") {
+		t.Errorf("missing updated-age fragment: %q", got)
+	}
+}
+
+func TestDeploymentHealthError_AppendsProgressString(t *testing.T) {
+	dep := &godo.Deployment{
+		ID:        "dep-9",
+		Phase:     godo.DeploymentPhase_Deploying,
+		UpdatedAt: time.Now().Add(-7 * time.Second),
+		Progress:  &godo.DeploymentProgress{SuccessSteps: 1, TotalSteps: 4},
+	}
+	err := drivers.DeploymentHealthErrorForTest("myapp", dep)
+	if err == nil {
+		t.Fatal("expected error for DEPLOYING phase")
+	}
+	if !strings.Contains(err.Error(), "deployment in progress: DEPLOYING (dep-9)") {
+		t.Errorf("original prefix not preserved: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1/4 steps") {
+		t.Errorf("progress steps not appended: %v", err)
+	}
+}
+
+// ─── Issue #159: pin prevalidated-rolling B/G semantics ──────────────────────
+
+func TestAppBlueGreenDriver_SwitchTraffic_UpdatesBlueSpec(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if err := d.SwitchTraffic(context.Background()); err != nil {
+		t.Fatalf("SwitchTraffic: %v", err)
+	}
+	if m.lastUpdateRequest == nil {
+		t.Fatal("Update was not invoked on blue (SwitchTraffic should in-place-update blue's spec)")
+	}
+	got := m.lastUpdateRequest.Spec.Services[0].Image.Tag
+	if got != "v2" {
+		t.Errorf("blue spec tag after SwitchTraffic = %q, want %q (in-place update, not promotion)", got, "v2")
+	}
+}
+
+func TestAppBlueGreenDriver_GreenURL_IsDefaultIngress_NotCustomDomain(t *testing.T) {
+	m := newDeployMock()
+	app := seedApp(m, "blue-id", "blue", "r:v1")
+	app.Spec.Domains = []*godo.AppDomainSpec{{Domain: "blue.example.com", Type: godo.AppDomainSpecType_Primary}}
+	m.createLiveURL = "https://blue-green-abc123.ondigitalocean.app"
+
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	got, err := d.GreenEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("GreenEndpoint: %v", err)
+	}
+	if !strings.Contains(got, "ondigitalocean.app") {
+		t.Errorf("GreenEndpoint = %q, expected default DO ingress (NOT a custom domain)", got)
+	}
+	if strings.Contains(got, "blue.example.com") {
+		t.Errorf("GreenEndpoint = %q, custom domain leaked to green clone", got)
+	}
+}
+
+func TestAppBlueGreenDriver_DestroyBlue_DeletesGreenNotBlue(t *testing.T) {
+	m := newDeployMock()
+	seedApp(m, "blue-id", "blue", "r:v1")
+	d := drivers.NewAppBlueGreenDriver(m, "nyc1", "blue-id", "blue")
+	if err := d.CreateGreen(context.Background(), "r:v2"); err != nil {
+		t.Fatalf("CreateGreen: %v", err)
+	}
+	if err := d.DestroyBlue(context.Background()); err != nil {
+		t.Fatalf("DestroyBlue: %v", err)
+	}
+	if _, blueLives := m.apps["blue-id"]; !blueLives {
+		t.Errorf("blue was deleted; DestroyBlue is misleadingly named — should delete green only")
+	}
+	if len(m.deletedAppIDs) == 0 {
+		t.Errorf("expected green clone to be deleted; deletedAppIDs=%v", m.deletedAppIDs)
+	}
+	for _, id := range m.deletedAppIDs {
+		if id == "blue-id" {
+			t.Errorf("DestroyBlue deleted blue (%q); must delete green clone only", id)
+		}
 	}
 }
