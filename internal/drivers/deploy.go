@@ -276,6 +276,7 @@ type AppBlueGreenDriver struct {
 	stableCheck bool
 	blueDeploy  *AppDeployDriver
 	greenDeploy *AppDeployDriver
+	domainProbe AppPlatformDomainProbe // optional; nil → default HTTPS probe
 }
 
 // NewAppBlueGreenDriver creates a BlueGreenDriver for DO App Platform.
@@ -287,6 +288,16 @@ func NewAppBlueGreenDriver(c AppPlatformClient, region, blueID, blueName string)
 // presence pre-flight. The registry client may be nil to skip the check.
 func NewAppBlueGreenDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, blueID, blueName string) *AppBlueGreenDriver {
 	return &AppBlueGreenDriver{client: c, regClient: r, region: region, blueID: blueID, blueName: blueName}
+}
+
+// NewAppBlueGreenDriverWithDomainProbe is like NewAppBlueGreenDriverWithRegistry
+// but also injects probe into both inner *AppDeployDriver instances created by
+// blueDriver()/greenDriver(). Intended for unit tests that need to substitute
+// the HTTPS probe.
+func NewAppBlueGreenDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppBlueGreenDriver {
+	d := NewAppBlueGreenDriverWithRegistry(c, r, region, blueID, blueName)
+	d.domainProbe = probe
+	return d
 }
 
 // DeployDriver methods delegate to the blue (stable) app.
@@ -390,6 +401,7 @@ func (d *AppBlueGreenDriver) GreenEndpoint(_ context.Context) (string, error) {
 func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
 	if d.blueDeploy == nil {
 		d.blueDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.blueID, d.blueName)
+		d.blueDeploy.domainProbe = d.domainProbe
 	}
 	return d.blueDeploy
 }
@@ -397,6 +409,7 @@ func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
 func (d *AppBlueGreenDriver) greenDriver() *AppDeployDriver {
 	if d.greenDeploy == nil {
 		d.greenDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.greenID, d.blueName+"-green")
+		d.greenDeploy.domainProbe = d.domainProbe
 	}
 	return d.greenDeploy
 }
@@ -420,6 +433,7 @@ type AppCanaryDriver struct {
 	canaryID     string // set during CreateCanary
 	stableDeploy *AppDeployDriver
 	canaryDeploy *AppDeployDriver
+	domainProbe  AppPlatformDomainProbe // optional; nil → default HTTPS probe
 }
 
 // NewAppCanaryDriver creates a CanaryDriver for DO App Platform.
@@ -431,6 +445,15 @@ func NewAppCanaryDriver(c AppPlatformClient, region, stableID, stableName string
 // presence pre-flight. The registry client may be nil to skip the check.
 func NewAppCanaryDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, stableID, stableName string) *AppCanaryDriver {
 	return &AppCanaryDriver{client: c, regClient: r, region: region, stableID: stableID, stableName: stableName}
+}
+
+// NewAppCanaryDriverWithDomainProbe is like NewAppCanaryDriverWithRegistry but
+// also injects probe into the inner *AppDeployDriver instances created by
+// stableDriver()/canaryDriver(). Intended for unit tests.
+func NewAppCanaryDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, stableID, stableName string, probe AppPlatformDomainProbe) *AppCanaryDriver {
+	d := NewAppCanaryDriverWithRegistry(c, r, region, stableID, stableName)
+	d.domainProbe = probe
+	return d
 }
 
 // DeployDriver methods delegate to the stable app.
@@ -535,6 +558,7 @@ func (d *AppCanaryDriver) DestroyCanary(ctx context.Context) error {
 func (d *AppCanaryDriver) stableDriver() *AppDeployDriver {
 	if d.stableDeploy == nil {
 		d.stableDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.stableID, d.stableName)
+		d.stableDeploy.domainProbe = d.domainProbe
 	}
 	return d.stableDeploy
 }
@@ -542,6 +566,7 @@ func (d *AppCanaryDriver) stableDriver() *AppDeployDriver {
 func (d *AppCanaryDriver) canaryDriver() *AppDeployDriver {
 	if d.canaryDeploy == nil {
 		d.canaryDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.canaryID, d.stableName+"-canary")
+		d.canaryDeploy.domainProbe = d.domainProbe
 	}
 	return d.canaryDeploy
 }
