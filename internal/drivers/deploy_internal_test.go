@@ -109,6 +109,100 @@ func TestAppPlatformProbeCustomDomains_EmptyApp(t *testing.T) {
 	}
 }
 
+// ─── Issue #159: in-rollout custom-domain probe ──────────────────────────────
+
+// healthCheckProbeStub is the minimum AppPlatformClient surface the in-rollout
+// HealthCheck probe tests need. The full deployMockClient lives in
+// package drivers_test and cannot be reached from this internal test file.
+type healthCheckProbeStub struct{ app *godo.App }
+
+func (s *healthCheckProbeStub) Create(_ context.Context, _ *godo.AppCreateRequest) (*godo.App, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) Get(_ context.Context, _ string) (*godo.App, *godo.Response, error) {
+	return s.app, nil, nil
+}
+func (s *healthCheckProbeStub) List(_ context.Context, _ *godo.ListOptions) ([]*godo.App, *godo.Response, error) {
+	return []*godo.App{s.app}, nil, nil
+}
+func (s *healthCheckProbeStub) Update(_ context.Context, _ string, _ *godo.AppUpdateRequest) (*godo.App, *godo.Response, error) {
+	return s.app, nil, nil
+}
+func (s *healthCheckProbeStub) CreateDeployment(_ context.Context, _ string, _ ...*godo.DeploymentCreateRequest) (*godo.Deployment, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) ListDeployments(_ context.Context, _ string, _ *godo.ListOptions) ([]*godo.Deployment, *godo.Response, error) {
+	return nil, nil, nil
+}
+func (s *healthCheckProbeStub) Delete(_ context.Context, _ string) (*godo.Response, error) {
+	return nil, nil
+}
+func (s *healthCheckProbeStub) GetLogs(_ context.Context, _, _, _ string, _ godo.AppLogType, _ bool, _ int) (*godo.AppLogs, *godo.Response, error) {
+	return nil, nil, nil
+}
+
+func TestAppDeployDriver_HealthCheck_DuringRolloutProbesDomain(t *testing.T) {
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Domains:  []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
+				Services: []*godo.AppServiceSpec{{Name: "web", Image: &godo.ImageSourceSpec{Repository: "r", Tag: "v2"}}},
+			},
+			InProgressDeployment: &godo.Deployment{
+				ID:    "dep-2",
+				Phase: godo.DeploymentPhase_Deploying,
+			},
+			Domains: []*godo.AppDomain{{Spec: &godo.AppDomainSpec{Domain: "blue.example.com"}, Phase: godo.AppJobSpecKindPHASE_Active}},
+		},
+	}
+	var probeCalls int
+	probe := func(_ context.Context, _, _ string) error {
+		probeCalls++
+		return fmt.Errorf("simulated downtime")
+	}
+	d := NewAppDeployDriverWithDomainProbe(stub, "nyc1", "blue-id", "blue", probe)
+	d.waitingForDeployment = true
+	d.targetDeploymentID = "dep-2"
+
+	err := d.HealthCheck(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected in-progress error during DEPLOYING phase")
+	}
+	if probeCalls == 0 {
+		t.Fatal("expected probe to fire during DEPLOYING phase")
+	}
+	if !strings.Contains(err.Error(), "domain probe: 0/1") {
+		t.Errorf("missing reachable/total fragment in error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "deployment in progress: DEPLOYING") {
+		t.Errorf("missing original prefix in error: %v", err)
+	}
+}
+
+func TestAppDeployDriver_HealthCheck_DuringBuildPhaseSkipsProbe(t *testing.T) {
+	stub := &healthCheckProbeStub{
+		app: &godo.App{
+			ID: "blue-id",
+			Spec: &godo.AppSpec{
+				Domains:  []*godo.AppDomainSpec{{Domain: "blue.example.com"}},
+				Services: []*godo.AppServiceSpec{{Name: "web"}},
+			},
+			InProgressDeployment: &godo.Deployment{ID: "dep-2", Phase: godo.DeploymentPhase_Building},
+		},
+	}
+	var probeCalls int
+	probe := func(_ context.Context, _, _ string) error { probeCalls++; return nil }
+	d := NewAppDeployDriverWithDomainProbe(stub, "nyc1", "blue-id", "blue", probe)
+	d.waitingForDeployment = true
+	d.targetDeploymentID = "dep-2"
+
+	_ = d.HealthCheck(context.Background(), "")
+	if probeCalls != 0 {
+		t.Fatalf("probe fired during BUILDING phase (%d calls); should be skipped", probeCalls)
+	}
+}
+
 // silence unused-import warnings in case future patches add more tests below.
 var (
 	_ = fmt.Sprintf

@@ -87,6 +87,12 @@ func (d *AppDeployDriver) HealthCheck(ctx context.Context, path string) error {
 			return fmt.Errorf("app deploy: %q waiting for deployment after update", d.appName)
 		}
 		if err := deploymentHealthError(d.appName, dep); err != nil {
+			if isInProgressPhase(dep.Phase) {
+				reachable, total := appPlatformProbeCustomDomains(ctx, app, d.domainProbe, path)
+				if total > 0 {
+					return fmt.Errorf("%w; domain probe: %d/%d custom domains reachable", err, reachable, total)
+				}
+			}
 			return err
 		}
 		return appPlatformCustomDomainReadinessError(ctx, d.appName, app, d.domainProbe, path)
@@ -569,6 +575,21 @@ func (d *AppCanaryDriver) canaryDriver() *AppDeployDriver {
 		d.canaryDeploy.domainProbe = d.domainProbe
 	}
 	return d.canaryDeploy
+}
+
+// isInProgressPhase reports whether a deployment phase is one where the rolling
+// replace is materially affecting routing. PendingBuild/Building are excluded
+// because the old code is still serving and an availability probe at those
+// phases would always succeed, producing log noise. Terminal phases
+// (Error/Canceled/Superseded) already return their own failure error from
+// deploymentHealthError, so a probe is skipped there too.
+func isInProgressPhase(p godo.DeploymentPhase) bool {
+	switch p {
+	case godo.DeploymentPhase_PendingDeploy, godo.DeploymentPhase_Deploying:
+		return true
+	default:
+		return false
+	}
 }
 
 // sanitizeClonedSpecForCreate prepares a spec that was deep-copied from another
