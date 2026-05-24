@@ -1215,12 +1215,18 @@ func dnsCanonicalRecordData(recordType, data string) string {
 }
 
 func dnsOutput(dom *godo.Domain, name string, records []godo.DomainRecord) *interfaces.ResourceOutput {
+	nameservers := digitalOceanAuthoritativeNameservers()
 	outputs := map[string]any{
 		"domain":                    dom.Name,
 		"ttl":                       dom.TTL,
 		"zone_file":                 dom.ZoneFile,
 		"record_count":              len(records),
-		"authoritative_nameservers": digitalOceanAuthoritativeNameservers(),
+		"authoritative_nameservers": append([]string(nil), nameservers...),
+		"authority": map[string]any{
+			"role":         "authoritative_dns",
+			"dns_host":     "DigitalOcean",
+			"name_servers": append([]string(nil), nameservers...),
+		},
 	}
 	if records != nil {
 		outputs["records"] = dnsRecordOutputs(records)

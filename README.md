@@ -52,6 +52,20 @@ resources:
 
 `data` is optional. When omitted, every record matching `type` and `name` is deleted. When set for hostname-like records such as `CNAME`, `MX`, `NS`, and `SRV`, matching ignores case and a trailing dot.
 
+DNS reads and imports preserve a provider-neutral `authority` output alongside the legacy `authoritative_nameservers` list:
+
+```json
+{
+  "authority": {
+    "role": "authoritative_dns",
+    "dns_host": "DigitalOcean",
+    "name_servers": ["ns1.digitalocean.com", "ns2.digitalocean.com", "ns3.digitalocean.com"]
+  }
+}
+```
+
+The nested shape matches Workflow DNS replay fixtures while keeping existing flat outputs stable for current consumers.
+
 ## Deployment strategies
 
 - [Deployment strategies](docs/DEPLOYMENT_STRATEGIES.md) — what `AppDeployDriver`, `AppBlueGreenDriver`, and `AppCanaryDriver` actually do on DO App Platform, including the in-rollout availability probe and the InstanceCount<2 single-instance non-guarantee.
