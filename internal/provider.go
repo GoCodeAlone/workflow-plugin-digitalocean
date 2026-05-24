@@ -32,7 +32,7 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 // "-X github.com/GoCodeAlone/workflow-plugin-digitalocean/internal.Version=X.Y.Z".
 // Lived in plugin.go before the strict-contracts cutover; moved here when
 // the legacy doPlugin / NewDOPlugin entrypoint was deleted (Task 9).
-var Version = "dev"
+var Version = "0.0.0"
 
 // DOProvider implements interfaces.IaCProvider for DigitalOcean.
 type DOProvider struct {
