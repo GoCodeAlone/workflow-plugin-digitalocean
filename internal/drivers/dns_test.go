@@ -355,6 +355,23 @@ func TestDNSDriver_Create(t *testing.T) {
 	if len(ns) != 3 || ns[0] != "ns1.digitalocean.com" {
 		t.Fatalf("authoritative_nameservers = %#v", ns)
 	}
+	authority, ok := out.Outputs["authority"].(map[string]any)
+	if !ok {
+		t.Fatalf("authority = %T, want map[string]any", out.Outputs["authority"])
+	}
+	if got := authority["role"]; got != "authoritative_dns" {
+		t.Fatalf("authority.role = %v, want authoritative_dns", got)
+	}
+	if got := authority["dns_host"]; got != "DigitalOcean" {
+		t.Fatalf("authority.dns_host = %v, want DigitalOcean", got)
+	}
+	authorityNS, ok := authority["name_servers"].([]string)
+	if !ok {
+		t.Fatalf("authority.name_servers = %T, want []string", authority["name_servers"])
+	}
+	if len(authorityNS) != 3 || authorityNS[0] != "ns1.digitalocean.com" {
+		t.Fatalf("authority.name_servers = %#v", authorityNS)
+	}
 }
 
 func TestDNSDriver_Create_Error(t *testing.T) {
