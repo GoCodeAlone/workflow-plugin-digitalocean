@@ -107,6 +107,7 @@ func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
 		"cp plugin.contracts.json .release/plugin.contracts.json",
 		"--file .release/plugin.json --strict-contracts",
 		"WFCTL_VERSION=$(GOWORK=off go list -m github.com/GoCodeAlone/workflow",
+		"cp plugin.json cmd/plugin/plugin.json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf(".goreleaser.yaml release validation hook missing %q", want)
@@ -134,6 +135,34 @@ func TestGoReleaserReleaseManifestValidationDirectory(t *testing.T) {
 
 	if strings.Contains(text, "dist/release") {
 		t.Fatal(".goreleaser.yaml must not generate manifests under dist; GoReleaser requires dist to remain empty before build")
+	}
+}
+
+func TestPluginBinaryEmbedsManifest(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	rootManifest, err := os.ReadFile(filepath.Join(repoRoot, "plugin.json"))
+	if err != nil {
+		t.Fatalf("read root plugin.json: %v", err)
+	}
+	cmdManifest, err := os.ReadFile(filepath.Join(repoRoot, "cmd", "plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("read cmd/plugin/plugin.json: %v", err)
+	}
+	if string(cmdManifest) != string(rootManifest) {
+		t.Fatal("cmd/plugin/plugin.json must match root plugin.json so go:embed exposes release truth")
+	}
+	mainData, err := os.ReadFile(filepath.Join(repoRoot, "cmd", "plugin", "main.go"))
+	if err != nil {
+		t.Fatalf("read cmd/plugin/main.go: %v", err)
+	}
+	mainText := string(mainData)
+	for _, want := range []string{
+		"//go:embed plugin.json",
+		"ManifestProvider: sdk.MustEmbedManifest(pluginJSON)",
+	} {
+		if !strings.Contains(mainText, want) {
+			t.Fatalf("cmd/plugin/main.go missing %q", want)
+		}
 	}
 }
 
