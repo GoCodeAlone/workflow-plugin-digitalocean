@@ -12,12 +12,21 @@
 package main
 
 import (
+	_ "embed"
+
 	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
+// pluginJSON is copied from the repository root by the release workflow before
+// GoReleaser builds, and is committed for local builds/tests.
+//
+//go:embed plugin.json
+var pluginJSON []byte
+
 func main() {
 	sdk.ServeIaCPlugin(internal.NewIaCServer(), sdk.IaCServeOptions{
-		BuildVersion: sdk.ResolveBuildVersion(internal.Version),
+		ManifestProvider: sdk.MustEmbedManifest(pluginJSON),
+		BuildVersion:     sdk.ResolveBuildVersion(internal.Version),
 	})
 }
