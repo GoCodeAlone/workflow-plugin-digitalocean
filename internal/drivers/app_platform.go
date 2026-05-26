@@ -488,7 +488,7 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 	var needsReplace bool
 	if region := strFromConfig(desired.Config, "region", ""); region != "" {
 		curRegion, _ := current.Outputs["region"].(string)
-		if curRegion != "" && curRegion != region {
+		if curRegion != "" && normalizeAppPlatformRegionForDiff(curRegion) != normalizeAppPlatformRegionForDiff(region) {
 			changes = append(changes, interfaces.FieldChange{
 				Path: "region", Old: curRegion, New: region, ForceNew: true,
 			})
