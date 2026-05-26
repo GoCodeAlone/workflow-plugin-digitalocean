@@ -755,6 +755,35 @@ func TestAppPlatformDriver_Diff_RegionEmptyCurrentSkipped(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_Diff_RegionZoneStateSameGroupDoesNotReplace(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc3",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsReplace {
+		t.Fatalf("same-region stale state must not force replace; got %+v", result.Changes)
+	}
+	for _, c := range result.Changes {
+		if c.Path == "region" {
+			t.Fatalf("same-region stale state must not emit region change; got %+v", c)
+		}
+	}
+}
+
 // TestAppPlatformDriver_Diff_DetectsExposeChange covers quality-review Finding
 // 1: changing `expose` (a security-relevant toggle) on an existing service
 // must produce a Plan action — Diff cannot silently no-op the way the

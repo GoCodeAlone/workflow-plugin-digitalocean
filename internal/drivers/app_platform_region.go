@@ -31,6 +31,23 @@ var validAppPlatformRegions = map[string]struct{}{
 	"tlv": {}, // Tel Aviv
 }
 
+var appPlatformRegionGroupsByZone = map[string]string{
+	"ams2": "ams",
+	"ams3": "ams",
+	"blr1": "blr",
+	"fra1": "fra",
+	"lon1": "lon",
+	"nyc1": "nyc",
+	"nyc2": "nyc",
+	"nyc3": "nyc",
+	"sfo1": "sfo",
+	"sfo2": "sfo",
+	"sfo3": "sfo",
+	"sgp1": "sgp",
+	"syd1": "syd",
+	"tor1": "tor",
+}
+
 // validateAppPlatformRegion checks `region` against the set of valid App
 // Platform regional slugs. Empty input is permitted (caller falls back to
 // the driver default). Whitespace is trimmed; comparison is case-insensitive.
@@ -61,4 +78,18 @@ func sortedAppPlatformRegions() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func normalizeAppPlatformRegionForDiff(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	if region == "" {
+		return ""
+	}
+	if _, ok := validAppPlatformRegions[region]; ok {
+		return region
+	}
+	if group, ok := appPlatformRegionGroupsByZone[region]; ok {
+		return group
+	}
+	return region
 }
