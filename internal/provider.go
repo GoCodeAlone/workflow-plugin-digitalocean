@@ -686,9 +686,66 @@ func (p *DOProvider) EnumerateAll(ctx context.Context, resourceType string) ([]*
 	switch resourceType {
 	case "infra.spaces_key":
 		return p.enumerateAllSpacesKeys(ctx)
+	case "infra.dns":
+		return p.enumerateAllDNS(ctx)
 	default:
 		return nil, fmt.Errorf("digitalocean: EnumerateAll: resource type %q not supported", resourceType)
 	}
+}
+
+// enumerateAllDNS paginates GET /v2/domains via godo's Domains.List using
+// ListOptions{Page,PerPage:200}; loop terminates when godo signals the last
+// page (Links == nil || Links.IsLastPage()). Each *ResourceOutput carries the
+// zone name + ttl + zone_file so the import-all path can feed them into
+// IaCProvider.Import without re-reading each zone individually.
+//
+// ProviderID is set to the zone name because DO's v2/domains API uses the
+// domain name as the addressable identifier (Domains.Get takes the name, not
+// a separate ID) — matches DomainDriver.Read/Delete dispatch elsewhere in
+// this plugin and keeps the EnumerateAll contract consistent for callers.
+//
+// zone_id mirrors ProviderID for cross-provider parity: CF surfaces a distinct
+// hex zone ID + zone name, so other providers' EnumerateAll outputs include
+// both keys. For DO they are identical but the shape is preserved so the
+// downstream import-all wrapper does not have to special-case providers.
+func (p *DOProvider) enumerateAllDNS(ctx context.Context) ([]*interfaces.ResourceOutput, error) {
+	var all []*interfaces.ResourceOutput
+	opt := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		domains, resp, err := p.client.Domains.List(ctx, opt)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: EnumerateAll infra.dns: list page=%d: %w", opt.Page, err)
+		}
+		for _, d := range domains {
+			outputs := map[string]any{
+				"zone":      d.Name,
+				"zone_id":   d.Name, // DO uses the domain name as its cloud identifier
+				"ttl":       d.TTL,
+				"zone_file": d.ZoneFile,
+			}
+			all = append(all, &interfaces.ResourceOutput{
+				Name:       d.Name,
+				Type:       "infra.dns",
+				ProviderID: d.Name,
+				Outputs:    outputs,
+				Status:     "active",
+			})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		page, err := resp.Links.CurrentPage()
+		if err != nil {
+			// Propagate rather than break-with-partial-result. Silent break
+			// past a malformed pagination response would cause import-all to
+			// miss zones past the failed boundary, leaving operators with an
+			// incomplete state import. Sister paginator enumerateAllSpacesKeys
+			// takes this same return-on-error stance.
+			return nil, fmt.Errorf("digitalocean: EnumerateAll infra.dns: parse current page: %w", err)
+		}
+		opt.Page = page + 1
+	}
+	return all, nil
 }
 
 // enumerateAllSpacesKeys paginates GET /v2/spaces/keys via godo's SpacesKeys.List
