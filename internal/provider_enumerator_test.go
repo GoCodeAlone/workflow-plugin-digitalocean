@@ -245,3 +245,120 @@ func TestDOProvider_EnumerateByTag_EmptyTag(t *testing.T) {
 		t.Errorf("error %q should mention the tag argument", err.Error())
 	}
 }
+
+// TestDOProvider_EnumerateAll_DNS_paginates pins the EnumerateAll contract for
+// resource type "infra.dns": every zone in the DO account is returned with the
+// metadata downstream callers (wfctl infra import-all, plus DNS audit/policy
+// commands) need to feed back into IaCProvider.Import without re-reading each
+// zone individually.
+//
+// Mirrors the paginated httptest pattern used by TestProvider_EnumerateAll_SpacesKeys
+// (provider_test.go:722) — page 1 returns 2 domains with a next-page link;
+// page 2 returns 1 domain. Asserts:
+//
+//   - DOProvider implements interfaces.EnumeratorAll for "infra.dns".
+//   - Pagination is handled inside the provider, not punted to the caller —
+//     the test asserts 3 outputs across 2 fake pages.
+//   - Each *ResourceOutput has Type="infra.dns", ProviderID=zone-name (DO uses
+//     the domain name as its cloud ID per the v2/domains API contract), and
+//     Outputs.{zone, zone_id, ttl, zone_file} populated so the import-all path
+//     can feed them into IaCProvider.Import without a second round-trip.
+func TestDOProvider_EnumerateAll_DNS_paginates(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v2/domains" {
+			w.Header().Set("Content-Type", "application/json")
+			page := r.URL.Query().Get("page")
+			if page == "" || page == "1" {
+				_, _ = fmt.Fprintf(w, `{"domains":[`+
+					`{"name":"alpha.test","ttl":1800,"zone_file":"$ORIGIN alpha.test.\n"},`+
+					`{"name":"beta.test","ttl":3600,"zone_file":"$ORIGIN beta.test.\n"}`+
+					`],"links":{"pages":{"next":%q,"last":%q}}}`,
+					srv.URL+"/v2/domains?page=2", srv.URL+"/v2/domains?page=2")
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"domains":[`+
+				`{"name":"gamma.test","ttl":1800,"zone_file":"$ORIGIN gamma.test.\n"}`+
+				`],"links":{}}`)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected path", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	p := newDOProviderForDNSEnumeratorTest(t, srv)
+	enumerator, ok := interfaces.IaCProvider(p).(interfaces.EnumeratorAll)
+	if !ok {
+		t.Fatalf("Provider must implement EnumeratorAll")
+	}
+
+	outs, err := enumerator.EnumerateAll(context.Background(), "infra.dns")
+	if err != nil {
+		t.Fatalf("EnumerateAll(infra.dns): %v", err)
+	}
+	if len(outs) != 3 {
+		t.Fatalf("expected 3 zones (paginated), got %d: %+v", len(outs), outs)
+	}
+
+	// Sort by ProviderID for stable comparison; pagination order is documented
+	// but the test should not depend on the order godo emits pages in.
+	sort.Slice(outs, func(i, j int) bool { return outs[i].ProviderID < outs[j].ProviderID })
+
+	wantNames := []string{"alpha.test", "beta.test", "gamma.test"}
+	for i, want := range wantNames {
+		o := outs[i]
+		if o.Type != "infra.dns" {
+			t.Errorf("outs[%d].Type = %q, want %q", i, o.Type, "infra.dns")
+		}
+		if o.ProviderID != want {
+			t.Errorf("outs[%d].ProviderID = %q, want %q", i, o.ProviderID, want)
+		}
+		if got, _ := o.Outputs["zone"].(string); got != want {
+			t.Errorf("outs[%d].Outputs.zone = %v, want %q", i, o.Outputs["zone"], want)
+		}
+		// DO uses the domain name as its cloud identifier — zone_id mirrors
+		// the ProviderID so downstream Import can call back via the same
+		// addressable name without parsing ProviderID separately.
+		if got, _ := o.Outputs["zone_id"].(string); got != want {
+			t.Errorf("outs[%d].Outputs.zone_id = %v, want %q", i, o.Outputs["zone_id"], want)
+		}
+		// ttl must be the int from the godo Domain struct, not a string —
+		// downstream Import code paths assert on int directly.
+		if _, ok := o.Outputs["ttl"].(int); !ok {
+			t.Errorf("outs[%d].Outputs.ttl = %T, want int", i, o.Outputs["ttl"])
+		}
+		if got, _ := o.Outputs["zone_file"].(string); got == "" {
+			t.Errorf("outs[%d].Outputs.zone_file is empty; want non-empty", i)
+		}
+	}
+}
+
+// TestDOProvider_EnumerateAll_DNS_NilClient pins the defensive guard: if a
+// caller invokes EnumerateAll("infra.dns") on an uninitialised provider, the
+// method returns a clear error rather than panicking on nil-pointer deref.
+// Mirrors the sister guard in TestDOProvider_EnumerateByTag_NilClient.
+func TestDOProvider_EnumerateAll_DNS_NilClient(t *testing.T) {
+	p := NewDOProvider()
+	_, err := p.EnumerateAll(context.Background(), "infra.dns")
+	if err == nil {
+		t.Fatal("expected error from EnumerateAll on uninitialised provider; got nil")
+	}
+	if !strings.Contains(err.Error(), "not initialized") {
+		t.Errorf("error %q should mention not initialized", err.Error())
+	}
+}
+
+// newDOProviderForDNSEnumeratorTest mirrors newDOProviderForTest
+// (provider_test.go) for tests that drive their own httptest handler. Kept
+// local to this file so the enumerator suite stays self-contained.
+func newDOProviderForDNSEnumeratorTest(t *testing.T, srv *httptest.Server) *DOProvider {
+	t.Helper()
+	client := godo.NewClient(srv.Client())
+	base, err := url.Parse(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("parse httptest URL %q: %v", srv.URL, err)
+	}
+	client.BaseURL = base
+	return &DOProvider{client: client, region: "nyc3"}
+}
