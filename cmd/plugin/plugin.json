@@ -7,6 +7,14 @@
   "type": "external",
   "tier": "community",
   "minEngineVersion": "0.64.3",
+  "required_secrets": [
+    {
+      "name": "DIGITALOCEAN_TOKEN",
+      "sensitive": true,
+      "description": "DigitalOcean API token with read/write scope (DNS + infra via godo).",
+      "prompt": "DigitalOcean API token"
+    }
+  ],
   "iacServices": [
     "workflow.plugin.external.iac.IaCProviderRequired",
     "workflow.plugin.external.iac.IaCProviderEnumerator",
