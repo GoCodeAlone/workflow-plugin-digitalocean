@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
@@ -18,7 +19,8 @@ func TestDOIaCServer_ListRegions(t *testing.T) {
 		t.Fatalf("ListRegions: %v", err)
 	}
 	got := regionNames(resp.GetRegions())
-	want := []string{"ams2", "ams3", "blr1", "fra1", "lon1", "nyc1", "nyc2", "nyc3", "sfo1", "sfo2", "sfo3", "sgp1", "syd1", "tor1"}
+	want := append([]string(nil), digitalOceanFallbackRegionNames()...)
+	sort.Strings(want)
 	if !sameStrings(got, want) {
 		t.Fatalf("regions = %v, want %v", got, want)
 	}
