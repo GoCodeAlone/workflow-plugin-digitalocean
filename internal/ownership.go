@@ -114,7 +114,7 @@ func (p *DOProvider) listOwnersForTag(ctx context.Context, filter interfaces.Own
 	if err != nil {
 		return nil, err
 	}
-	refs, err := p.EnumerateByTag(ctx, tag)
+	refs, err := p.ownershipRefsByTag(ctx, tag, filter.ResourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +126,110 @@ func (p *DOProvider) listOwnersForTag(ctx context.Context, filter interfaces.Own
 		out = append(out, interfaces.ResourceOwner{Ref: ref, Owner: filter.Owner, Source: ownershipTagSource})
 	}
 	return out, nil
+}
+
+func (p *DOProvider) ownershipRefsByTag(ctx context.Context, tag, resourceType string) ([]interfaces.ResourceRef, error) {
+	if resourceType == "" {
+		return p.EnumerateByTag(ctx, tag)
+	}
+	if _, _, err := p.client.Tags.Get(ctx, tag); err != nil {
+		var doErr *godo.ErrorResponse
+		if errors.As(err, &doErr) && doErr.Response != nil && doErr.Response.StatusCode == 404 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("digitalocean: get owner tag %q: %w", tag, drivers.WrapGodoError(err))
+	}
+
+	switch resourceType {
+	case "infra.droplet":
+		return p.ownershipDropletRefsByTag(ctx, tag)
+	case "infra.volume":
+		return p.ownershipVolumeRefsByTag(ctx, tag)
+	case "infra.database", "infra.cache":
+		return p.ownershipDatabaseRefsByTag(ctx, tag, resourceType)
+	default:
+		return nil, nil
+	}
+}
+
+func (p *DOProvider) ownershipDropletRefsByTag(ctx context.Context, tag string) ([]interfaces.ResourceRef, error) {
+	var refs []interfaces.ResourceRef
+	page := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		droplets, resp, err := p.client.Droplets.ListByTag(ctx, tag, page)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list droplets by owner tag %q: %w", tag, drivers.WrapGodoError(err))
+		}
+		for _, d := range droplets {
+			refs = append(refs, interfaces.ResourceRef{Name: d.Name, Type: "infra.droplet", ProviderID: fmt.Sprint(d.ID)})
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate droplets by owner tag: %w", err)
+		}
+		page.Page = nextPage + 1
+	}
+	return refs, nil
+}
+
+func (p *DOProvider) ownershipVolumeRefsByTag(ctx context.Context, tag string) ([]interfaces.ResourceRef, error) {
+	var refs []interfaces.ResourceRef
+	page := &godo.ListVolumeParams{ListOptions: &godo.ListOptions{Page: 1, PerPage: 200}}
+	for {
+		volumes, resp, err := p.client.Storage.ListVolumes(ctx, page)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list volumes by owner tag %q: %w", tag, drivers.WrapGodoError(err))
+		}
+		for _, v := range volumes {
+			if stringSliceContains(v.Tags, tag) {
+				refs = append(refs, interfaces.ResourceRef{Name: v.Name, Type: "infra.volume", ProviderID: v.ID})
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate volumes by owner tag: %w", err)
+		}
+		page.ListOptions.Page = nextPage + 1
+	}
+	return refs, nil
+}
+
+func (p *DOProvider) ownershipDatabaseRefsByTag(ctx context.Context, tag, resourceType string) ([]interfaces.ResourceRef, error) {
+	var refs []interfaces.ResourceRef
+	page := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		databases, resp, err := p.client.Databases.List(ctx, page)
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: list databases by owner tag %q: %w", tag, drivers.WrapGodoError(err))
+		}
+		for _, db := range databases {
+			if !stringSliceContains(db.Tags, tag) {
+				continue
+			}
+			dbType := "infra.database"
+			if db.EngineSlug == "redis" {
+				dbType = "infra.cache"
+			}
+			if dbType == resourceType {
+				refs = append(refs, interfaces.ResourceRef{Name: db.Name, Type: dbType, ProviderID: db.ID})
+			}
+		}
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		nextPage, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("digitalocean: paginate databases by owner tag: %w", err)
+		}
+		page.Page = nextPage + 1
+	}
+	return refs, nil
 }
 
 func (p *DOProvider) resourceTags(ctx context.Context, ref interfaces.ResourceRef) ([]string, error) {

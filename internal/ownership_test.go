@@ -74,6 +74,69 @@ func TestDOProvider_GetOwnerFromDropletTags(t *testing.T) {
 	}
 }
 
+func TestDOProvider_GetOwnerFromSupportedResourceTags(t *testing.T) {
+	encodedOwner := "team a@example.com"
+	encodedTag, err := ownerTagName(encodedOwner)
+	if err != nil {
+		t.Fatalf("ownerTagName: %v", err)
+	}
+	api := &ownershipFakeAPI{
+		droplets: map[string]ownershipResource{
+			"1001": {id: "1001", name: "app", tags: []string{"workflow-owner:team-a"}},
+		},
+		volumes: map[string]ownershipResource{
+			"vol-1": {id: "vol-1", name: "data", tags: []string{encodedTag}},
+		},
+		databases: map[string]ownershipResource{
+			"db-1":    {id: "db-1", name: "pg", engine: "pg", tags: []string{"workflow-owner:team-db"}},
+			"cache-1": {id: "cache-1", name: "redis", engine: "redis", tags: []string{"workflow-owner:team-cache"}},
+		},
+	}
+	p, _ := newProviderForOwnershipTest(t, api)
+
+	tests := []struct {
+		name string
+		ref  interfaces.ResourceRef
+		want string
+	}{
+		{
+			name: "droplet",
+			ref:  interfaces.ResourceRef{Name: "app", Type: "infra.droplet", ProviderID: "1001"},
+			want: "team-a",
+		},
+		{
+			name: "volume encoded owner",
+			ref:  interfaces.ResourceRef{Name: "data", Type: "infra.volume", ProviderID: "vol-1"},
+			want: encodedOwner,
+		},
+		{
+			name: "database",
+			ref:  interfaces.ResourceRef{Name: "pg", Type: "infra.database", ProviderID: "db-1"},
+			want: "team-db",
+		},
+		{
+			name: "cache",
+			ref:  interfaces.ResourceRef{Name: "redis", Type: "infra.cache", ProviderID: "cache-1"},
+			want: "team-cache",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner, err := p.GetOwner(context.Background(), tt.ref)
+			if err != nil {
+				t.Fatalf("GetOwner: %v", err)
+			}
+			if owner.Owner != tt.want {
+				t.Fatalf("owner = %q, want %q", owner.Owner, tt.want)
+			}
+			if owner.Source != "tag:workflow-owner" {
+				t.Fatalf("source = %q, want tag:workflow-owner", owner.Source)
+			}
+		})
+	}
+}
+
 func TestDOProvider_OwnershipRequiresInitializedClient(t *testing.T) {
 	p := NewDOProvider()
 	ref := interfaces.ResourceRef{Name: "app", Type: "infra.droplet", ProviderID: "1001"}
@@ -154,10 +217,50 @@ func TestDOProvider_ListOwnersByOwnerUsesTaggedResourceEnumeration(t *testing.T)
 	}
 }
 
+func TestDOProvider_ListOwnersByResourceTypeOnlyEnumeratesThatType(t *testing.T) {
+	mock := &enumeratorFakeAPI{
+		tagExists: map[string]bool{"workflow-owner:team-a": true},
+		dropletsByTag: map[string][]godo.Droplet{
+			"workflow-owner:team-a": {
+				{ID: 1001, Name: "app", Tags: []string{"workflow-owner:team-a"}},
+			},
+		},
+		volumes: []godo.Volume{
+			{ID: "vol-1", Name: "data", Tags: []string{"workflow-owner:team-a"}},
+		},
+		databases: []godo.Database{
+			{ID: "db-1", Name: "pg", EngineSlug: "pg", Tags: []string{"workflow-owner:team-a"}},
+			{ID: "cache-1", Name: "redis", EngineSlug: "redis", Tags: []string{"workflow-owner:team-a"}},
+		},
+	}
+	p, _ := newProviderForEnumeratorTest(t, mock)
+
+	owners, err := p.ListOwners(context.Background(), interfaces.OwnerFilter{
+		Owner:        "team-a",
+		ResourceType: "infra.volume",
+	})
+	if err != nil {
+		t.Fatalf("ListOwners: %v", err)
+	}
+	if len(owners) != 1 {
+		t.Fatalf("owners len = %d, want 1: %+v", len(owners), owners)
+	}
+	if owners[0].Ref.Type != "infra.volume" || owners[0].Ref.ProviderID != "vol-1" {
+		t.Fatalf("owner ref = %+v, want volume vol-1", owners[0].Ref)
+	}
+	if mock.volumeLists != 1 {
+		t.Fatalf("volume list calls = %d, want 1", mock.volumeLists)
+	}
+	if mock.dropletLists != 0 || mock.databaseLists != 0 {
+		t.Fatalf("unexpected unrelated list calls: droplets=%d databases=%d", mock.dropletLists, mock.databaseLists)
+	}
+}
+
 type ownershipResource struct {
-	id   string
-	name string
-	tags []string
+	id     string
+	name   string
+	engine string
+	tags   []string
 }
 
 type ownershipFakeAPI struct {
@@ -242,7 +345,11 @@ func writeOwnershipResource(t *testing.T, w http.ResponseWriter, kind string, re
 	case "volume":
 		_, _ = fmt.Fprintf(w, `{"volume":{"id":%q,"name":%q,"tags":%s}}`, resource.id, resource.name, tags)
 	case "database":
-		_, _ = fmt.Fprintf(w, `{"database":{"id":%q,"name":%q,"engine":"pg","tags":%s}}`, resource.id, resource.name, tags)
+		engine := resource.engine
+		if engine == "" {
+			engine = "pg"
+		}
+		_, _ = fmt.Fprintf(w, `{"database":{"id":%q,"name":%q,"engine":%q,"tags":%s}}`, resource.id, resource.name, engine, tags)
 	}
 }
 
