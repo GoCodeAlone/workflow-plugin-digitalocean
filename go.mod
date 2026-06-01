@@ -3,7 +3,7 @@ module github.com/GoCodeAlone/workflow-plugin-digitalocean
 go 1.26.0
 
 require (
-	github.com/GoCodeAlone/workflow v0.64.3
+	github.com/GoCodeAlone/workflow v0.68.2
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.15
@@ -20,12 +20,12 @@ require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/DataDog/datadog-go/v5 v5.8.3 // indirect
 	github.com/GoCodeAlone/go-plugin v1.7.0 // indirect
-	github.com/GoCodeAlone/modular v1.13.0 // indirect
-	github.com/GoCodeAlone/modular/modules/auth v1.15.0 // indirect
-	github.com/GoCodeAlone/modular/modules/cache v1.15.0 // indirect
-	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 // indirect
-	github.com/GoCodeAlone/modular/modules/jsonschema v1.15.0 // indirect
-	github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0 // indirect
+	github.com/GoCodeAlone/modular v1.13.4 // indirect
+	github.com/GoCodeAlone/modular/modules/auth v1.17.0 // indirect
+	github.com/GoCodeAlone/modular/modules/cache v1.17.0 // indirect
+	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.10.0 // indirect
+	github.com/GoCodeAlone/modular/modules/jsonschema v1.17.0 // indirect
+	github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.10.0 // indirect
 	github.com/GoCodeAlone/yaegi v0.17.2 // indirect
 	github.com/IBM/sarama v1.47.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -42,7 +42,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.22 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.20 // indirect
-	github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.16 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.20 // indirect
@@ -74,7 +74,7 @@ require (
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/flowchartsman/retry v1.2.0 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -106,11 +106,11 @@ require (
 	github.com/hashicorp/memberlist v0.5.4 // indirect
 	github.com/hashicorp/vault/api v1.23.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
-	github.com/itchyny/gojq v0.12.18 // indirect
-	github.com/itchyny/timefmt-go v0.1.7 // indirect
+	github.com/itchyny/gojq v0.12.19 // indirect
+	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.1 // indirect
+	github.com/jackc/pgx/v5 v5.9.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
