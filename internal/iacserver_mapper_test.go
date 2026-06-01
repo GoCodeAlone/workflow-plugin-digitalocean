@@ -177,8 +177,8 @@ func TestPluginManifestAdvertisesRequirementMapper(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("parse plugin.json: %v", err)
 	}
-	if manifest.MinEngineVersion != "0.68.2" {
-		t.Fatalf("minEngineVersion = %q, want 0.68.2", manifest.MinEngineVersion)
+	if manifest.MinEngineVersion != "0.69.1" {
+		t.Fatalf("minEngineVersion = %q, want 0.69.1", manifest.MinEngineVersion)
 	}
 	const mapperService = "workflow.plugin.external.iac.IaCProviderRequirementMapper"
 	for _, svc := range manifest.IaCServices {

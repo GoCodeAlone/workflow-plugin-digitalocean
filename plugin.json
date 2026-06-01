@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "external",
   "tier": "community",
-  "minEngineVersion": "0.68.2",
+  "minEngineVersion": "0.69.1",
   "required_secrets": [
     {
       "name": "DIGITALOCEAN_TOKEN",
@@ -26,6 +26,7 @@
     "workflow.plugin.external.iac.IaCProviderLogCapture",
     "workflow.plugin.external.iac.IaCProviderRequirementMapper",
     "workflow.plugin.external.iac.IaCProviderRegionLister",
+    "workflow.plugin.external.iac.IaCProviderOwnership",
     "workflow.plugin.external.iac.IaCProviderFinalizer",
     "workflow.plugin.external.iac.ResourceDriver",
     "workflow.plugin.external.iac.IaCStateBackend"

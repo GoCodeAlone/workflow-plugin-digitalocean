@@ -22,8 +22,8 @@ github.com/GoCodeAlone/modular/modules/jsonschema v1.17.0 h1:zoWioqUvuNNDfnjHA1s
 github.com/GoCodeAlone/modular/modules/jsonschema v1.17.0/go.mod h1:GDU/jsD6AddmXKedj0wZwieUIaQsTBSGMzuj+XHXMrw=
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.10.0 h1:+2M/ecyCxDiXfJM4ibcERuu/BBeIbLTQNcVgRsllR64=
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.10.0/go.mod h1:tlVH1mA5yuU8CB7R7+HXIRaBixZoNid6h+5tew5u3FU=
-github.com/GoCodeAlone/workflow v0.68.2 h1:U0ksQOkIwDReuw+nz4kRoCeYwahoBaItqLzwYIRm758=
-github.com/GoCodeAlone/workflow v0.68.2/go.mod h1:4UwFYm1cM8a/AvGNb1CZAuob0b0gq7552sxcNMdDALA=
+github.com/GoCodeAlone/workflow v0.69.1-0.20260601224558-0072d3221025 h1:CXut1JDsmcf7kDXfnswTDFj0Qf/l4vDkVttzMoLW/do=
+github.com/GoCodeAlone/workflow v0.69.1-0.20260601224558-0072d3221025/go.mod h1:4UwFYm1cM8a/AvGNb1CZAuob0b0gq7552sxcNMdDALA=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/IBM/sarama v1.47.0 h1:GcQFEd12+KzfPYeLgN69Fh7vLCtYRhVIx0rO4TZO318=

@@ -613,11 +613,16 @@ func trustedSourceFirewallRulesFromConfig(cfg map[string]any) ([]*godo.DatabaseF
 }
 
 func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
+	tags := make([]any, 0, len(db.Tags))
+	for _, tag := range db.Tags {
+		tags = append(tags, tag)
+	}
 	outputs := map[string]any{
 		"engine":    db.EngineSlug,
 		"num_nodes": float64(db.NumNodes),
 		"region":    db.RegionSlug,
 		"size":      db.SizeSlug,
+		"tags":      tags,
 		"version":   db.VersionSlug,
 	}
 	if db.Connection != nil {
