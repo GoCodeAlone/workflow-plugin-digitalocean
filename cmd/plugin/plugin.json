@@ -25,6 +25,7 @@
     "workflow.plugin.external.iac.IaCProviderDriftConfigDetector",
     "workflow.plugin.external.iac.IaCProviderLogCapture",
     "workflow.plugin.external.iac.IaCProviderRequirementMapper",
+    "workflow.plugin.external.iac.IaCProviderRegionLister",
     "workflow.plugin.external.iac.IaCProviderFinalizer",
     "workflow.plugin.external.iac.ResourceDriver",
     "workflow.plugin.external.iac.IaCStateBackend"
