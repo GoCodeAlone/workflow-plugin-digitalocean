@@ -57,6 +57,7 @@ type doIaCServer struct {
 	pb.UnimplementedIaCProviderLogCaptureServer
 	pb.UnimplementedIaCProviderRequirementMapperServer
 	pb.UnimplementedIaCProviderRegionListerServer
+	pb.UnimplementedIaCProviderOwnershipServer
 	// pb.UnimplementedIaCProviderFinalizerServer satisfies the
 	// mustEmbedUnimplementedIaCProviderFinalizerServer() forward-compat
 	// requirement on pb.IaCProviderFinalizerServer (workflow#695 Phase 2.5).
@@ -121,6 +122,7 @@ var (
 	_ pb.IaCProviderLogCaptureServer          = (*doIaCServer)(nil)
 	_ pb.IaCProviderRequirementMapperServer   = (*doIaCServer)(nil)
 	_ pb.IaCProviderRegionListerServer        = (*doIaCServer)(nil)
+	_ pb.IaCProviderOwnershipServer           = (*doIaCServer)(nil)
 	// IaCProviderFinalizer is the workflow#695 Phase 2.5 optional service
 	// — DO plugin implements FinalizeApply server-side to host the
 	// deferred-flush iteration previously held inline in the v1

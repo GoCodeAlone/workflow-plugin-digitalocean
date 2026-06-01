@@ -49,6 +49,9 @@ type enumeratorFakeAPI struct {
 	dropletsByTag map[string][]godo.Droplet
 	volumes       []godo.Volume
 	databases     []godo.Database
+	dropletLists  int
+	volumeLists   int
+	databaseLists int
 	// tagExists maps tag-name → whether GET /v2/tags/{name} returns 200.
 	// When the tag does not exist, the API returns 404; EnumerateByTag must
 	// treat 404 as "no resources" (empty result) not an error.
@@ -77,16 +80,19 @@ func (f *enumeratorFakeAPI) handler(t *testing.T) http.HandlerFunc {
 			return
 
 		case r.URL.Path == "/v2/droplets" && r.Method == http.MethodGet:
+			f.dropletLists++
 			tag := r.URL.Query().Get("tag_name")
 			droplets := f.dropletsByTag[tag]
 			writeDroplets(t, w, droplets)
 			return
 
 		case r.URL.Path == "/v2/volumes" && r.Method == http.MethodGet:
+			f.volumeLists++
 			writeVolumes(t, w, f.volumes)
 			return
 
 		case r.URL.Path == "/v2/databases" && r.Method == http.MethodGet:
+			f.databaseLists++
 			writeDatabases(t, w, f.databases)
 			return
 		}
