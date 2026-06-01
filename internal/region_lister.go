@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
 	"github.com/digitalocean/godo"
 )
@@ -20,12 +21,12 @@ func (s *doIaCServer) ListRegions(ctx context.Context, _ *pb.ListRegionsRequest)
 }
 
 func listDigitalOceanRegions(ctx context.Context, client *godo.Client) ([]string, error) {
-	opts := &godo.ListOptions{PerPage: 200}
+	opts := &godo.ListOptions{Page: 1, PerPage: 200}
 	var regions []string
 	for {
 		page, resp, err := client.Regions.List(ctx, opts)
 		if err != nil {
-			return nil, err
+			return nil, drivers.WrapGodoError(err)
 		}
 		for _, region := range page {
 			if region.Slug != "" && region.Available {
