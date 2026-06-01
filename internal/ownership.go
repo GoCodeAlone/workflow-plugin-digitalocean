@@ -21,6 +21,9 @@ const (
 var _ interfaces.OwnershipProvider = (*DOProvider)(nil)
 
 func (p *DOProvider) GetOwner(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOwner, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("digitalocean: GetOwner called on provider that is not initialized — call Initialize first")
+	}
 	tags, err := p.resourceTags(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -36,7 +39,7 @@ func (p *DOProvider) GetOwner(ctx context.Context, ref interfaces.ResourceRef) (
 
 func (p *DOProvider) SetOwner(ctx context.Context, ref interfaces.ResourceRef, owner string) error {
 	if p.client == nil {
-		return fmt.Errorf("digitalocean: SetOwner called on provider that is not initialized")
+		return fmt.Errorf("digitalocean: SetOwner called on provider that is not initialized — call Initialize first")
 	}
 	resource, err := ownershipTagResource(ref)
 	if err != nil {
@@ -70,7 +73,7 @@ func (p *DOProvider) SetOwner(ctx context.Context, ref interfaces.ResourceRef, o
 
 func (p *DOProvider) ListOwners(ctx context.Context, filter interfaces.OwnerFilter) ([]interfaces.ResourceOwner, error) {
 	if p.client == nil {
-		return nil, fmt.Errorf("digitalocean: ListOwners called on provider that is not initialized")
+		return nil, fmt.Errorf("digitalocean: ListOwners called on provider that is not initialized — call Initialize first")
 	}
 	if filter.Owner != "" {
 		return p.listOwnersForTag(ctx, filter)

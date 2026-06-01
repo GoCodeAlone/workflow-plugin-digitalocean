@@ -74,6 +74,24 @@ func TestDOProvider_GetOwnerFromDropletTags(t *testing.T) {
 	}
 }
 
+func TestDOProvider_OwnershipRequiresInitializedClient(t *testing.T) {
+	p := NewDOProvider()
+	ref := interfaces.ResourceRef{Name: "app", Type: "infra.droplet", ProviderID: "1001"}
+
+	_, err := p.GetOwner(context.Background(), ref)
+	if err == nil || !strings.Contains(err.Error(), "call Initialize first") {
+		t.Fatalf("GetOwner error = %v, want Initialize hint", err)
+	}
+	err = p.SetOwner(context.Background(), ref, "team-a")
+	if err == nil || !strings.Contains(err.Error(), "call Initialize first") {
+		t.Fatalf("SetOwner error = %v, want Initialize hint", err)
+	}
+	_, err = p.ListOwners(context.Background(), interfaces.OwnerFilter{Owner: "team-a"})
+	if err == nil || !strings.Contains(err.Error(), "call Initialize first") {
+		t.Fatalf("ListOwners error = %v, want Initialize hint", err)
+	}
+}
+
 func TestDOProvider_SetOwnerCreatesTagAndReplacesOldOwnerTag(t *testing.T) {
 	api := &ownershipFakeAPI{
 		droplets: map[string]ownershipResource{
