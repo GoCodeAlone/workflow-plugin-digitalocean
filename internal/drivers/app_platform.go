@@ -519,7 +519,7 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 			desiredHash := envVarsHashFromConfigMap(desiredEnvs)
 			if desiredHash != curHash {
 				changes = append(changes, interfaces.FieldChange{
-					Path: "env_vars", Old: "[hash:" + curHash[:8] + "...]", New: "[hash:" + desiredHash[:8] + "...]",
+					Path: "env_vars", Old: hashPreview(curHash), New: hashPreview(desiredHash),
 				})
 			}
 		}
@@ -1506,6 +1506,16 @@ func componentHash(kind string, envs []*godo.AppVariableDefinition) string {
 	fmt.Fprintf(h, "kind=%s\x00", kind)
 	io.WriteString(h, envVarsHash(envs))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func hashPreview(hash string) string {
+	if hash == "" {
+		return "[hash:<empty>]"
+	}
+	if len(hash) < 8 {
+		return "[hash:" + hash + "]"
+	}
+	return "[hash:" + hash[:8] + "...]"
 }
 
 // desiredEnvVarsForHash merges the App Platform service env maps exactly as

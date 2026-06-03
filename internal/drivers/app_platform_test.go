@@ -2566,6 +2566,40 @@ func TestAppPlatformDriver_Diff_DetectsSecretEnvVarsDrift(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_Diff_DetectsSecretEnvVarsDriftFromEmptyHash(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":         "registry.digitalocean.com/myrepo/myapp:v1",
+			"region":        "nyc",
+			"env_vars_hash": "",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars_secret": map[string]any{
+				"AUTH_BOOTSTRAP_CODE": "BMW-STG-new-bootstrap-code",
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatalf("expected NeedsUpdate=true when env_vars_secret is added from empty current hash")
+	}
+	if len(result.Changes) != 1 {
+		t.Fatalf("changes = %+v, want one env_vars change", result.Changes)
+	}
+	if got := result.Changes[0].Old; got != "[hash:<empty>]" {
+		t.Fatalf("old hash preview = %#v, want empty hash marker", got)
+	}
+}
+
 func TestAppPlatformDriver_Diff_NoSpuriousSecretEnvVarsDrift(t *testing.T) {
 	app := testApp()
 	app.Spec = &godo.AppSpec{
