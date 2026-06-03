@@ -514,12 +514,12 @@ func (d *AppPlatformDriver) Diff(ctx context.Context, desired interfaces.Resourc
 	// algorithm and compares strings. FieldChange Old/New are the
 	// HASHES, never the values themselves, so the changelog Path
 	// communicates "drift detected" without revealing what changed.
-	if desiredEnvs, ok := desired.Config["env_vars"].(map[string]any); ok {
+	if desiredEnvs, ok := desiredEnvVarsForHash(desired.Config); ok {
 		if curHash, hasKey := current.Outputs["env_vars_hash"].(string); hasKey {
 			desiredHash := envVarsHashFromConfigMap(desiredEnvs)
 			if desiredHash != curHash {
 				changes = append(changes, interfaces.FieldChange{
-					Path: "env_vars", Old: "[hash:" + curHash[:8] + "...]", New: "[hash:" + desiredHash[:8] + "...]",
+					Path: "env_vars", Old: hashPreview(curHash), New: hashPreview(desiredHash),
 				})
 			}
 		}
@@ -1508,10 +1508,47 @@ func componentHash(kind string, envs []*godo.AppVariableDefinition) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func hashPreview(hash string) string {
+	if hash == "" {
+		return "[hash:<empty>]"
+	}
+	if len(hash) < 8 {
+		return "[hash:" + hash + "]"
+	}
+	return "[hash:" + hash[:8] + "...]"
+}
+
+// desiredEnvVarsForHash merges the App Platform service env maps exactly as
+// envVarsFromConfig emits them. Current-side hashes are computed from
+// AppSpec.Services[0].Envs, which contains both general and secret variables;
+// desired-side hashes must include env_vars_secret too or secret-only rotations
+// are invisible/noisy depending on state age.
+func desiredEnvVarsForHash(cfg map[string]any) (map[string]any, bool) {
+	raw, rawOK := cfg["env_vars"].(map[string]any)
+	var secrets map[string]any
+	secretsRaw, secretsOK := cfg["env_vars_secret"]
+	if secretsOK {
+		secrets, _ = secretsRaw.(map[string]any)
+	} else {
+		secrets, secretsOK = cfg["secret_env_vars"].(map[string]any)
+	}
+	if !rawOK && !secretsOK {
+		return nil, false
+	}
+	merged := make(map[string]any, len(raw)+len(secrets))
+	for k, v := range raw {
+		merged[k] = v
+	}
+	for k, v := range secrets {
+		merged[k] = v
+	}
+	return merged, true
+}
+
 // envVarsHashFromConfigMap is the desired-side counterpart for envVarsHash:
-// hashes a map[string]any (the shape infra.yaml YAML decodes to) using the
-// same canonical-sorted-JSON algorithm. Values are coerced to string via
-// fmt.Sprintf to match envVarsFromConfig's coercion.
+// hashes a map[string]any (the merged env var shape infra.yaml YAML decodes to)
+// using the same canonical-sorted-JSON algorithm. Values are coerced to string
+// via fmt.Sprintf to match envVarsFromConfig's coercion.
 func envVarsHashFromConfigMap(m map[string]any) string {
 	if len(m) == 0 {
 		return ""
@@ -1536,7 +1573,7 @@ func componentHashFromConfig(m map[string]any) string {
 	kind, _ := m["kind"].(string)
 	// Match godo's UPPER_SNAKE convention: pre_deploy → PRE_DEPLOY etc.
 	kind = strings.ToUpper(kind)
-	envs, _ := m["env_vars"].(map[string]any)
+	envs, _ := desiredEnvVarsForHash(m)
 	h := sha256.New()
 	fmt.Fprintf(h, "kind=%s\x00", kind)
 	io.WriteString(h, envVarsHashFromConfigMap(envs))
