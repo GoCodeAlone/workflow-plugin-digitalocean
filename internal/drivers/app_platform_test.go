@@ -2535,6 +2535,81 @@ func TestAppPlatformDriver_Diff_DetectsEnvVarsDrift(t *testing.T) {
 	}
 }
 
+func TestAppPlatformDriver_Diff_DetectsSecretEnvVarsDrift(t *testing.T) {
+	mock := &mockAppClient{}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+
+	current := &interfaces.ResourceOutput{
+		Outputs: map[string]any{
+			"image":         "registry.digitalocean.com/myrepo/myapp:v1",
+			"region":        "nyc",
+			"env_vars_hash": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		},
+	}
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars_secret": map[string]any{
+				"AUTH_BOOTSTRAP_CODE": "BMW-STG-new-bootstrap-code",
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !result.NeedsUpdate {
+		t.Fatalf("expected NeedsUpdate=true when env_vars_secret hash mismatched")
+	}
+	if result.NeedsReplace {
+		t.Errorf("env_vars_secret change must NOT force replace (in-place Update suffices)")
+	}
+}
+
+func TestAppPlatformDriver_Diff_NoSpuriousSecretEnvVarsDrift(t *testing.T) {
+	app := testApp()
+	app.Spec = &godo.AppSpec{
+		Name:   "my-app",
+		Region: "nyc",
+		Services: []*godo.AppServiceSpec{{
+			Name: "web",
+			Image: &godo.ImageSourceSpec{
+				Registry:   "registry.digitalocean.com",
+				Repository: "myrepo/myapp",
+				Tag:        "v1",
+			},
+			Envs: []*godo.AppVariableDefinition{{
+				Key:   "AUTH_BOOTSTRAP_CODE",
+				Value: "BMW-STG-current-bootstrap-code",
+				Type:  godo.AppVariableType_Secret,
+				Scope: godo.AppVariableScope_RunAndBuildTime,
+			}},
+		}},
+	}
+	mock := &mockAppClient{app: app}
+	d := drivers.NewAppPlatformDriverWithClient(mock, "nyc")
+	current, err := d.Read(context.Background(), interfaces.ResourceRef{ProviderID: app.ID, Name: "my-app"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	result, err := d.Diff(context.Background(), interfaces.ResourceSpec{
+		Config: map[string]any{
+			"image":  "registry.digitalocean.com/myrepo/myapp:v1",
+			"region": "nyc",
+			"env_vars_secret": map[string]any{
+				"AUTH_BOOTSTRAP_CODE": "BMW-STG-current-bootstrap-code",
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if result.NeedsUpdate {
+		t.Fatalf("expected NeedsUpdate=false for matching env_vars_secret, changes=%+v", result.Changes)
+	}
+}
+
 // TestAppPlatformDriver_Diff_DetectsJobEnvVarsDrift covers the migrate-job
 // case specifically — pre_deploy jobs carry their own env_vars that can
 // independently go stale.
