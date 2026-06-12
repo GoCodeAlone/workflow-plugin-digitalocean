@@ -104,3 +104,13 @@ and scenario proof is T569.
 Revert the DigitalOcean plugin PR and remove the T567 completion evidence from
 workflow-compute. No runtime state, release tag, cloud resource, or migration is
 created by this phase.
+
+## Backport 2026-06-12
+
+Implementation evidence showed `workflow-plugin-control-plane v0.1.0` requires
+Go 1.26.4 and `github.com/GoCodeAlone/workflow v0.80.1`, so the DigitalOcean
+plugin module must accept the resulting version refresh to compile against the
+released public contract. The manifest scope is unchanged because the phase
+still ships only provider-side fixture validation; verification must include the
+full plugin test suite and `go list -deps ./cmd/plugin` proving no control-plane
+package enters the plugin binary dependency graph.
