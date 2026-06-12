@@ -31,7 +31,7 @@
 | 1 | test(control-plane): add DigitalOcean provider handoff fixture | Task 1, Task 2, Task 3, Task 4 | workflow-plugin-digitalocean:feat/control-plane-provider-handoff |
 | 2 | docs: close DigitalOcean control-plane provider handoff phase | Task 5, Task 6 | workflow-compute:docs/control-plane-provider-handoff |
 
-**Status:** Locked 2026-06-12T17:41:18Z
+**Status:** Complete 2026-06-12T18:37:16Z
 
 ### Task 1: Pin Control-Plane Contract And Add Fixture Package
 
