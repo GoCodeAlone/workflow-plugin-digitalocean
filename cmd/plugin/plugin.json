@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "external",
   "tier": "community",
-  "minEngineVersion": "0.69.1",
+  "minEngineVersion": "0.80.1",
   "required_secrets": [
     {
       "name": "DIGITALOCEAN_TOKEN",

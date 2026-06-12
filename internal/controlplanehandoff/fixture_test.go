@@ -2,6 +2,8 @@ package controlplanehandoff
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,4 +117,29 @@ func TestAppPlatformDryRunHandoffRejectsReplayAndCredentialRequiredPath(t *testi
 	if err == nil || !strings.Contains(err.Error(), "requires_credentials") {
 		t.Fatalf("credential-required error = %v, want requires_credentials failure", err)
 	}
+}
+
+func TestCommandPluginDoesNotDependOnControlPlanePackage(t *testing.T) {
+	cmd := exec.Command("go", "list", "-deps", "./cmd/plugin")
+	cmd.Dir = filepath.Clean(filepath.Join("..", ".."))
+	cmd.Env = append(envWithoutGOWORK(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps ./cmd/plugin: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "github.com/GoCodeAlone/workflow-plugin-control-plane") {
+		t.Fatalf("cmd/plugin runtime dependencies include workflow-plugin-control-plane:\n%s", out)
+	}
+}
+
+func envWithoutGOWORK() []string {
+	env := os.Environ()
+	filtered := env[:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GOWORK=") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	return filtered
 }
