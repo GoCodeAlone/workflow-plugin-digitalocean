@@ -622,6 +622,7 @@ func dbOutput(db *godo.Database) *interfaces.ResourceOutput {
 		"num_nodes": float64(db.NumNodes),
 		"region":    db.RegionSlug,
 		"size":      db.SizeSlug,
+		"status":    db.Status,
 		"tags":      tags,
 		"version":   db.VersionSlug,
 	}
