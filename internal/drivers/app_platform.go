@@ -1244,7 +1244,8 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		Type:       "infra.container_service",
 		ProviderID: app.ID,
 		Outputs: map[string]any{
-			"live_url": app.LiveURL,
+			"live_url":        app.LiveURL,
+			"default_ingress": app.DefaultIngress,
 			// `expose` is derived from the first service component:
 			// HTTPPort==0 with InternalPorts populated → "internal";
 			// otherwise "public". Stored on Outputs so Diff can detect
@@ -1288,10 +1289,72 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		},
 		Status: "running",
 	}
+	addDeploymentSlotOutputs(out.Outputs, "active", app.ActiveDeployment)
+	addDeploymentSlotOutputs(out.Outputs, "in_progress", app.InProgressDeployment)
+	addDeploymentSlotOutputs(out.Outputs, "pending", app.PendingDeployment)
+	if app.ActiveDeployment != nil {
+		if refs := activeDeploymentImageRefs(app.Spec); len(refs) > 0 {
+			out.Outputs["active_deployment_image_refs"] = refs
+		}
+	}
 	if app.ActiveDeployment == nil {
 		out.Status = "pending"
 	}
 	return out
+}
+
+func addDeploymentSlotOutputs(outputs map[string]any, slot string, dep *godo.Deployment) {
+	if dep == nil {
+		return
+	}
+	if dep.ID != "" {
+		outputs[slot+"_deployment_id"] = dep.ID
+	}
+	if dep.Phase != "" {
+		outputs[slot+"_deployment_phase"] = string(dep.Phase)
+	}
+}
+
+func activeDeploymentImageRefs(spec *godo.AppSpec) map[string]any {
+	if spec == nil {
+		return nil
+	}
+	refs := map[string]any{}
+	services := componentImageRefs(spec.Services, func(svc *godo.AppServiceSpec) (string, *godo.ImageSourceSpec) {
+		if svc == nil {
+			return "", nil
+		}
+		return svc.Name, svc.Image
+	})
+	if len(services) > 0 {
+		refs["services"] = services
+	}
+	workers := componentImageRefs(spec.Workers, func(worker *godo.AppWorkerSpec) (string, *godo.ImageSourceSpec) {
+		if worker == nil {
+			return "", nil
+		}
+		return worker.Name, worker.Image
+	})
+	if len(workers) > 0 {
+		refs["workers"] = workers
+	}
+	return refs
+}
+
+func componentImageRefs[T any](components []T, imageOf func(T) (string, *godo.ImageSourceSpec)) map[string]any {
+	refs := map[string]any{}
+	for _, component := range components {
+		name, image := imageOf(component)
+		if name == "" {
+			continue
+		}
+		ref := formatImageSpec(image)
+		if ref == "" {
+			continue
+		}
+		refs[name] = ref
+	}
+	return refs
 }
 
 // desiredRoutesCanonicalFromConfig converts cfg["routes"] into the same
