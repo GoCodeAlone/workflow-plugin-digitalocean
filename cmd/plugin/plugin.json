@@ -248,10 +248,9 @@
         "provider": "gitlab",
         "scopes": [
           "project",
-          "group",
-          "env"
+          "group"
         ],
-        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab."
+        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab; variables may also be narrowed with GitLab environment_scope."
       },
       {
         "provider": "vault",
