@@ -2801,3 +2801,125 @@ func TestAppPlatformDriver_appOutput_DoesNotLeakPlaintextSecrets(t *testing.T) {
 		t.Error("jobs_hash should be populated")
 	}
 }
+
+func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testing.T) {
+	app := &godo.App{
+		ID:             "app-uuid",
+		LiveURL:        "https://live.example.com",
+		DefaultIngress: "https://default.example.com",
+		Spec: &godo.AppSpec{
+			Name:   "snapshot-app",
+			Region: "nyc",
+			Services: []*godo.AppServiceSpec{
+				{
+					Name: "web",
+					Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
+						Repository:   "web",
+						Tag:          "sha-web",
+					},
+				},
+				{
+					Name: "admin",
+					Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+						Registry:     "acme",
+						Repository:   "admin",
+						Tag:          "sha-admin",
+					},
+				},
+			},
+			Workers: []*godo.AppWorkerSpec{
+				{
+					Name: "worker",
+					Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_DockerHub,
+						Registry:     "acme",
+						Repository:   "worker",
+						Tag:          "sha-worker",
+					},
+				},
+			},
+		},
+		ActiveDeployment:     &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active},
+		InProgressDeployment: &godo.Deployment{ID: "dep-progress", Phase: godo.DeploymentPhase_Deploying},
+		PendingDeployment:    &godo.Deployment{ID: "dep-pending", Phase: godo.DeploymentPhase_PendingBuild},
+	}
+
+	outputs := drivers.AppOutputForTest(app)
+	requireOutputString(t, outputs, "live_url", "https://live.example.com")
+	requireOutputString(t, outputs, "default_ingress", "https://default.example.com")
+	requireOutputString(t, outputs, "active_deployment_id", "dep-active")
+	requireOutputString(t, outputs, "active_deployment_phase", string(godo.DeploymentPhase_Active))
+	requireOutputString(t, outputs, "in_progress_deployment_id", "dep-progress")
+	requireOutputString(t, outputs, "in_progress_deployment_phase", string(godo.DeploymentPhase_Deploying))
+	requireOutputString(t, outputs, "pending_deployment_id", "dep-pending")
+	requireOutputString(t, outputs, "pending_deployment_phase", string(godo.DeploymentPhase_PendingBuild))
+
+	imageRefs, ok := outputs["active_deployment_image_refs"].(map[string]any)
+	if !ok {
+		t.Fatalf("active_deployment_image_refs = %T, want map[string]any", outputs["active_deployment_image_refs"])
+	}
+	services, ok := imageRefs["services"].(map[string]any)
+	if !ok {
+		t.Fatalf("active_deployment_image_refs.services = %T, want map[string]any", imageRefs["services"])
+	}
+	workers, ok := imageRefs["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("active_deployment_image_refs.workers = %T, want map[string]any", imageRefs["workers"])
+	}
+	if got := services["web"]; got != "registry.digitalocean.com/web/web:sha-web" {
+		t.Fatalf("services[web] = %v", got)
+	}
+	if got := services["admin"]; got != "ghcr.io/acme/admin:sha-admin" {
+		t.Fatalf("services[admin] = %v", got)
+	}
+	if got := workers["worker"]; got != "docker.io/acme/worker:sha-worker" {
+		t.Fatalf("workers[worker] = %v", got)
+	}
+}
+
+func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
+	app := &godo.App{
+		ID: "app-uuid",
+		Spec: &godo.AppSpec{
+			Name:   "pending-app",
+			Region: "nyc",
+			Services: []*godo.AppServiceSpec{
+				{
+					Name: "web",
+					Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
+						Repository:   "web",
+						Tag:          "sha-web",
+					},
+				},
+			},
+		},
+	}
+	outputs := drivers.AppOutputForTest(app)
+	for _, key := range []string{
+		"active_deployment_id",
+		"active_deployment_phase",
+		"in_progress_deployment_id",
+		"in_progress_deployment_phase",
+		"pending_deployment_id",
+		"pending_deployment_phase",
+		"active_deployment_image_refs",
+	} {
+		if _, ok := outputs[key]; ok {
+			t.Fatalf("output %q should be omitted when deployment slot is nil", key)
+		}
+	}
+}
+
+func requireOutputString(t *testing.T, outputs map[string]any, key, want string) {
+	t.Helper()
+	got, ok := outputs[key].(string)
+	if !ok {
+		t.Fatalf("%s = %T, want string", key, outputs[key])
+	}
+	if got != want {
+		t.Fatalf("%s = %q, want %q", key, got, want)
+	}
+}

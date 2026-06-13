@@ -34,6 +34,24 @@ wfctl infra plan   --env staging
 wfctl infra apply  --env staging
 ```
 
+## App Platform outputs
+
+`infra.container_service` reads expose App Platform ingress and deployment
+snapshot fields through `wfctl infra refresh-outputs` and `wfctl infra
+outputs`. Hosts should use these provider-owned outputs for staging URL and
+readiness decisions instead of calling DigitalOcean App Platform APIs directly.
+
+Key output fields include:
+
+| Output | Description |
+|--------|-------------|
+| `live_url` | App Platform live URL. |
+| `default_ingress` | Default App Platform ingress URL. |
+| `active_deployment_id`, `active_deployment_phase` | Current active deployment slot when present. |
+| `in_progress_deployment_id`, `in_progress_deployment_phase` | Current in-progress deployment slot when present. |
+| `pending_deployment_id`, `pending_deployment_phase` | Current pending deployment slot when present. |
+| `active_deployment_image_refs` | Active services/workers mapped by component name to canonical image refs. |
+
 ## DNS stale-record removal
 
 `infra.dns` is not authoritative for every record in a zone. Use `absent_records` to delete specific stale records while leaving unmanaged records intact.

@@ -81,6 +81,12 @@ canary traffic splitting.
 
 ## Operator notes
 
+- `wfctl infra refresh-outputs` followed by `wfctl infra outputs` returns the
+  provider-owned App Platform deployment snapshot for `infra.container_service`,
+  including `live_url`, `default_ingress`, active/in-progress/pending deployment
+  IDs and phases, and active service/worker image refs. Deployment hosts should
+  use those outputs for readiness and environment URL publication instead of
+  direct App Platform API calls.
 - The in-rollout availability probe meaningfully fires on the blue
   post-`SwitchTraffic` re-deploy. On the green/canary clone, no custom
   domains are attached, so the probe is a no-op there.
