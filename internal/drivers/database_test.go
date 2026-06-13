@@ -97,6 +97,9 @@ func TestDatabaseDriver_Create(t *testing.T) {
 	if out.Status != "online" {
 		t.Errorf("Status = %q, want %q", out.Status, "online")
 	}
+	if got := out.Outputs["status"]; got != "online" {
+		t.Errorf("Outputs[status] = %v, want online", got)
+	}
 	if host, _ := out.Outputs["host"].(string); host == "" {
 		t.Error("expected host in outputs")
 	}

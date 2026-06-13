@@ -52,6 +52,13 @@ Key output fields include:
 | `pending_deployment_id`, `pending_deployment_phase` | Current pending deployment slot when present. |
 | `active_deployment_image_refs` | Active services/workers mapped by component name to canonical image refs. |
 
+## Database outputs
+
+`infra.database` reads expose lifecycle status through `wfctl infra
+refresh-outputs` and `wfctl infra outputs`. Hosts can use the `status` output
+(`online` for healthy managed databases) without calling DigitalOcean database
+APIs directly.
+
 ## DNS stale-record removal
 
 `infra.dns` is not authoritative for every record in a zone. Use `absent_records` to delete specific stale records while leaving unmanaged records intact.
