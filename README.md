@@ -54,11 +54,10 @@ Key output fields include:
 
 ## App Platform workers
 
-For long-running non-HTTP processes that must share an App Platform internal
-network with a web service, declare them as nested `workers` on the parent
-`infra.container_service`. Do not model that workload as a separate
-`infra.container_service` with a fake `http_port`; DigitalOcean will treat that
-as an HTTP service and probe it as one.
+For long-running background processes that should run with an App Platform
+service, declare them as nested `workers` on the parent `infra.container_service`.
+Workers are for outbound/background work. They do not expose an inbound port, so
+do not use a worker for a process that another component must dial directly.
 
 ```yaml
 modules:
@@ -70,20 +69,35 @@ modules:
       image: registry.digitalocean.com/acme/web:${IMAGE_SHA}
       http_port: 8080
       env_vars:
-        WORKER_URL: nats://example-worker.internal:4222
+        QUEUE_NAME: image-jobs
       workers:
         - name: example-worker
           image: registry.digitalocean.com/acme/worker:${IMAGE_SHA}
           instance_count: 1
           env_vars:
-            WORKER_TOKEN: ${WORKER_TOKEN}
+            QUEUE_NAME: image-jobs
 ```
 
-DigitalOcean's `<component>.internal` DNS is scoped to components inside the
-same App. A web service can reach `example-worker.internal:4222` only when the
-worker is part of the same App spec. Standalone background workloads that do
-not need an in-App web sibling should still be modeled deliberately; this
-plugin does not expose a separate worker-only resource type today.
+If another component must connect to the process over the app's private network,
+model that process as an internal service instead:
+
+```yaml
+modules:
+  - name: internal-broker
+    type: infra.container_service
+    config:
+      provider: do-provider
+      name: internal-broker
+      image: registry.digitalocean.com/acme/broker:${IMAGE_SHA}
+      expose: internal
+      internal_ports:
+        - 4222
+```
+
+Sibling services and workers in the same DigitalOcean App can reach an internal
+service on its declared internal port. Standalone background workloads that do
+not need an in-App web sibling should still be modeled deliberately; this plugin
+does not expose a separate worker-only resource type today.
 
 ## Database outputs
 
