@@ -52,6 +52,39 @@ Key output fields include:
 | `pending_deployment_id`, `pending_deployment_phase` | Current pending deployment slot when present. |
 | `active_deployment_image_refs` | Active services/workers mapped by component name to canonical image refs. |
 
+## App Platform workers
+
+For long-running non-HTTP processes that must share an App Platform internal
+network with a web service, declare them as nested `workers` on the parent
+`infra.container_service`. Do not model that workload as a separate
+`infra.container_service` with a fake `http_port`; DigitalOcean will treat that
+as an HTTP service and probe it as one.
+
+```yaml
+modules:
+  - name: app
+    type: infra.container_service
+    config:
+      provider: do-provider
+      name: example-app
+      image: registry.digitalocean.com/acme/web:${IMAGE_SHA}
+      http_port: 8080
+      env_vars:
+        WORKER_URL: nats://example-worker.internal:4222
+      workers:
+        - name: example-worker
+          image: registry.digitalocean.com/acme/worker:${IMAGE_SHA}
+          instance_count: 1
+          env_vars:
+            WORKER_TOKEN: ${WORKER_TOKEN}
+```
+
+DigitalOcean's `<component>.internal` DNS is scoped to components inside the
+same App. A web service can reach `example-worker.internal:4222` only when the
+worker is part of the same App spec. Standalone background workloads that do
+not need an in-App web sibling should still be modeled deliberately; this
+plugin does not expose a separate worker-only resource type today.
+
 ## Database outputs
 
 `infra.database` reads expose lifecycle status through `wfctl infra
