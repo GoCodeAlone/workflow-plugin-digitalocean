@@ -1305,6 +1305,8 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 }
 
 func addDeploymentSlotOutputs(outputs map[string]any, emittedIDs map[string]struct{}, slot string, dep *godo.Deployment) {
+	outputs[slot+"_deployment_id"] = ""
+	outputs[slot+"_deployment_phase"] = ""
 	if dep == nil {
 		return
 	}
