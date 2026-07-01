@@ -2904,14 +2904,8 @@ func TestAppPlatformDriver_appOutput_OmitsDeploymentSlotAliases(t *testing.T) {
 	outputs := drivers.AppOutputForTest(app)
 	requireOutputString(t, outputs, "active_deployment_id", "dep-settled")
 	requireOutputString(t, outputs, "active_deployment_phase", string(godo.DeploymentPhase_Active))
-	for _, key := range []string{
-		"pending_deployment_id",
-		"pending_deployment_phase",
-	} {
-		if got, ok := outputs[key]; ok {
-			t.Fatalf("output %q = %v, want omitted because it aliases the active deployment", key, got)
-		}
-	}
+	requireOutputString(t, outputs, "pending_deployment_id", "")
+	requireOutputString(t, outputs, "pending_deployment_phase", "")
 }
 
 func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
@@ -2940,11 +2934,11 @@ func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
 		"in_progress_deployment_phase",
 		"pending_deployment_id",
 		"pending_deployment_phase",
-		"active_deployment_image_refs",
 	} {
-		if _, ok := outputs[key]; ok {
-			t.Fatalf("output %q should be omitted when deployment slot is nil", key)
-		}
+		requireOutputString(t, outputs, key, "")
+	}
+	if _, ok := outputs["active_deployment_image_refs"]; ok {
+		t.Fatal("active_deployment_image_refs should be omitted when active deployment is nil")
 	}
 }
 
