@@ -2879,6 +2879,41 @@ func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testin
 	}
 }
 
+func TestAppPlatformDriver_appOutput_OmitsDeploymentSlotAliases(t *testing.T) {
+	app := &godo.App{
+		ID: "app-uuid",
+		Spec: &godo.AppSpec{
+			Name:   "settled-app",
+			Region: "nyc",
+			Services: []*godo.AppServiceSpec{
+				{
+					Name: "web",
+					Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+						Registry:     "acme",
+						Repository:   "web",
+						Tag:          "sha-web",
+					},
+				},
+			},
+		},
+		ActiveDeployment:  &godo.Deployment{ID: "dep-settled", Phase: godo.DeploymentPhase_Active},
+		PendingDeployment: &godo.Deployment{ID: "dep-settled", Phase: godo.DeploymentPhase_PendingBuild},
+	}
+
+	outputs := drivers.AppOutputForTest(app)
+	requireOutputString(t, outputs, "active_deployment_id", "dep-settled")
+	requireOutputString(t, outputs, "active_deployment_phase", string(godo.DeploymentPhase_Active))
+	for _, key := range []string{
+		"pending_deployment_id",
+		"pending_deployment_phase",
+	} {
+		if got, ok := outputs[key]; ok {
+			t.Fatalf("output %q = %v, want omitted because it aliases the active deployment", key, got)
+		}
+	}
+}
+
 func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
 	app := &godo.App{
 		ID: "app-uuid",

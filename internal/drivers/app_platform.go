@@ -1289,9 +1289,10 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 		},
 		Status: "running",
 	}
-	addDeploymentSlotOutputs(out.Outputs, "active", app.ActiveDeployment)
-	addDeploymentSlotOutputs(out.Outputs, "in_progress", app.InProgressDeployment)
-	addDeploymentSlotOutputs(out.Outputs, "pending", app.PendingDeployment)
+	emittedDeploymentIDs := map[string]struct{}{}
+	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "active", app.ActiveDeployment)
+	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "in_progress", app.InProgressDeployment)
+	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "pending", app.PendingDeployment)
 	if app.ActiveDeployment != nil {
 		if refs := activeDeploymentImageRefs(app.Spec); len(refs) > 0 {
 			out.Outputs["active_deployment_image_refs"] = refs
@@ -1303,9 +1304,15 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 	return out
 }
 
-func addDeploymentSlotOutputs(outputs map[string]any, slot string, dep *godo.Deployment) {
+func addDeploymentSlotOutputs(outputs map[string]any, emittedIDs map[string]struct{}, slot string, dep *godo.Deployment) {
 	if dep == nil {
 		return
+	}
+	if dep.ID != "" {
+		if _, ok := emittedIDs[dep.ID]; ok {
+			return
+		}
+		emittedIDs[dep.ID] = struct{}{}
 	}
 	if dep.ID != "" {
 		outputs[slot+"_deployment_id"] = dep.ID
