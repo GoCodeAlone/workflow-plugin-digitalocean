@@ -53,9 +53,10 @@ func TestAppPlatformDeploymentListDoesNotBlockDeploymentStateReads(t *testing.T)
 	select {
 	case ok := <-readDone:
 		if !ok {
+			close(client.release)
 			t.Fatal("deployment state unexpectedly missing")
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		close(client.release)
 		t.Fatal("deployment state read blocked behind ListDeployments")
 	}

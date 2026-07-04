@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -84,7 +83,6 @@ type SpacesIaCStateStore struct {
 	client SpacesS3Client
 	bucket string
 	prefix string
-	mu     sync.Mutex
 }
 
 // NewSpacesIaCStateStore creates a Spaces/S3-compatible state store.

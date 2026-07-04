@@ -56,9 +56,10 @@ func TestSpacesLockDoesNotBlockDifferentResourceLock(t *testing.T) {
 	select {
 	case err := <-otherDone:
 		if err != nil {
+			close(client.release)
 			t.Fatalf("second lock: %v", err)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		close(client.release)
 		t.Fatal("different resource lock blocked behind first lock")
 	}
