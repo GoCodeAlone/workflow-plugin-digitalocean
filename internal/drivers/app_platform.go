@@ -698,38 +698,47 @@ func (d *AppPlatformDriver) clearUpdateDeploymentState(providerID string) {
 
 func (d *AppPlatformDriver) currentTargetDeployment(ctx context.Context, providerID string, app *godo.App) (*godo.Deployment, string, error) {
 	d.deploymentMu.Lock()
-	defer d.deploymentMu.Unlock()
 	state := d.waitingDeployments[providerID]
 	if state == nil {
+		d.deploymentMu.Unlock()
 		return nil, "", nil
 	}
+	previousActiveDeploymentID := state.previousActiveDeploymentID
+	targetDeploymentID := state.targetDeploymentID
 	if dep := selectUpdateDeployment(app, state.previousActiveDeploymentID); dep != nil {
 		if state.targetDeploymentID == "" || dep.ID == state.targetDeploymentID {
 			state.targetDeploymentID = dep.ID
-			return dep, state.previousActiveDeploymentID, nil
+			d.deploymentMu.Unlock()
+			return dep, previousActiveDeploymentID, nil
 		}
 		if dep.PreviousDeploymentID == state.targetDeploymentID {
 			state.targetDeploymentID = dep.ID
-			return dep, state.previousActiveDeploymentID, nil
+			d.deploymentMu.Unlock()
+			return dep, previousActiveDeploymentID, nil
 		}
 	}
+	d.deploymentMu.Unlock()
 	deployments, _, err := d.client.ListDeployments(ctx, providerID, &godo.ListOptions{Page: 1, PerPage: 20})
 	if err != nil {
-		return nil, state.previousActiveDeploymentID, fmt.Errorf("app platform health check %q: list deployments: %w", providerID, WrapGodoError(err))
+		return nil, previousActiveDeploymentID, fmt.Errorf("app platform health check %q: list deployments: %w", providerID, WrapGodoError(err))
 	}
 	for _, dep := range deployments {
 		if dep == nil {
 			continue
 		}
-		if state.targetDeploymentID != "" && dep.ID == state.targetDeploymentID {
-			return dep, state.previousActiveDeploymentID, nil
+		if targetDeploymentID != "" && dep.ID == targetDeploymentID {
+			return dep, previousActiveDeploymentID, nil
 		}
-		if state.targetDeploymentID == "" && isHistoricalUpdateDeployment(dep, state.previousActiveDeploymentID) {
-			state.targetDeploymentID = dep.ID
-			return dep, state.previousActiveDeploymentID, nil
+		if targetDeploymentID == "" && isHistoricalUpdateDeployment(dep, previousActiveDeploymentID) {
+			d.deploymentMu.Lock()
+			if state := d.waitingDeployments[providerID]; state != nil && state.targetDeploymentID == "" {
+				state.targetDeploymentID = dep.ID
+			}
+			d.deploymentMu.Unlock()
+			return dep, previousActiveDeploymentID, nil
 		}
 	}
-	return nil, state.previousActiveDeploymentID, nil
+	return nil, previousActiveDeploymentID, nil
 }
 
 // listDeploymentsFn is a function that returns the most recent deployment(s)
