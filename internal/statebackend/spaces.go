@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -84,7 +83,6 @@ type SpacesIaCStateStore struct {
 	client SpacesS3Client
 	bucket string
 	prefix string
-	mu     sync.Mutex
 }
 
 // NewSpacesIaCStateStore creates a Spaces/S3-compatible state store.
@@ -331,9 +329,6 @@ func (s *SpacesIaCStateStore) DeleteState(ctx context.Context, resourceID string
 // Lock creates a lock object for resourceID using S3 conditional writes (If-None-Match: *)
 // for atomic, race-free lock acquisition. Fails if the lock already exists.
 func (s *SpacesIaCStateStore) Lock(ctx context.Context, resourceID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := s.lockKey(resourceID)
 	body := []byte(time.Now().UTC().Format(time.RFC3339))
 	ifNoneMatch := "*"
@@ -356,9 +351,6 @@ func (s *SpacesIaCStateStore) Lock(ctx context.Context, resourceID string) error
 
 // Unlock removes the lock object for resourceID.
 func (s *SpacesIaCStateStore) Unlock(ctx context.Context, resourceID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := s.lockKey(resourceID)
 
 	// Verify lock exists.
