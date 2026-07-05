@@ -370,15 +370,15 @@ func (d *AppPrevalidatedRollingDriver) CreateGreen(ctx context.Context, image st
 	}
 	blueApp, err := d.blueDriver().getApp(ctx)
 	if err != nil {
-		return fmt.Errorf("app blue-green: get blue %q: %w", d.blueName, err)
+		return fmt.Errorf("app prevalidated rolling: get blue %q: %w", d.blueName, err)
 	}
 
 	greenSpec, err := cloneAppSpec(blueApp.Spec)
 	if err != nil {
-		return fmt.Errorf("app blue-green: clone blue spec %q: %w", d.blueName, err)
+		return fmt.Errorf("app prevalidated rolling: clone blue spec %q: %w", d.blueName, err)
 	}
 	if greenSpec == nil {
-		return fmt.Errorf("app blue-green: blue app %q has no app spec", d.blueName)
+		return fmt.Errorf("app prevalidated rolling: blue app %q has no app spec", d.blueName)
 	}
 	greenSpec.Name = d.blueName + "-green"
 	sanitizeClonedSpecForCreate(greenSpec)
@@ -391,7 +391,7 @@ func (d *AppPrevalidatedRollingDriver) CreateGreen(ctx context.Context, image st
 
 	greenApp, _, err := d.client.Create(ctx, &godo.AppCreateRequest{Spec: greenSpec})
 	if err != nil {
-		return fmt.Errorf("app blue-green: create green: %w", err)
+		return fmt.Errorf("app prevalidated rolling: create green: %w", err)
 	}
 	d.greenID = greenApp.ID
 	d.greenURL = greenApp.LiveURL
@@ -405,11 +405,11 @@ func (d *AppPrevalidatedRollingDriver) CreateGreen(ctx context.Context, image st
 // support weighted traffic splitting natively; this performs a full cutover.
 func (d *AppPrevalidatedRollingDriver) SwitchTraffic(ctx context.Context) error {
 	if d.greenID == "" {
-		return fmt.Errorf("app blue-green: CreateGreen must be called before SwitchTraffic")
+		return fmt.Errorf("app prevalidated rolling: CreateGreen must be called before SwitchTraffic")
 	}
 	greenImg, err := d.greenDriver().CurrentImage(ctx)
 	if err != nil {
-		return fmt.Errorf("app blue-green: get green image: %w", err)
+		return fmt.Errorf("app prevalidated rolling: get green image: %w", err)
 	}
 	if err := d.blueDriver().Update(ctx, greenImg); err != nil {
 		return err
@@ -421,10 +421,10 @@ func (d *AppPrevalidatedRollingDriver) SwitchTraffic(ctx context.Context) error 
 // DestroyBlue deletes the green clone (the temporary environment).
 func (d *AppPrevalidatedRollingDriver) DestroyBlue(ctx context.Context) error {
 	if d.greenID == "" {
-		return fmt.Errorf("app blue-green: no green app to destroy")
+		return fmt.Errorf("app prevalidated rolling: no green app to destroy")
 	}
 	if _, err := d.client.Delete(ctx, d.greenID); err != nil {
-		return fmt.Errorf("app blue-green: destroy green clone: %w", err)
+		return fmt.Errorf("app prevalidated rolling: destroy green clone: %w", err)
 	}
 	return nil
 }
@@ -432,7 +432,7 @@ func (d *AppPrevalidatedRollingDriver) DestroyBlue(ctx context.Context) error {
 // GreenEndpoint returns the live URL of the green App Platform app.
 func (d *AppPrevalidatedRollingDriver) GreenEndpoint(_ context.Context) (string, error) {
 	if d.greenURL == "" {
-		return "", fmt.Errorf("app blue-green: green endpoint not available (CreateGreen not called)")
+		return "", fmt.Errorf("app prevalidated rolling: green endpoint not available (CreateGreen not called)")
 	}
 	return d.greenURL, nil
 }
