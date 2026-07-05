@@ -262,9 +262,9 @@ func (d *AppDeployDriver) resolveAppID(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("app %q not found", d.appName)
 }
 
-// ─── AppBlueGreenDriver ───────────────────────────────────────────────────────
+// ─── AppPrevalidatedRollingDriver ─────────────────────────────────────────────
 
-// AppBlueGreenDriver implements module.BlueGreenDriver for DigitalOcean App Platform.
+// AppPrevalidatedRollingDriver implements module.BlueGreenDriver for DigitalOcean App Platform.
 //
 // Blue environment: the existing app identified by blueID.
 // Green environment: a new app created with the "-green" name suffix.
@@ -272,7 +272,7 @@ func (d *AppDeployDriver) resolveAppID(ctx context.Context) (string, error) {
 // SwitchTraffic is implemented by updating the blue app's spec with the green
 // image (making blue the new stable), then DestroyBlue removes the green clone.
 // The green app's live URL is returned from GreenEndpoint.
-type AppBlueGreenDriver struct {
+type AppPrevalidatedRollingDriver struct {
 	client      AppPlatformClient
 	regClient   RegistryClient
 	region      string
@@ -286,51 +286,83 @@ type AppBlueGreenDriver struct {
 	domainProbe AppPlatformDomainProbe // optional; nil → default HTTPS probe
 }
 
-// NewAppBlueGreenDriver creates a BlueGreenDriver for DO App Platform.
-func NewAppBlueGreenDriver(c AppPlatformClient, region, blueID, blueName string) *AppBlueGreenDriver {
-	return &AppBlueGreenDriver{client: c, region: region, blueID: blueID, blueName: blueName}
+// AppBlueGreenDriver is the legacy name retained for compatibility with
+// workflow-engine's still-legacy module.BlueGreenDriver interface.
+//
+// Deprecated: use AppPrevalidatedRollingDriver for new code.
+type AppBlueGreenDriver = AppPrevalidatedRollingDriver
+
+// NewAppPrevalidatedRollingDriver creates a prevalidated rolling driver for DO
+// App Platform.
+func NewAppPrevalidatedRollingDriver(c AppPlatformClient, region, blueID, blueName string) *AppPrevalidatedRollingDriver {
+	return &AppPrevalidatedRollingDriver{client: c, region: region, blueID: blueID, blueName: blueName}
 }
 
-// NewAppBlueGreenDriverWithRegistry creates a BlueGreenDriver with DOCR image
-// presence pre-flight. The registry client may be nil to skip the check.
-func NewAppBlueGreenDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, blueID, blueName string) *AppBlueGreenDriver {
-	return &AppBlueGreenDriver{client: c, regClient: r, region: region, blueID: blueID, blueName: blueName}
+// NewAppPrevalidatedRollingDriverWithRegistry creates a prevalidated rolling
+// driver with DOCR image presence pre-flight. The registry client may be nil to
+// skip the check.
+func NewAppPrevalidatedRollingDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, blueID, blueName string) *AppPrevalidatedRollingDriver {
+	return &AppPrevalidatedRollingDriver{client: c, regClient: r, region: region, blueID: blueID, blueName: blueName}
 }
 
-// NewAppBlueGreenDriverWithDomainProbe is like NewAppBlueGreenDriverWithRegistry
-// but also injects probe into both inner *AppDeployDriver instances created by
-// blueDriver()/greenDriver(). Intended for unit tests that need to substitute
-// the HTTPS probe.
-func NewAppBlueGreenDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppBlueGreenDriver {
-	d := NewAppBlueGreenDriverWithRegistry(c, r, region, blueID, blueName)
+// NewAppPrevalidatedRollingDriverWithDomainProbe is like
+// NewAppPrevalidatedRollingDriverWithRegistry but also injects probe into both
+// inner *AppDeployDriver instances created by blueDriver()/greenDriver().
+// Intended for unit tests that need to substitute the HTTPS probe.
+func NewAppPrevalidatedRollingDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppPrevalidatedRollingDriver {
+	d := NewAppPrevalidatedRollingDriverWithRegistry(c, r, region, blueID, blueName)
 	d.domainProbe = probe
 	return d
 }
 
+// NewAppBlueGreenDriver creates a legacy-named BlueGreenDriver for DO App
+// Platform.
+//
+// Deprecated: use NewAppPrevalidatedRollingDriver.
+func NewAppBlueGreenDriver(c AppPlatformClient, region, blueID, blueName string) *AppPrevalidatedRollingDriver {
+	return NewAppPrevalidatedRollingDriver(c, region, blueID, blueName)
+}
+
+// NewAppBlueGreenDriverWithRegistry creates a legacy-named BlueGreenDriver with
+// DOCR image presence pre-flight.
+//
+// Deprecated: use NewAppPrevalidatedRollingDriverWithRegistry.
+func NewAppBlueGreenDriverWithRegistry(c AppPlatformClient, r RegistryClient, region, blueID, blueName string) *AppPrevalidatedRollingDriver {
+	return NewAppPrevalidatedRollingDriverWithRegistry(c, r, region, blueID, blueName)
+}
+
+// NewAppBlueGreenDriverWithDomainProbe creates a legacy-named BlueGreenDriver
+// with an injected custom-domain probe for tests.
+//
+// Deprecated: use NewAppPrevalidatedRollingDriverWithDomainProbe.
+func NewAppBlueGreenDriverWithDomainProbe(c AppPlatformClient, r RegistryClient, region, blueID, blueName string, probe AppPlatformDomainProbe) *AppPrevalidatedRollingDriver {
+	return NewAppPrevalidatedRollingDriverWithDomainProbe(c, r, region, blueID, blueName, probe)
+}
+
 // DeployDriver methods delegate to the blue (stable) app.
 
-func (d *AppBlueGreenDriver) Update(ctx context.Context, image string) error {
+func (d *AppPrevalidatedRollingDriver) Update(ctx context.Context, image string) error {
 	return d.blueDriver().Update(ctx, image)
 }
 
-func (d *AppBlueGreenDriver) HealthCheck(ctx context.Context, path string) error {
+func (d *AppPrevalidatedRollingDriver) HealthCheck(ctx context.Context, path string) error {
 	if d.greenID != "" && !d.stableCheck {
 		return d.greenDriver().HealthCheck(ctx, path)
 	}
 	return d.blueDriver().HealthCheck(ctx, path)
 }
 
-func (d *AppBlueGreenDriver) CurrentImage(ctx context.Context) (string, error) {
+func (d *AppPrevalidatedRollingDriver) CurrentImage(ctx context.Context) (string, error) {
 	return d.blueDriver().CurrentImage(ctx)
 }
 
-func (d *AppBlueGreenDriver) ReplicaCount(ctx context.Context) (int, error) {
+func (d *AppPrevalidatedRollingDriver) ReplicaCount(ctx context.Context) (int, error) {
 	return d.blueDriver().ReplicaCount(ctx)
 }
 
 // CreateGreen creates a new App Platform app with the "-green" name suffix and
 // the given image, recording the green app ID and live URL for later use.
-func (d *AppBlueGreenDriver) CreateGreen(ctx context.Context, image string) error {
+func (d *AppPrevalidatedRollingDriver) CreateGreen(ctx context.Context, image string) error {
 	if d.regClient != nil {
 		if err := verifyImagePresentInDOCR(ctx, d.regClient, image); err != nil {
 			return err
@@ -371,7 +403,7 @@ func (d *AppBlueGreenDriver) CreateGreen(ctx context.Context, image string) erro
 // SwitchTraffic updates the blue app spec to use the green image, effectively
 // promoting the green version as the stable app. DO App Platform does not
 // support weighted traffic splitting natively; this performs a full cutover.
-func (d *AppBlueGreenDriver) SwitchTraffic(ctx context.Context) error {
+func (d *AppPrevalidatedRollingDriver) SwitchTraffic(ctx context.Context) error {
 	if d.greenID == "" {
 		return fmt.Errorf("app blue-green: CreateGreen must be called before SwitchTraffic")
 	}
@@ -387,7 +419,7 @@ func (d *AppBlueGreenDriver) SwitchTraffic(ctx context.Context) error {
 }
 
 // DestroyBlue deletes the green clone (the temporary environment).
-func (d *AppBlueGreenDriver) DestroyBlue(ctx context.Context) error {
+func (d *AppPrevalidatedRollingDriver) DestroyBlue(ctx context.Context) error {
 	if d.greenID == "" {
 		return fmt.Errorf("app blue-green: no green app to destroy")
 	}
@@ -398,14 +430,14 @@ func (d *AppBlueGreenDriver) DestroyBlue(ctx context.Context) error {
 }
 
 // GreenEndpoint returns the live URL of the green App Platform app.
-func (d *AppBlueGreenDriver) GreenEndpoint(_ context.Context) (string, error) {
+func (d *AppPrevalidatedRollingDriver) GreenEndpoint(_ context.Context) (string, error) {
 	if d.greenURL == "" {
 		return "", fmt.Errorf("app blue-green: green endpoint not available (CreateGreen not called)")
 	}
 	return d.greenURL, nil
 }
 
-func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
+func (d *AppPrevalidatedRollingDriver) blueDriver() *AppDeployDriver {
 	if d.blueDeploy == nil {
 		d.blueDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.blueID, d.blueName)
 		d.blueDeploy.domainProbe = d.domainProbe
@@ -413,7 +445,7 @@ func (d *AppBlueGreenDriver) blueDriver() *AppDeployDriver {
 	return d.blueDeploy
 }
 
-func (d *AppBlueGreenDriver) greenDriver() *AppDeployDriver {
+func (d *AppPrevalidatedRollingDriver) greenDriver() *AppDeployDriver {
 	if d.greenDeploy == nil {
 		d.greenDeploy = NewAppDeployDriverWithRegistry(d.client, d.regClient, d.region, d.greenID, d.blueName+"-green")
 		d.greenDeploy.domainProbe = d.domainProbe

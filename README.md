@@ -140,7 +140,7 @@ The nested shape matches Workflow DNS replay fixtures while keeping existing fla
 
 ## Deployment strategies
 
-- [Deployment strategies](docs/DEPLOYMENT_STRATEGIES.md) — what `AppDeployDriver`, `AppBlueGreenDriver`, and `AppCanaryDriver` actually do on DO App Platform, including the in-rollout availability probe and the InstanceCount<2 single-instance non-guarantee.
+- [Deployment strategies](docs/DEPLOYMENT_STRATEGIES.md) — what `AppDeployDriver`, `AppPrevalidatedRollingDriver` / legacy `AppBlueGreenDriver`, and `AppCanaryDriver` actually do on DO App Platform, including the in-rollout availability probe, the InstanceCount<2 single-instance non-guarantee, and when true front-door blue/green requires DO Load Balancer + Droplets or an external proxy.
 
 ## Requirements
 
