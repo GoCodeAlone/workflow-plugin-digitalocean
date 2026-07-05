@@ -21,6 +21,16 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ## [Unreleased]
 
+### Changed
+
+- **App Platform deployment strategy naming** — the legacy
+  `AppBlueGreenDriver` implementation now has the accurate exported name
+  `AppPrevalidatedRollingDriver`, with deprecated aliases kept for
+  compatibility while workflow-engine still exposes `module.BlueGreenDriver`.
+  Strategy docs now distinguish App Platform rolling, prevalidated rolling, and
+  true front-door blue/green via DO Load Balancer + Droplets or an external
+  proxy.
+
 ### Added
 
 - README verified-status banner per workflow#714 (multi-repo QoL sweep).

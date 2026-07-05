@@ -6,11 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GoCodeAlone/workflow/module"
 	"github.com/digitalocean/godo"
 )
 
 // White-box tests for unexported helpers and driver state. Black-box public-
 // API tests live in deploy_test.go (package drivers_test).
+
+var _ module.BlueGreenDriver = (*AppPrevalidatedRollingDriver)(nil)
 
 // ─── Issue #159: sanitizeClonedSpecForCreate scope boundaries ────────────────
 

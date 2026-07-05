@@ -194,13 +194,13 @@ func (p *DOProvider) ProvideDeployDriver(resourceName string) module.DeployDrive
 	return drivers.NewAppDeployDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
 }
 
-// ProvideBlueGreenDriver exposes App Platform blue/green deployment support to
-// Workflow deployment steps.
+// ProvideBlueGreenDriver exposes App Platform prevalidated rolling deployment
+// support through workflow-engine's legacy BlueGreenDriver interface.
 func (p *DOProvider) ProvideBlueGreenDriver(resourceName string) module.BlueGreenDriver {
 	if p.client == nil || resourceName == "" {
 		return nil
 	}
-	return drivers.NewAppBlueGreenDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
+	return drivers.NewAppPrevalidatedRollingDriverWithRegistry(p.client.Apps, p.client.Registry, p.region, "", resourceName)
 }
 
 // ProvideCanaryDriver exposes App Platform canary lifecycle support. App
