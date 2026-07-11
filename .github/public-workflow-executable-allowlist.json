@@ -1,0 +1,17 @@
+[
+  {
+    "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
+    "sha256": "70e11769b5fb383157275d205f9d44381bff2f06bab42ec9f9d2334f4943649b",
+    "rationale": "Enforces the credential-free public workflow boundary before other CI proof."
+  },
+  {
+    "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
+    "sha256": "048bfc526dfd83ae7091ea91127325e54304d77dd432bb160245ef54f8466e2e",
+    "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
+  },
+  {
+    "path": "scripts/workflow-iac-host-conformance.sh",
+    "sha256": "5066dea5a461524cbda244f7ca00cdd85127457406af9966fd638d3648fd276a",
+    "rationale": "Runs credential-free released-engine host conformance for the provider plugin."
+  }
+]

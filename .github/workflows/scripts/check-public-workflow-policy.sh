@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 allowlist="${repo_root}/.github/public-workflow-secret-allowlist.json"
+executable_allowlist="${repo_root}/.github/public-workflow-executable-allowlist.json"
 workflows=()
 
 while [[ $# -gt 0 ]]; do
@@ -10,6 +11,11 @@ while [[ $# -gt 0 ]]; do
     --allowlist)
       [[ $# -ge 2 ]] || { echo "--allowlist requires a path" >&2; exit 2; }
       allowlist="$2"
+      shift 2
+      ;;
+    --executable-allowlist)
+      [[ $# -ge 2 ]] || { echo "--executable-allowlist requires a path" >&2; exit 2; }
+      executable_allowlist="$2"
       shift 2
       ;;
     --)
@@ -46,6 +52,7 @@ cat >"${scanner}" <<'GO'
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +68,12 @@ import (
 type allowEntry struct {
 	Path      string `json:"path"`
 	Secret    string `json:"secret"`
+	Rationale string `json:"rationale"`
+}
+
+type executableEntry struct {
+	Path string `json:"path"`
+	SHA256 string `json:"sha256"`
 	Rationale string `json:"rationale"`
 }
 
@@ -173,11 +186,43 @@ var (
 	githubRunnerRE = regexp.MustCompile(`^(ubuntu-(latest|[0-9]{2}\.[0-9]{2})(-arm)?|windows-(latest|[0-9]{4})|macos-(latest|[0-9]{2})(-(large|xlarge))?)$`)
 	secretIndexRE  = regexp.MustCompile(`(?i)secrets\[[^]\r\n]+\]`)
 	secretWildcardRE = regexp.MustCompile(`(?i)secrets\.\*`)
+	wholeSecretsRE = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])secrets([^A-Za-z0-9_.\[]|$)`)
 	literalSecretIndexRE = regexp.MustCompile(`(?i)^secrets\[[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*\]$`)
 	varsRefRE      = regexp.MustCompile(`(?i)vars(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[[[:space:]]*['"]([A-Za-z_][A-Za-z0-9_]*)['"][[:space:]]*\])`)
 	varsIndexRE    = regexp.MustCompile(`(?i)vars\[[^]\r\n]+\]`)
 	literalVarsIndexRE = regexp.MustCompile(`(?i)^vars\[[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*\]$`)
+	dynamicCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)["']?\$(\{)?[A-Za-z_][A-Za-z0-9_]*`)
+	evalCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)eval([[:space:]]|$)`)
+	shellCCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)(bash|sh)[[:space:]]+-c([[:space:]]|$)`)
 )
+
+func validateEnvValues(prefix string, node *yaml.Node, findings *findingSet) {
+	if node == nil {
+		return
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == "env" && node.Content[i+1].Kind == yaml.MappingNode {
+				env := node.Content[i+1]
+				for j := 0; j+1 < len(env.Content); j += 2 {
+					value := env.Content[j+1].Value
+					if match := providerCLIRE.FindStringSubmatch(value); match != nil {
+						findings.add("%s environment value contains provider CLI %s", prefix, match[2])
+					}
+					if match := providerAPIRE.FindStringSubmatch(value); match != nil {
+						findings.add("%s environment value contains provider API %s", prefix, match[1])
+					}
+					if providerSDKRE.MatchString(value) {
+						findings.add("%s environment value contains provider SDK marker", prefix)
+					}
+				}
+			}
+		}
+	}
+	for _, child := range node.Content {
+		validateEnvValues(prefix, child, findings)
+	}
+}
 
 func secretReferences(node *yaml.Node) map[string]bool {
 	values := []string{}
@@ -211,6 +256,9 @@ func validateCredentialSelectors(prefix string, node *yaml.Node, findings *findi
 	values := []string{}
 	scalars(node, &values)
 	for _, value := range values {
+		if wholeSecretsRE.MatchString(value) {
+			findings.add("%s uses forbidden whole secrets context", prefix)
+		}
 		for _, selector := range secretWildcardRE.FindAllString(value, -1) {
 			findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
 		}
@@ -377,6 +425,25 @@ func pathEscapes(rel string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
 }
 
+func scriptCommands(line string) []string {
+	segments := regexp.MustCompile(`[;&]+|[[:space:]]+\|[[:space:]]+|\|\|`).Split(line, -1)
+	result := []string{}
+	for _, segment := range segments {
+		fields := strings.Fields(strings.TrimSpace(segment))
+		if len(fields) == 0 { continue }
+		i := 0
+		if fields[i] == "if" || fields[i] == "then" || fields[i] == "sudo" || fields[i] == "env" { i++ }
+		if i >= len(fields) { continue }
+		if fields[i] == "bash" || fields[i] == "sh" || fields[i] == "source" || fields[i] == "." { i++ }
+		if i >= len(fields) { continue }
+		candidate := strings.Trim(fields[i], `"'`)
+		if strings.HasPrefix(candidate, "./") || strings.HasPrefix(candidate, "../") || filepath.IsAbs(candidate) {
+			result = append(result, candidate)
+		}
+	}
+	return result
+}
+
 func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, error) {
 	abs, err := filepath.Abs(workflowPath)
 	if err != nil {
@@ -404,8 +471,8 @@ func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, err
 }
 
 func main() {
-	if len(os.Args) < 4 || os.Args[1] != "--repo" || os.Args[3] != "--allowlist" {
-		fmt.Fprintln(os.Stderr, "usage: scanner --repo ROOT --allowlist FILE WORKFLOW...")
+	if len(os.Args) < 8 || os.Args[1] != "--repo" || os.Args[3] != "--allowlist" || os.Args[5] != "--executables" {
+		fmt.Fprintln(os.Stderr, "usage: scanner --repo ROOT --allowlist FILE --executables FILE WORKFLOW...")
 		os.Exit(2)
 	}
 	repoRoot, err := filepath.Abs(os.Args[2])
@@ -419,7 +486,8 @@ func main() {
 		os.Exit(2)
 	}
 	allowPath := os.Args[4]
-	workflowArgs := os.Args[5:]
+	executablePath := os.Args[6]
+	workflowArgs := os.Args[7:]
 
 	allowFile, err := os.Open(allowPath)
 	if err != nil {
@@ -436,6 +504,32 @@ func main() {
 	}
 
 	findings := &findingSet{}
+	executableFile, err := os.Open(executablePath)
+	if err != nil { fmt.Fprintf(os.Stderr, "read executable allowlist: %v\n", err); os.Exit(1) }
+	defer executableFile.Close()
+	var executableList []executableEntry
+	executableDecoder := json.NewDecoder(executableFile)
+	executableDecoder.DisallowUnknownFields()
+	if err := executableDecoder.Decode(&executableList); err != nil { fmt.Fprintf(os.Stderr, "parse executable allowlist: %v\n", err); os.Exit(1) }
+	executables := make(map[string]executableEntry)
+	executableReferenced := make(map[string]bool)
+	for _, entry := range executableList {
+		rawPath := strings.TrimSpace(entry.Path)
+		slashPath := strings.ReplaceAll(rawPath, "\\", "/")
+		if filepath.IsAbs(rawPath) || path.IsAbs(slashPath) || filepath.VolumeName(rawPath) != "" || slashPath == ".." || strings.HasPrefix(path.Clean(slashPath), "../") {
+			findings.add("executable allowlist path %s escapes the repository", rawPath); continue
+		}
+		entry.Path = path.Clean(slashPath)
+		if strings.TrimSpace(entry.Rationale) == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.SHA256) { findings.add("invalid executable allowlist entry %s", entry.Path); continue }
+		abs := filepath.Join(repoRoot, filepath.FromSlash(entry.Path))
+		rel, pathErr := normalizePath(repoRoot, resolvedRepoRoot, abs)
+		if pathErr != nil { findings.add("executable allowlist %v", pathErr); continue }
+		data, readErr := os.ReadFile(abs)
+		if readErr != nil { findings.add("read executable %s: %v", rel, readErr); continue }
+		actual := fmt.Sprintf("%x", sha256.Sum256(data))
+		if actual != entry.SHA256 { findings.add("executable hash mismatch for %s", entry.Path) }
+		executables[entry.Path] = entry
+	}
 	allowed := make(map[string]allowEntry)
 	for _, entry := range allowlist {
 		rawPath := strings.TrimSpace(entry.Path)
@@ -486,6 +580,7 @@ func main() {
 		}
 		root := doc.Content[0]
 		checkPermissions("workflow "+rel, mappingValue(root, "permissions"), findings)
+		validateEnvValues("workflow "+rel, root, findings)
 		credentialVariables := make(map[string]bool)
 		knownCredentialVariables(root, credentialVariables)
 		for name := range credentialVariables {
@@ -517,6 +612,7 @@ func main() {
 			checkRunnerSelector(prefix, mappingValue(job, "runs-on"), findings)
 
 			checkPermissions(prefix, mappingValue(job, "permissions"), findings)
+			validateEnvValues(prefix, job, findings)
 
 			jobSecrets := make(map[string]bool)
 			for secret := range globalSecrets {
@@ -554,6 +650,31 @@ func main() {
 					}
 					for _, line := range strings.Split(run.Value, "\n") {
 						trimmed := strings.TrimSpace(line)
+						for _, command := range scriptCommands(trimmed) {
+							candidate := command
+							if !filepath.IsAbs(candidate) { candidate = filepath.Join(repoRoot, candidate) }
+							abs, _ := filepath.Abs(candidate)
+							lexicalRel, _ := filepath.Rel(repoRoot, abs)
+							if pathEscapes(lexicalRel) {
+								findings.add("%s workflow executable path %s is outside repository", prefix, command)
+								continue
+							}
+							scriptRel := filepath.ToSlash(lexicalRel)
+							if _, ok := executables[scriptRel]; !ok {
+								findings.add("%s invokes unallowlisted executable script %s", prefix, command)
+							} else {
+								executableReferenced[scriptRel] = true
+							}
+						}
+						if dynamicCommandRE.MatchString(trimmed) {
+							findings.add("%s uses forbidden dynamic command execution", prefix)
+						}
+						if evalCommandRE.MatchString(trimmed) {
+							findings.add("%s uses forbidden eval", prefix)
+						}
+						if shellCCommandRE.MatchString(trimmed) {
+							findings.add("%s uses forbidden shell -c", prefix)
+						}
 						if trimmed == "" || strings.HasPrefix(trimmed, "#") || lineIsNegativeGuard(trimmed) {
 							continue
 						}
@@ -609,6 +730,9 @@ func main() {
 			findings.add("stale allowlist entry %s in %s", entry.Secret, entry.Path)
 		}
 	}
+	for key := range executables {
+		if !executableReferenced[key] { findings.add("stale executable allowlist entry %s", key) }
+	}
 
 	if len(findings.items) > 0 {
 		sort.Strings(findings.items)
@@ -621,4 +745,4 @@ func main() {
 }
 GO
 
-GOWORK=off go run "${scanner}" --repo "${repo_root}" --allowlist "${allowlist}" "${workflows[@]}"
+GOWORK=off go run "${scanner}" --repo "${repo_root}" --allowlist "${allowlist}" --executables "${executable_allowlist}" "${workflows[@]}"

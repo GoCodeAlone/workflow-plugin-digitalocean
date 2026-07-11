@@ -2,11 +2,19 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-checker="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
+checker_binary="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 fixtures="${repo_root}/.github/workflows/scripts/fixtures/public-workflow-policy"
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 trap 'rm -rf "${tmp_dir}"' EXIT
 export TMPDIR="${tmp_dir}"
+fixture_executables="${tmp_dir}/fixture-executables.json"
+printf '[]\n' >"${fixture_executables}"
+checker="${tmp_dir}/check-public-workflow-policy.sh"
+cat >"${checker}" <<EOF
+#!/usr/bin/env bash
+exec "${checker_binary}" --executable-allowlist "${fixture_executables}" "\$@"
+EOF
+chmod +x "${checker}"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 cat >"${pass_allowlist}" <<'JSON'
@@ -85,6 +93,35 @@ done
 
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
+executable_escape="${tmp_dir}/executable-escape.sh"
+ln -s /dev/null "${executable_escape}"
+executable_escape_rel="${executable_escape#"${repo_root}/"}"
+invalid_executables="${tmp_dir}/invalid-executables.json"
+cat >"${invalid_executables}" <<EOF
+[
+  {"path":"scripts/workflow-iac-host-conformance.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Hash mismatch and stale-entry mutation fixture."},
+  {"path":"../escape.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Traversal mutation fixture."},
+  {"path":"${executable_escape_rel}","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Symlink escape mutation fixture."}
+]
+EOF
+set +e
+executable_integrity_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  --executable-allowlist "${invalid_executables}" \
+  "${fixtures}/pass-negative-guard.yml" 2>&1)"
+executable_integrity_status=$?
+set -e
+for expected in \
+  "executable hash mismatch for scripts/workflow-iac-host-conformance.sh" \
+  "stale executable allowlist entry scripts/workflow-iac-host-conformance.sh" \
+  "executable allowlist path ../escape.sh escapes the repository" \
+  "resolves outside repository"; do
+  if [[ "${executable_integrity_status}" -eq 0 ]] || ! grep -Fq -- "${expected}" <<<"${executable_integrity_output}"; then
+    echo "missing expected executable integrity diagnostic: ${expected}" >&2
+    printf '%s\n' "${executable_integrity_output}" >&2
+    exit 1
+  fi
+done
 
 set +e
 permissions_output="$(TMPDIR="${tmp_dir}" "${checker}" \
@@ -127,10 +164,57 @@ for expected in \
   "dynamic secret selector secrets[format('{0}_TOKEN', vars.PROVIDER)]" \
   "dynamic secret selector secrets[vars.DIGITALOCEAN_TOKEN]" \
   "dynamic secret selector secrets.*" \
+  "whole secrets context" \
   "known cloud credential variable reference DIGITALOCEAN_TOKEN"; do
   if ! grep -Fq -- "${expected}" <<<"${dynamic_secrets_output}"; then
     echo "missing expected dynamic credential diagnostic: ${expected}" >&2
     printf '%s\n' "${dynamic_secrets_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+env_indirection_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-env-indirection.yml" 2>&1)"
+env_indirection_status=$?
+set -e
+
+if [[ "${env_indirection_status}" -eq 0 ]]; then
+  echo "expected provider environment and dynamic command indirection to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "environment value contains provider CLI doctl" \
+  "environment value contains provider API api.digitalocean.com" \
+  "environment value contains provider SDK marker" \
+  "dynamic command execution" \
+  "forbidden eval" \
+  "forbidden shell -c"; do
+  if ! grep -Fq -- "${expected}" <<<"${env_indirection_output}"; then
+    echo "missing expected environment indirection diagnostic: ${expected}" >&2
+    printf '%s\n' "${env_indirection_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+script_execution_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-script-execution.yml" 2>&1)"
+script_execution_status=$?
+set -e
+
+if [[ "${script_execution_status}" -eq 0 ]]; then
+  echo "expected unreviewed committed script execution to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "unallowlisted executable script ./scripts/unreviewed.sh" \
+  "workflow executable path ../escape.sh is outside repository"; do
+  if ! grep -Fq -- "${expected}" <<<"${script_execution_output}"; then
+    echo "missing expected executable script diagnostic: ${expected}" >&2
+    printf '%s\n' "${script_execution_output}" >&2
     exit 1
   fi
 done
