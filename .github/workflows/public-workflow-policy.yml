@@ -1,0 +1,43 @@
+name: Public Workflow Policy
+
+# Bootstrap note: the PR that first introduces this workflow cannot be guarded
+# by a workflow absent from its base branch. Once merged, pull_request_target
+# always runs the trusted base copy and treats the candidate checkout as data.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted base policy
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out candidate as data only
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Set up Go for the trusted analyzer
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: trusted/.github/workflows/policytool/go.mod
+          cache: false
+
+      - name: Scan candidate workflows with trusted base policy
+        run: cd trusted && ./.github/workflows/scripts/check-public-workflow-policy.sh --scan-root "${GITHUB_WORKSPACE}/candidate"

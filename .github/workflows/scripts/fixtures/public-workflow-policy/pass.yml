@@ -24,6 +24,8 @@ jobs:
       - uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697
       - name: Exercise local integration boundary
         run: GOWORK=off go test -tags=integration ./internal/local/...
+      - name: Exact safe assignment
+        run: SAFE_VALUE=one
       - name: Reject provider dependencies
         run: |
           if rg 'github.com/digitalocean/godo|api.digitalocean.com|doctl' core/; then

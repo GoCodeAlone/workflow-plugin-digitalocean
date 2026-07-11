@@ -29,18 +29,30 @@ type executableEntry struct {
 	Rationale string `json:"rationale"`
 }
 
+func trustedPolicyExecutable(executablePath string) bool {
+	switch executablePath {
+	case ".github/workflows/scripts/check-public-workflow-policy.sh",
+		".github/workflows/scripts/test-public-workflow-policy.sh":
+		return true
+	default:
+		return false
+	}
+}
+
 type commandEntry struct {
 	Path            string `json:"path"`
 	Command         string `json:"command"`
 	StatementSHA256 string `json:"statementSHA256"`
+	ContextSHA256   string `json:"contextSHA256"`
 	Rationale       string `json:"rationale"`
 }
 
 type actionEntry struct {
-	Path       string `json:"path"`
-	Uses       string `json:"uses"`
-	NodeSHA256 string `json:"nodeSHA256"`
-	Rationale  string `json:"rationale"`
+	Path          string `json:"path"`
+	Uses          string `json:"uses"`
+	NodeSHA256    string `json:"nodeSHA256"`
+	ContextSHA256 string `json:"contextSHA256"`
+	Rationale     string `json:"rationale"`
 }
 
 type findingSet struct {
@@ -122,6 +134,78 @@ func validateYAMLStructure(prefix string, node *yaml.Node, findings *findingSet)
 	for _, child := range node.Content {
 		validateYAMLStructure(prefix, child, findings)
 	}
+}
+
+func executionAffectingEnv(name string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	exact := map[string]bool{
+		"PATH": true, "BASH_ENV": true, "ENV": true, "SHELLOPTS": true,
+		"LD_PRELOAD": true, "NODE_OPTIONS": true, "PYTHONPATH": true,
+		"PYTHONHOME": true, "RUBYOPT": true, "PERL5OPT": true,
+		"PERL5LIB": true, "HOME": true, "IFS": true, "CDPATH": true,
+		"CC": true, "CXX": true, "AR": true, "LD": true,
+		"GOROOT": true, "GOPATH": true, "GOENV": true, "GOFLAGS": true,
+		"GOTOOLCHAIN": true, "LD_LIBRARY_PATH": true, "DYLD_LIBRARY_PATH": true,
+		"LIBRARY_PATH": true, "CPATH": true, "C_INCLUDE_PATH": true,
+		"CPLUS_INCLUDE_PATH": true, "OBJC_INCLUDE_PATH": true,
+		"PKG_CONFIG_PATH": true, "RUSTFLAGS": true, "RUSTC_WRAPPER": true,
+		"JAVA_TOOL_OPTIONS": true, "_JAVA_OPTIONS": true, "MAVEN_OPTS": true,
+		"GRADLE_OPTS": true, "GEM_HOME": true, "GEM_PATH": true,
+		"BUNDLE_GEMFILE": true, "PATHEXT": true, "SHELL": true,
+		"BASHOPTS": true, "PROMPT_COMMAND": true, "PS4": true,
+		"CFLAGS": true, "CXXFLAGS": true, "CPPFLAGS": true, "LDFLAGS": true,
+		"AS": true, "FC": true, "F77": true, "RANLIB": true, "STRIP": true,
+		"OBJC": true, "OBJCXX": true, "SDKROOT": true,
+		"MACOSX_DEPLOYMENT_TARGET": true, "JAVA_HOME": true,
+		"JDK_JAVA_OPTIONS": true, "CARGO_HOME": true, "CARGO_TARGET_DIR": true,
+		"CARGO_ENCODED_RUSTFLAGS": true, "ZDOTDIR": true,
+	}
+	if exact[name] {
+		return true
+	}
+	for _, prefix := range []string{
+		"DYLD_", "LD_", "GIT_", "NPM_CONFIG_", "NODE_", "PYTHON",
+		"RUBY", "PERL", "RUST", "CGO_",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	if strings.HasPrefix(name, "GO") && name != "GOPRIVATE" {
+		return true
+	}
+	return false
+}
+
+func checkWorkingDirectory(prefix string, node *yaml.Node, findings *findingSet) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	if mappingValue(node, "working-directory") != nil {
+		findings.add("%s declares forbidden working-directory", prefix)
+	}
+	if run := mappingValue(mappingValue(node, "defaults"), "run"); run != nil && mappingValue(run, "working-directory") != nil {
+		findings.add("%s declares forbidden defaults.run.working-directory", prefix)
+	}
+}
+
+func checkJobRuntime(prefix string, job *yaml.Node, findings *findingSet) {
+	if job == nil || job.Kind != yaml.MappingNode {
+		return
+	}
+	if mappingValue(job, "container") != nil {
+		findings.add("%s declares forbidden job container", prefix)
+	}
+	if mappingValue(job, "services") != nil {
+		findings.add("%s declares forbidden job services", prefix)
+	}
+}
+
+func authorizationContextDigest(workflow, job, step *yaml.Node) string {
+	var canonical bytes.Buffer
+	canonicalYAMLNode(&canonical, workflow)
+	digest := sha256.Sum256(canonical.Bytes())
+	return fmt.Sprintf("%x", digest)
 }
 
 func scalars(node *yaml.Node, out *[]string) {
@@ -295,6 +379,10 @@ func envValues(prefix string, env *yaml.Node, allowDenyPattern bool, findings *f
 	for i := 0; i+1 < len(env.Content); i += 2 {
 		name := env.Content[i].Value
 		valueNode := env.Content[i+1]
+		literalValue := valueNode.Kind == yaml.ScalarNode && !strings.Contains(valueNode.Value, "${{")
+		if executionAffectingEnv(name) && !safeExecutionEnvironmentAssignment(name, valueNode.Value, literalValue) {
+			findings.add("%s declares forbidden execution-affecting environment variable %s", prefix, strings.ToUpper(name))
+		}
 		if valueNode.Kind != yaml.ScalarNode {
 			findings.add("%s environment variable %s uses unsupported value shape", prefix, name)
 			continue
@@ -564,18 +652,22 @@ func statementDigest(stmt *syntax.Stmt) (string, error) {
 	return fmt.Sprintf("%x", digest), nil
 }
 
-func commandKey(workflowPath, command, statementSHA256 string) string {
-	return workflowPath + "\x00" + command + "\x00" + statementSHA256
+func commandKey(workflowPath, command, statementSHA256, contextSHA256 string) string {
+	return workflowPath + "\x00" + command + "\x00" + statementSHA256 + "\x00" + contextSHA256
 }
 
-func actionKey(workflowPath, uses, nodeSHA256 string) string {
-	return workflowPath + "\x00" + uses + "\x00" + nodeSHA256
+func actionKey(workflowPath, uses, nodeSHA256, contextSHA256 string) string {
+	return workflowPath + "\x00" + uses + "\x00" + nodeSHA256 + "\x00" + contextSHA256
 }
 
-func matchAction(workflowPath, uses, nodeSHA256 string, allowed map[string]actionEntry) (string, bool) {
-	key := actionKey(workflowPath, uses, nodeSHA256)
+func matchAction(workflowPath, uses, nodeSHA256, contextSHA256 string, allowed map[string]actionEntry) (string, bool) {
+	key := actionKey(workflowPath, uses, nodeSHA256, contextSHA256)
 	_, ok := allowed[key]
 	return key, ok
+}
+
+func assignmentOnlyCall(call *syntax.CallExpr) bool {
+	return call != nil && len(call.Args) == 0 && len(call.Assigns) > 0
 }
 
 func knownProviderCommand(command string, prefix []string) bool {
@@ -836,11 +928,7 @@ type shellAnalysis struct {
 
 func inspectStatementGuards(prefix string, stmt *syntax.Stmt, findings *findingSet) {
 	dangerousName := func(name string) bool {
-		name = strings.ToUpper(name)
-		return map[string]bool{
-			"PATH": true, "BASH_ENV": true, "ENV": true, "SHELLOPTS": true,
-			"LD_PRELOAD": true,
-		}[name] || strings.HasPrefix(name, "DYLD_")
+		return executionAffectingEnv(name)
 	}
 	syntax.Walk(stmt, func(node syntax.Node) bool {
 		switch node := node.(type) {
@@ -848,8 +936,9 @@ func inspectStatementGuards(prefix string, stmt *syntax.Stmt, findings *findingS
 			if node.Name == nil {
 				return true
 			}
-			name := strings.ToUpper(node.Name.Value)
-			if dangerousName(name) {
+			name := node.Name.Value
+			value, literal := literalWord(node.Value)
+			if dangerousName(name) && (node.Append || node.Index != nil || !safeExecutionEnvironmentAssignment(name, value, literal)) {
 				findings.add("%s assigns forbidden execution environment variable %s", prefix, name)
 			}
 		case *syntax.CallExpr:
@@ -877,19 +966,16 @@ func inspectStatementGuards(prefix string, stmt *syntax.Stmt, findings *findingS
 				}
 				index++
 				for index < len(node.Args) {
-					value, ok := literalWord(node.Args[index])
-					if !ok {
-						break
-					}
-					if value == "--" {
+					value, literal := literalWord(node.Args[index])
+					if literal && value == "--" {
 						index++
 						continue
 					}
-					if !envAssignmentRE.MatchString(value) {
+					name, assignmentValue, assignmentLiteral, assignment := environmentWordAssignment(node.Args[index])
+					if !assignment {
 						break
 					}
-					name := strings.ToUpper(strings.SplitN(value, "=", 2)[0])
-					if dangerousName(name) {
+					if dangerousName(name) && !safeExecutionEnvironmentAssignment(name, assignmentValue, assignmentLiteral) {
 						findings.add("%s assigns forbidden execution environment variable %s through env", prefix, name)
 					}
 					index++
@@ -926,7 +1012,40 @@ func inspectStatementGuards(prefix string, stmt *syntax.Stmt, findings *findingS
 	})
 }
 
-func inspectShell(prefix, workflowPath, source string, file *syntax.File, pureGuard bool, repoRoot string, executables map[string]executableEntry, executableReferenced map[string]bool, commands map[string]commandEntry, commandReferenced map[string]bool, findings *findingSet) shellAnalysis {
+func safeExecutionEnvironmentAssignment(name, value string, literal bool) bool {
+	return name == "GOWORK" && literal && value == "off"
+}
+
+func environmentWordAssignment(word *syntax.Word) (name, value string, literal, assignment bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return "", "", false, false
+	}
+	whole, literal := literalWord(word)
+	if literal && envAssignmentRE.MatchString(whole) {
+		parts := strings.SplitN(whole, "=", 2)
+		return parts[0], parts[1], true, true
+	}
+	prefix := ""
+	switch first := word.Parts[0].(type) {
+	case *syntax.Lit:
+		prefix = first.Value
+	case *syntax.DblQuoted:
+		for _, part := range first.Parts {
+			literalPart, ok := part.(*syntax.Lit)
+			if !ok {
+				break
+			}
+			prefix += literalPart.Value
+		}
+	}
+	separator := strings.IndexByte(prefix, '=')
+	if separator <= 0 || !envAssignmentRE.MatchString(prefix) {
+		return "", "", false, false
+	}
+	return prefix[:separator], "", false, true
+}
+
+func inspectShell(prefix, workflowPath, contextSHA256, source string, file *syntax.File, pureGuard bool, repoRoot string, executables map[string]executableEntry, executableReferenced map[string]bool, commands map[string]commandEntry, commandReferenced map[string]bool, findings *findingSet) shellAnalysis {
 	analysis := shellAnalysis{
 		hasIntegrationTag: integrationRE.MatchString(source),
 		hasProviderSDK:    providerSDKRE.MatchString(source),
@@ -949,15 +1068,25 @@ func inspectShell(prefix, workflowPath, source string, file *syntax.File, pureGu
 			findings.add("%s cannot canonicalize shell statement: %v", prefix, err)
 			continue
 		}
+		hasAuthoritySubject := false
 		syntax.Walk(stmt, func(node syntax.Node) bool {
 			call, ok := node.(*syntax.CallExpr)
 			if !ok {
 				return true
 			}
+			if assignmentOnlyCall(call) {
+				hasAuthoritySubject = true
+				key := commandKey(workflowPath, "$assignment", statementSHA256, contextSHA256)
+				if _, ok := commands[key]; !ok {
+					findings.add("%s executes unreviewed standalone assignment (sha256:%s context:%s)", prefix, statementSHA256, contextSHA256)
+				} else {
+					commandReferenced[key] = true
+				}
+			}
 			if len(call.Args) == 0 {
-				// Assignment-only calls have already been inspected above.
 				return true
 			}
+			hasAuthoritySubject = true
 			commandWord, commandWords, resolved := resolvedWorkflowCommand(call)
 			command, literal := literalWord(commandWord)
 			if commandWord == nil || !resolved || !literal || strings.Contains(command, "__GITHUB_EXPRESSION_") {
@@ -990,19 +1119,12 @@ func inspectShell(prefix, workflowPath, source string, file *syntax.File, pureGu
 					return true
 				}
 				executableReferenced[scriptRel] = true
-				key := commandKey(workflowPath, base, statementSHA256)
+				key := commandKey(workflowPath, base, statementSHA256, contextSHA256)
 				if _, ok := commands[key]; !ok {
-					findings.add("%s executes unreviewed exact statement containing local script %s (sha256:%s)", prefix, scriptRel, statementSHA256)
+					findings.add("%s executes unreviewed exact statement containing local script %s (sha256:%s context:%s)", prefix, scriptRel, statementSHA256, contextSHA256)
 				} else {
 					commandReferenced[key] = true
 				}
-				return true
-			}
-			builtins := map[string]bool{
-				"[": true, "exit": true, "false": true, "set": true,
-				"test": true, "true": true,
-			}
-			if builtins[base] {
 				return true
 			}
 			argv := make([]string, 0, len(commandWords))
@@ -1018,14 +1140,22 @@ func inspectShell(prefix, workflowPath, source string, file *syntax.File, pureGu
 				findings.add("%s executes categorically forbidden command %s with argv %q", prefix, base, argv)
 				return true
 			}
-			key := commandKey(workflowPath, base, statementSHA256)
+			key := commandKey(workflowPath, base, statementSHA256, contextSHA256)
 			if _, ok := commands[key]; !ok {
-				findings.add("%s executes unreviewed exact statement containing %s (sha256:%s)", prefix, base, statementSHA256)
+				findings.add("%s executes unreviewed exact statement containing %s (sha256:%s context:%s)", prefix, base, statementSHA256, contextSHA256)
 			} else {
 				commandReferenced[key] = true
 			}
 			return true
 		})
+		if !hasAuthoritySubject {
+			key := commandKey(workflowPath, "$statement", statementSHA256, contextSHA256)
+			if _, ok := commands[key]; !ok {
+				findings.add("%s executes unreviewed exact shell statement (sha256:%s context:%s)", prefix, statementSHA256, contextSHA256)
+			} else {
+				commandReferenced[key] = true
+			}
+		}
 	}
 	return analysis
 }
@@ -1057,7 +1187,7 @@ func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, err
 }
 
 func main() {
-	var repoArg, allowPath, executablePath, commandPath, actionPath string
+	var repoArg, scanArg, allowPath, executablePath, commandPath, actionPath string
 	workflowArgs := []string{}
 	args := os.Args[1:]
 	for len(args) > 0 {
@@ -1068,6 +1198,13 @@ func main() {
 				os.Exit(2)
 			}
 			repoArg = args[1]
+			args = args[2:]
+		case "--scan-root":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "--scan-root requires a path")
+				os.Exit(2)
+			}
+			scanArg = args[1]
 			args = args[2:]
 		case "--allowlist":
 			if len(args) < 2 {
@@ -1110,7 +1247,7 @@ func main() {
 		}
 	}
 	if repoArg == "" {
-		fmt.Fprintln(os.Stderr, "usage: policytool --repo ROOT [--allowlist FILE] [--executable-allowlist FILE] [--command-allowlist FILE] [--action-allowlist FILE] [WORKFLOW...]")
+		fmt.Fprintln(os.Stderr, "usage: policytool --repo TRUST_ROOT [--scan-root CANDIDATE_ROOT] [--allowlist FILE] [--executable-allowlist FILE] [--command-allowlist FILE] [--action-allowlist FILE] [WORKFLOW...]")
 		os.Exit(2)
 	}
 	repoRoot, err := filepath.Abs(repoArg)
@@ -1121,6 +1258,19 @@ func main() {
 	resolvedRepoRoot, err := filepath.EvalSymlinks(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve repository root: %v\n", err)
+		os.Exit(2)
+	}
+	if scanArg == "" {
+		scanArg = repoRoot
+	}
+	scanRoot, err := filepath.Abs(scanArg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	resolvedScanRoot, err := filepath.EvalSymlinks(scanRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve scan root: %v\n", err)
 		os.Exit(2)
 	}
 	if allowPath == "" {
@@ -1137,7 +1287,7 @@ func main() {
 	}
 	if len(workflowArgs) == 0 {
 		for _, pattern := range []string{"*.yml", "*.yaml"} {
-			matches, globErr := filepath.Glob(filepath.Join(repoRoot, ".github", "workflows", pattern))
+			matches, globErr := filepath.Glob(filepath.Join(scanRoot, ".github", "workflows", pattern))
 			if globErr != nil {
 				fmt.Fprintf(os.Stderr, "glob workflows: %v\n", globErr)
 				os.Exit(1)
@@ -1190,8 +1340,14 @@ func main() {
 			findings.add("duplicate executable allowlist entry %s", entry.Path)
 			continue
 		}
-		abs := filepath.Join(repoRoot, filepath.FromSlash(entry.Path))
-		rel, pathErr := normalizePath(repoRoot, resolvedRepoRoot, abs)
+		executableRoot := scanRoot
+		resolvedExecutableRoot := resolvedScanRoot
+		if trustedPolicyExecutable(entry.Path) {
+			executableRoot = repoRoot
+			resolvedExecutableRoot = resolvedRepoRoot
+		}
+		abs := filepath.Join(executableRoot, filepath.FromSlash(entry.Path))
+		rel, pathErr := normalizePath(executableRoot, resolvedExecutableRoot, abs)
 		if pathErr != nil {
 			findings.add("executable allowlist %v", pathErr)
 			continue
@@ -1225,15 +1381,16 @@ func main() {
 		if entry.Path == "." || !strings.HasPrefix(entry.Path, ".github/workflows/") ||
 			entry.Command == "" || entry.Command != path.Base(entry.Command) ||
 			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.StatementSHA256) ||
+			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.ContextSHA256) ||
 			strings.TrimSpace(entry.Rationale) == "" {
-			findings.add("invalid command allowlist entry for %s: exact workflow path, command, statementSHA256, and rationale are required", entry.Path)
+			findings.add("invalid command allowlist entry for %s: exact workflow path, command, statementSHA256, contextSHA256, and rationale are required", entry.Path)
 			continue
 		}
 		if knownProviderCommand(entry.Command, nil) {
 			findings.add("provider-capable command %s is categorically unallowlistable in %s", entry.Command, entry.Path)
 			continue
 		}
-		key := commandKey(entry.Path, entry.Command, entry.StatementSHA256)
+		key := commandKey(entry.Path, entry.Command, entry.StatementSHA256, entry.ContextSHA256)
 		if _, exists := commands[key]; exists {
 			findings.add("duplicate command allowlist entry %s sha256:%s in %s", entry.Command, entry.StatementSHA256, entry.Path)
 			continue
@@ -1258,15 +1415,16 @@ func main() {
 		validReference := regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[a-f0-9]{40}$`).MatchString(entry.Uses)
 		if entry.Path == "." || !strings.HasPrefix(entry.Path, ".github/workflows/") ||
 			!validReference || strings.Contains(entry.Uses, "${{") ||
-			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.NodeSHA256) || strings.TrimSpace(entry.Rationale) == "" {
-			findings.add("invalid action allowlist entry for %s: exact workflow path, immutable uses reference, nodeSHA256, and rationale are required", entry.Path)
+			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.NodeSHA256) ||
+			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.ContextSHA256) || strings.TrimSpace(entry.Rationale) == "" {
+			findings.add("invalid action allowlist entry for %s: exact workflow path, immutable uses reference, nodeSHA256, contextSHA256, and rationale are required", entry.Path)
 			continue
 		}
 		if providerMarker(entry.Uses) || strings.Contains(strings.ToLower(entry.Uses), "digitalocean/") {
 			findings.add("provider action %s is categorically unallowlistable in %s", entry.Uses, entry.Path)
 			continue
 		}
-		key := actionKey(entry.Path, entry.Uses, entry.NodeSHA256)
+		key := actionKey(entry.Path, entry.Uses, entry.NodeSHA256, entry.ContextSHA256)
 		if _, exists := actions[key]; exists {
 			findings.add("duplicate action allowlist entry %s in %s", entry.Uses, entry.Path)
 			continue
@@ -1302,7 +1460,7 @@ func main() {
 
 	referenced := make(map[string]bool)
 	for _, workflowPath := range workflowArgs {
-		rel, err := normalizePath(repoRoot, resolvedRepoRoot, workflowPath)
+		rel, err := normalizePath(scanRoot, resolvedScanRoot, workflowPath)
 		if err != nil {
 			findings.add("%v", err)
 			continue
@@ -1327,6 +1485,7 @@ func main() {
 			continue
 		}
 		root := doc.Content[0]
+		checkWorkingDirectory("workflow "+rel, root, findings)
 		checkPermissions("workflow "+rel, mappingValue(root, "permissions"), findings)
 		workflowShell := defaultsRunShell(root)
 		checkShell("workflow "+rel, workflowShell, findings)
@@ -1359,6 +1518,8 @@ func main() {
 			job := jobs.Content[i+1]
 			prefix := rel + " job " + jobName
 
+			checkWorkingDirectory(prefix, job, findings)
+			checkJobRuntime(prefix, job, findings)
 			checkRunnerSelector(prefix, mappingValue(job, "runs-on"), findings)
 
 			checkPermissions(prefix, mappingValue(job, "permissions"), findings)
@@ -1386,12 +1547,13 @@ func main() {
 			namedLive := false
 			if uses := mappingValue(job, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
 				nodeSHA256 := actionNodeDigest(job)
+				contextSHA256 := authorizationContextDigest(root, job, nil)
 				if strings.Contains(uses.Value, "${{") {
 					providerAuthority = true
 					findings.add("%s uses forbidden dynamic reusable workflow %s", prefix, uses.Value)
-				} else if key, ok := matchAction(rel, uses.Value, nodeSHA256, actions); !ok {
+				} else if key, ok := matchAction(rel, uses.Value, nodeSHA256, contextSHA256, actions); !ok {
 					providerAuthority = true
-					findings.add("%s uses unreviewed exact reusable workflow %s (node sha256:%s)", prefix, uses.Value, nodeSHA256)
+					findings.add("%s uses unreviewed exact reusable workflow %s (node sha256:%s context:%s)", prefix, uses.Value, nodeSHA256, contextSHA256)
 				} else {
 					actionReferenced[key] = true
 				}
@@ -1399,14 +1561,16 @@ func main() {
 			steps := mappingValue(job, "steps")
 			if steps != nil && steps.Kind == yaml.SequenceNode {
 				for _, step := range steps.Content {
+					checkWorkingDirectory(prefix, step, findings)
 					if uses := mappingValue(step, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
 						nodeSHA256 := actionNodeDigest(step)
+						contextSHA256 := authorizationContextDigest(root, job, step)
 						if strings.Contains(uses.Value, "${{") {
 							providerAuthority = true
 							findings.add("%s uses forbidden dynamic action %s", prefix, uses.Value)
-						} else if key, ok := matchAction(rel, uses.Value, nodeSHA256, actions); !ok {
+						} else if key, ok := matchAction(rel, uses.Value, nodeSHA256, contextSHA256, actions); !ok {
 							providerAuthority = true
-							findings.add("%s uses unreviewed exact action %s (node sha256:%s)", prefix, uses.Value, nodeSHA256)
+							findings.add("%s uses unreviewed exact action %s (node sha256:%s context:%s)", prefix, uses.Value, nodeSHA256, contextSHA256)
 						} else {
 							actionReferenced[key] = true
 						}
@@ -1442,7 +1606,8 @@ func main() {
 					if len(denyPatterns) > 0 && !pureGuard {
 						findings.add("%s uses provider deny pattern outside a pure rejection guard", prefix)
 					}
-					analysis := inspectShell(prefix, rel, normalized, file, pureGuard, repoRoot, executables, executableReferenced, commands, commandReferenced, findings)
+					contextSHA256 := authorizationContextDigest(root, job, step)
+					analysis := inspectShell(prefix, rel, contextSHA256, normalized, file, pureGuard, scanRoot, executables, executableReferenced, commands, commandReferenced, findings)
 					providerAuthority = providerAuthority || analysis.providerAuthority
 					hasIntegrationTag = hasIntegrationTag || analysis.hasIntegrationTag
 					hasProviderSDK = hasProviderSDK || analysis.hasProviderSDK

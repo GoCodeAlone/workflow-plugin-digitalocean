@@ -140,13 +140,14 @@ func TestGithubExpressionSourceChangesInvocationDigest(t *testing.T) {
 
 func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
 	entry := actionEntry{
-		Path:       ".github/workflows/ci.yml",
-		Uses:       "actions/checkout@ffffffffffffffffffffffffffffffffffffffff",
-		NodeSHA256: strings.Repeat("a", 64),
-		Rationale:  "Checkout this repository at the reviewed action commit.",
+		Path:          ".github/workflows/ci.yml",
+		Uses:          "actions/checkout@ffffffffffffffffffffffffffffffffffffffff",
+		NodeSHA256:    strings.Repeat("a", 64),
+		ContextSHA256: strings.Repeat("b", 64),
+		Rationale:     "Checkout this repository at the reviewed action commit.",
 	}
-	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses, entry.NodeSHA256): entry}
-	if _, ok := matchAction(entry.Path, entry.Uses, entry.NodeSHA256, allowed); !ok {
+	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses, entry.NodeSHA256, entry.ContextSHA256): entry}
+	if _, ok := matchAction(entry.Path, entry.Uses, entry.NodeSHA256, entry.ContextSHA256, allowed); !ok {
 		t.Fatal("exact reviewed action did not match")
 	}
 	for _, changed := range []string{
@@ -155,11 +156,11 @@ func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
 		"actions/checkout@0123456789012345678901234567890123456789",
 		"${{ vars.ACTION_REF }}",
 	} {
-		if _, ok := matchAction(entry.Path, changed, entry.NodeSHA256, allowed); ok {
+		if _, ok := matchAction(entry.Path, changed, entry.NodeSHA256, entry.ContextSHA256, allowed); ok {
 			t.Errorf("changed action %q matched", changed)
 		}
 	}
-	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, entry.NodeSHA256, allowed); ok {
+	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, entry.NodeSHA256, entry.ContextSHA256, allowed); ok {
 		t.Fatal("action allowlist leaked across workflow paths")
 	}
 }
@@ -331,6 +332,7 @@ func TestExecutionAffectingEnvironmentNames(t *testing.T) {
 		"GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_SSH", "GIT_SSH_COMMAND", "HOME", "IFS", "CDPATH",
 		"CC", "CXX", "AR", "LD", "GOROOT", "GOPATH", "GOENV", "GOFLAGS", "GOTOOLCHAIN",
 		"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBRARY_PATH", "CPATH", "RUSTC_WRAPPER", "JAVA_TOOL_OPTIONS",
+		"CFLAGS", "LDFLAGS", "GOEXPERIMENT", "GIT_EXEC_PATH", "CGO_LDFLAGS", "CARGO_HOME", "SHELL",
 	} {
 		if !executionAffectingEnv(name) {
 			t.Errorf("%s was not rejected", name)
@@ -343,7 +345,58 @@ func TestExecutionAffectingEnvironmentNames(t *testing.T) {
 	}
 }
 
-func TestAuthorizationContextBindsInheritedEnvironmentAndDefaults(t *testing.T) {
+func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
+	for _, source := range []string{
+		`GOWORK=off go test ./...`,
+		`env GOWORK=off go test ./...`,
+		`env "GOWORK=off" go test ./...`,
+		`exec env GOWORK=off go test ./...`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) != 0 {
+			t.Errorf("literal GOWORK=off in %q was rejected: %v", source, findings.items)
+		}
+	}
+
+	for _, source := range []string{
+		`GOWORK=auto go test ./...`,
+		`GOWORK= go test ./...`,
+		`GOWORK="$MODE" go test ./...`,
+		`env GOWORK=auto go test ./...`,
+		`env GOWORK="$MODE" go test ./...`,
+		`env "GOWORK=$MODE" go test ./...`,
+		`env "PATH=$MODE" go test ./...`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("non-literal-off GOWORK in %q was accepted", source)
+		}
+	}
+
+	for name, source := range map[string]string{
+		"literal off": "GOWORK: off\n",
+		"auto":        "GOWORK: auto\n",
+		"empty":       "GOWORK: ''\n",
+		"dynamic":     "GOWORK: ${{ vars.GOWORK }}\n",
+	} {
+		var env yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &env); err != nil {
+			t.Fatal(err)
+		}
+		findings := &findingSet{}
+		envValues("fixture", env.Content[0], false, findings)
+		if name == "literal off" && len(findings.items) != 0 {
+			t.Errorf("literal YAML GOWORK=off was rejected: %v", findings.items)
+		}
+		if name != "literal off" && len(findings.items) == 0 {
+			t.Errorf("%s YAML GOWORK assignment was accepted", name)
+		}
+	}
+}
+
+func TestAuthorizationContextBindsCompleteWorkflow(t *testing.T) {
 	parseMapping := func(source string) *yaml.Node {
 		t.Helper()
 		var doc yaml.Node
@@ -352,21 +405,20 @@ func TestAuthorizationContextBindsInheritedEnvironmentAndDefaults(t *testing.T) 
 		}
 		return doc.Content[0]
 	}
-	workflow := parseMapping("env:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\n")
-	job := parseMapping("env:\n  JOB_MODE: one\n")
-	step := parseMapping("env:\n  STEP_MODE: one\nrun: echo safe\n")
-	original := authorizationContextDigest(workflow, job, step)
-	for _, changed := range []*yaml.Node{
-		parseMapping("env:\n  SAFE_MODE: two\ndefaults:\n  run:\n    shell: bash\n"),
-		parseMapping("env:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\n    working-directory: ./subdir\n"),
+	base := "on: push\nenv:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\njobs:\n  test:\n    runs-on: ubuntu-latest\n    env:\n      JOB_MODE: one\n    steps:\n      - env:\n          STEP_MODE: one\n        run: echo safe\n"
+	original := authorizationContextDigest(parseMapping(base), nil, nil)
+	for name, changed := range map[string]string{
+		"trigger":        strings.Replace(base, "on: push", "on: pull_request_target", 1),
+		"workflow env":   strings.Replace(base, "SAFE_MODE: one", "SAFE_MODE: two", 1),
+		"defaults":       strings.Replace(base, "shell: bash", "shell: sh", 1),
+		"job env":        strings.Replace(base, "JOB_MODE: one", "JOB_MODE: two", 1),
+		"container":      strings.Replace(base, "runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    container: attacker:latest", 1),
+		"step control":   strings.Replace(base, "run: echo safe", "if: always()\n        run: echo safe", 1),
+		"step statement": strings.Replace(base, "run: echo safe", "run: set -x; echo safe", 1),
 	} {
-		if authorizationContextDigest(changed, job, step) == original {
-			t.Fatal("workflow inherited context mutation retained digest")
+		if authorizationContextDigest(parseMapping(changed), nil, nil) == original {
+			t.Errorf("%s mutation retained complete workflow digest", name)
 		}
-	}
-	changedJob := parseMapping("env:\n  JOB_MODE: two\n")
-	if authorizationContextDigest(workflow, changedJob, step) == original {
-		t.Fatal("job inherited context mutation retained digest")
 	}
 }
 
@@ -378,5 +430,45 @@ func TestAssignmentOnlyCallIsRecognized(t *testing.T) {
 	}
 	if assignmentOnlyCall(firstCall(t, parseShell(t, `SAFE_VALUE=one echo safe`))) {
 		t.Fatal("command with an assignment prefix was treated as assignment-only")
+	}
+}
+
+func TestBuiltinRequiresExactStatementAuthority(t *testing.T) {
+	file := parseShell(t, `set -x`)
+	findings := &findingSet{}
+	inspectShell(
+		"fixture", ".github/workflows/fixture.yml", strings.Repeat("0", 64),
+		"set -x", file, false, t.TempDir(),
+		map[string]executableEntry{}, map[string]bool{},
+		map[string]commandEntry{}, map[string]bool{}, findings,
+	)
+	if len(findings.items) != 1 || !strings.Contains(findings.items[0], "unreviewed exact statement containing set") {
+		t.Fatalf("builtin authority findings = %v", findings.items)
+	}
+}
+
+func TestStatementWithoutCallRequiresExactAuthority(t *testing.T) {
+	file := parseShell(t, `(( X ))`)
+	findings := &findingSet{}
+	inspectShell(
+		"fixture", ".github/workflows/fixture.yml", strings.Repeat("0", 64),
+		"(( X ))", file, false, t.TempDir(),
+		map[string]executableEntry{}, map[string]bool{},
+		map[string]commandEntry{}, map[string]bool{}, findings,
+	)
+	if len(findings.items) != 1 || !strings.Contains(findings.items[0], "unreviewed exact shell statement") {
+		t.Fatalf("call-free statement authority findings = %v", findings.items)
+	}
+}
+
+func TestJobContainerAndServicesAreCategoricallyRejected(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("container: attacker:latest\nservices:\n  db:\n    image: attacker:latest\n"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	findings := &findingSet{}
+	checkJobRuntime("fixture", doc.Content[0], findings)
+	if len(findings.items) != 2 {
+		t.Fatalf("job runtime findings = %v", findings.items)
 	}
 }
