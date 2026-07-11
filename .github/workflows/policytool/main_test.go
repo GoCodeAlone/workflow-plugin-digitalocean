@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,7 +39,7 @@ func firstCall(t *testing.T, file *syntax.File) *syntax.CallExpr {
 }
 
 func TestResolvedProgramUnwrapsReviewedWrappers(t *testing.T) {
-	file := parseShell(t, `MODE=ci command exec sudo env AUTH=x ./scripts/live.sh`)
+	file := parseShell(t, `MODE=ci command exec env AUTH=x ./scripts/live.sh`)
 	program, _, resolved := resolvedProgram(firstCall(t, file))
 	if !resolved {
 		t.Fatal("expected wrapped program to resolve")
@@ -86,5 +88,83 @@ func TestExpressionIdentifiersIgnoresStringData(t *testing.T) {
 	}
 	if !strings.Contains(masked, "secrets.RELEASES_TOKEN") {
 		t.Fatalf("secret identifier was masked: %q", masked)
+	}
+}
+
+func TestCommandAllowlistRequiresExactPrefix(t *testing.T) {
+	allowed := map[string]commandEntry{
+		commandKey(".github/workflows/ci.yml", "go", []string{"test"}): {
+			Path:       ".github/workflows/ci.yml",
+			Command:    "go",
+			ArgvPrefix: []string{"test"},
+			Rationale:  "Run the Go test suite without allowing go run.",
+		},
+	}
+	if _, ok := matchCommand(".github/workflows/ci.yml", "go", []string{"test", "./..."}, allowed); !ok {
+		t.Fatal("reviewed go test prefix did not match")
+	}
+	if _, ok := matchCommand(".github/workflows/ci.yml", "go", []string{"run", "./cmd/tool"}, allowed); ok {
+		t.Fatal("wrong go subcommand matched reviewed prefix")
+	}
+	if _, ok := matchCommand(".github/workflows/release.yml", "go", []string{"test", "./..."}, allowed); ok {
+		t.Fatal("command allowlist leaked across workflow paths")
+	}
+}
+
+func TestResolvedProgramUnwrapsAllowedWrappersButRejectsSudo(t *testing.T) {
+	for _, source := range []string{
+		`command go test ./...`,
+		`exec go test ./...`,
+		`env GOWORK=off go test ./...`,
+	} {
+		file := parseShell(t, source)
+		program, args, resolved := resolvedProgram(firstCall(t, file))
+		value, literal := literalWord(program)
+		if !resolved || !literal || value != "go" || len(args) < 1 {
+			t.Fatalf("%q resolved to %q, args=%d, resolved=%v", source, value, len(args), resolved)
+		}
+	}
+	file := parseShell(t, `sudo go test ./...`)
+	if _, _, resolved := resolvedProgram(firstCall(t, file)); resolved {
+		t.Fatal("sudo unexpectedly resolved as a reviewed wrapper")
+	}
+}
+
+func TestKnownCloudSecretRejectsSpacesCredentials(t *testing.T) {
+	for _, name := range []string{
+		"SPACES_ACCESS_KEY_ID",
+		"SPACES_SECRET_ACCESS_KEY",
+		"DIGITALOCEAN_SPACES_ACCESS_KEY_ID",
+		"DIGITALOCEAN_SPACES_SECRET_ACCESS_KEY",
+		"DO_SPACES_ACCESS_KEY_ID",
+		"DO_SPACES_SECRET_ACCESS_KEY",
+	} {
+		if !knownCloudSecret(name) {
+			t.Errorf("%s was not categorized as a cloud secret", name)
+		}
+	}
+}
+
+func TestDecodeJSONRequiresExactlyOneValue(t *testing.T) {
+	tmp := t.TempDir()
+	valid := filepath.Join(tmp, "valid.json")
+	if err := os.WriteFile(valid, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var target []allowEntry
+	if err := decodeJSONFile(valid, &target); err != nil {
+		t.Fatalf("valid JSON failed: %v", err)
+	}
+	for name, content := range map[string]string{
+		"trailing-object": `[] {}`,
+		"trailing-garbage": `[] garbage`,
+	} {
+		path := filepath.Join(tmp, name+".json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := decodeJSONFile(path, &target); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }
