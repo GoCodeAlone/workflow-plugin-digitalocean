@@ -32,7 +32,7 @@ jobs:
       - name: Fetch month-to-date usage
         run: |
           set -euo pipefail
-          curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 \
+          curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
             https://api.digitalocean.com/v2/customers/my/balance \
             > "${RUNNER_TEMP}/do-conformance-balance.json"
@@ -43,11 +43,13 @@ jobs:
           set -euo pipefail
           SPEND="$(jq -er '.month_to_date_usage // "0" | tonumber' "${RUNNER_TEMP}/do-conformance-balance.json")"
           echo "month_to_date_usage=${SPEND}" >> "${GITHUB_STEP_SUMMARY}"
-          if .github/workflows/scripts/conformance-safety.sh budget-at-or-over "${SPEND}" "${BUDGET_HARD_CAP_USD}"; then
+          HARD_STATE="$(.github/workflows/scripts/conformance-safety.sh budget-state "${SPEND}" "${BUDGET_HARD_CAP_USD}")"
+          if [[ "${HARD_STATE}" == "at-or-over" ]]; then
             echo "::error title=Budget exceeded::DigitalOcean conformance month-to-date \$${SPEND} meets or exceeds the \$${BUDGET_HARD_CAP_USD} cap"
             exit 1
           fi
-          if .github/workflows/scripts/conformance-safety.sh budget-at-or-over "${SPEND}" "${BUDGET_SOFT_CAP_USD}"; then
+          SOFT_STATE="$(.github/workflows/scripts/conformance-safety.sh budget-state "${SPEND}" "${BUDGET_SOFT_CAP_USD}")"
+          if [[ "${SOFT_STATE}" == "at-or-over" ]]; then
             echo "::warning title=Budget approaching cap::DigitalOcean conformance month-to-date \$${SPEND} meets or exceeds \$${BUDGET_SOFT_CAP_USD}"
             PRIMARY_LABEL=conformance-budget-incident \
             HELPER_LABEL=auto-filed-budget \

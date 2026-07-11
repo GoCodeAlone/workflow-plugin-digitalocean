@@ -38,6 +38,8 @@ Change a threshold only by appending a dated approval entry here and updating
 budget job queries `/v2/customers/my/balance` and aborts before the smoke job can
 start when usage meets or exceeds the hard stop. Both the budget job and hourly
 scrubber use the same executable predicate, including the exact `$25` boundary.
+Valid decimal and scientific-notation values return an explicit `below` or
+`at-or-over` state; malformed or negative values abort the gate.
 
 ## Token rotation
 
@@ -64,7 +66,13 @@ Cleanup has two layers:
 2. `conformance-leak-scrubber.yml` hourly deletes tagged Droplets older than
    one hour and files or updates an incident. Every pagination URL is checked
    before authenticated use: only exact `https://api.digitalocean.com`
-   authority is accepted, and repeated pages abort the traversal.
+   authority is accepted, and repeated pages abort the traversal. Each API
+   request has bounded connect/total time, and DELETE counts only HTTP 204.
+
+The scrubber records list, parse, and delete failures without counting failed
+deletions. It publishes partial results on exit, files the cleanup incident,
+runs the budget escalation, and only then fails the job when cleanup was
+incomplete.
 
 The helper deduplicates on two labels. Automated leak issues use
 `conformance-leak-incident` plus `auto-filed-leak`; automated budget issues use
@@ -85,6 +93,7 @@ gated removal.
 ./.github/workflows/scripts/test-conformance-workflows.sh
 ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
 ./.github/workflows/scripts/test-conformance-safety-helpers.sh
+./.github/workflows/scripts/test-conformance-scrub-safety.sh
 actionlint .github/workflows/*.yml
 GOWORK=off go test -tags=conformance ./internal/... -run '^TestConformance$' -count=1
 ```

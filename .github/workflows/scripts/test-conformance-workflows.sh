@@ -54,7 +54,7 @@ step_block() {
 hard_cap_block() {
   local file="$1"
   awk '
-    /^          if .*conformance-safety.sh budget-at-or-over .*BUDGET_HARD_CAP_USD.*; then$/ {
+    /^          if \[\[ .*HARD_STATE.*at-or-over.* \]\]; then$/ {
       found = 1
       printing = 1
     }
@@ -112,9 +112,10 @@ cleanup=.github/conformance/cleanup.yaml
 helper=.github/workflows/scripts/file-or-comment-leak-issue.sh
 safety_helper=.github/workflows/scripts/conformance-safety.sh
 safety_test=.github/workflows/scripts/test-conformance-safety-helpers.sh
+scrub_safety_test=.github/workflows/scripts/test-conformance-scrub-safety.sh
 runbook=docs/conformance-runbook.md
 
-for file in "${smoke}" "${budget}" "${scrubber}" "${cleanup}" "${helper}" "${safety_helper}" "${safety_test}" "${runbook}"; do
+for file in "${smoke}" "${budget}" "${scrubber}" "${cleanup}" "${helper}" "${safety_helper}" "${safety_test}" "${scrub_safety_test}" "${runbook}"; do
   must_exist "${file}"
 done
 
@@ -187,8 +188,11 @@ block_must_contain "budget token preflight" "${budget_preflight}" 'test -n "${DO
 must_contain "${budget}" 'month_to_date_usage'
 must_contain "${budget}" 'BUDGET_HARD_CAP_USD: 25'
 hard_cap_branch="$(hard_cap_block "${budget}")" || fail "missing hard-cap branch"
-block_must_contain "hard-cap branch" "${hard_cap_branch}" "conformance-safety.sh budget-at-or-over"
 block_must_contain "hard-cap branch" "${hard_cap_branch}" 'exit 1'
+budget_caps="$(step_block "${budget}" "Enforce budget caps")" || fail "missing budget cap step"
+block_must_contain "budget cap step" "${budget_caps}" "conformance-safety.sh budget-state"
+block_must_contain "budget cap step" "${budget_caps}" 'HARD_STATE="$(.github/workflows/scripts/conformance-safety.sh budget-state'
+block_must_precede "budget cap step" "${budget_caps}" "conformance-safety.sh budget-state" 'if [[ "${HARD_STATE}" == "at-or-over" ]]'
 
 # The scheduled owner-local scrubber is independently token-gated and uses
 # only this repository's helper and cleanup prefix.
@@ -213,7 +217,21 @@ block_must_precede "scrubber pagination step" "${scrubber_pages}" \
   "validate-do-page-url" 'response="$(curl'
 
 scrubber_budget="$(step_block "${scrubber}" "Escalate spend at or above the hard cap")" || fail "missing scrubber budget step"
-block_must_contain "scrubber budget step" "${scrubber_budget}" "conformance-safety.sh budget-at-or-over"
+block_must_contain "scrubber budget step" "${scrubber_budget}" "conformance-safety.sh budget-state"
+block_must_contain "scrubber budget step" "${scrubber_budget}" "if: always() && !cancelled()"
+
+cleanup_incident="$(step_block "${scrubber}" "File or update the cleanup incident")" || fail "missing cleanup incident step"
+block_must_contain "cleanup incident step" "${cleanup_incident}" "always() && !cancelled()"
+block_must_contain "cleanup incident step" "${cleanup_incident}" "steps.scrub.outcome == 'failure'"
+block_must_contain "cleanup incident step" "${cleanup_incident}" "steps.scrub.outputs.failures != '0'"
+
+cleanup_final="$(step_block "${scrubber}" "Fail after incomplete cleanup reporting")" || fail "missing final incomplete-cleanup step"
+block_must_contain "final incomplete-cleanup step" "${cleanup_final}" "always() && !cancelled()"
+block_must_contain "final incomplete-cleanup step" "${cleanup_final}" "steps.scrub.outcome == 'failure'"
+block_must_contain "final incomplete-cleanup step" "${cleanup_final}" "steps.scrub.outputs.failures != '0'"
+block_must_contain "final incomplete-cleanup step" "${cleanup_final}" "exit 1"
+block_must_precede "scrub job" "${scrubber_job}" "File or update the cleanup incident" "Escalate spend at or above the hard cap"
+block_must_precede "scrub job" "${scrubber_job}" "Escalate spend at or above the hard cap" "Fail after incomplete cleanup reporting"
 
 # The apply and cleanup commands share one provider-local config; it creates a
 # tagged smoke Droplet and supplies the provider loader for cleanup.
@@ -228,5 +246,6 @@ must_not_contain .github/workflows/ci.yml "WFCTL_CONFORMANCE_REF"
 must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-workflows.sh"
 must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-workflow-mutations.sh"
 must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-safety-helpers.sh"
+must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-scrub-safety.sh"
 
 echo "conformance workflow structure: ok"

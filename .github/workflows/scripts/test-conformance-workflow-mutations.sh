@@ -122,12 +122,45 @@ mutate_live_global_git_config() {
   mv "${output}" "${file}"
 }
 
+mutate_cleanup_incident_fail_open() {
+  local file="$1"
+  local output="${file}.mutated"
+  awk '
+    $0 == "      - name: File or update the cleanup incident" { in_step = 1 }
+    in_step && $0 == "          always() && !cancelled()" {
+      print "          success()"
+      changed = 1
+      next
+    }
+    { print }
+    END { if (!changed) exit 42 }
+  ' "${file}" > "${output}"
+  mv "${output}" "${file}"
+}
+
+mutate_remove_final_cleanup_failure() {
+  local file="$1"
+  local output="${file}.mutated"
+  awk '
+    $0 == "      - name: Fail after incomplete cleanup reporting" {
+      print "      - name: Ignore incomplete cleanup"
+      changed = 1
+      next
+    }
+    { print }
+    END { if (!changed) exit 42 }
+  ' "${file}" > "${output}"
+  mv "${output}" "${file}"
+}
+
 runner_fixture="$(new_fixture)"
 budget_fixture="$(new_fixture)"
 token_fixture="$(new_fixture)"
 secret_fixture="$(new_fixture)"
 live_git_fixture="$(new_fixture)"
-trap 'rm -rf "${runner_fixture}" "${budget_fixture}" "${token_fixture}" "${secret_fixture}" "${live_git_fixture}"' EXIT
+incident_fixture="$(new_fixture)"
+final_failure_fixture="$(new_fixture)"
+trap 'rm -rf "${runner_fixture}" "${budget_fixture}" "${token_fixture}" "${secret_fixture}" "${live_git_fixture}" "${incident_fixture}" "${final_failure_fixture}"' EXIT
 
 mutate_credential_free_runner "${runner_fixture}/.github/workflows/conformance-smoke.yml"
 failures=0
@@ -159,6 +192,18 @@ expect_rejected \
   live-persistent-git-config \
   "${live_git_fixture}" \
   "live-smoke job must not contain: git config --global" || failures=$((failures + 1))
+
+mutate_cleanup_incident_fail_open "${incident_fixture}/.github/workflows/conformance-leak-scrubber.yml"
+expect_rejected \
+  cleanup-incident-fail-open \
+  "${incident_fixture}" \
+  "cleanup incident step must contain: always() && !cancelled()" || failures=$((failures + 1))
+
+mutate_remove_final_cleanup_failure "${final_failure_fixture}/.github/workflows/conformance-leak-scrubber.yml"
+expect_rejected \
+  missing-final-cleanup-failure \
+  "${final_failure_fixture}" \
+  "missing final incomplete-cleanup step" || failures=$((failures + 1))
 
 if [[ "${failures}" -ne 0 ]]; then
   exit 1

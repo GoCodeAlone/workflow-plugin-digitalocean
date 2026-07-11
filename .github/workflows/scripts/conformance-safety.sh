@@ -2,23 +2,37 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 budget-at-or-over <spend> <cap> | validate-do-page-url <url> <seen-file>" >&2
+  echo "usage: $0 budget-state <spend> <cap> | validate-do-delete-status <status> | validate-do-page-url <url> <seen-file>" >&2
   exit 64
 }
 
-is_decimal() {
-  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+is_nonnegative_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]]
 }
 
 case "${1:-}" in
-  budget-at-or-over)
+  budget-state)
     [[ $# -eq 3 ]] || usage
     spend="$2"
     cap="$3"
-    if ! is_decimal "${spend}" || ! is_decimal "${cap}"; then
+    if ! is_nonnegative_number "${spend}" || ! is_nonnegative_number "${cap}"; then
       usage
     fi
-    awk -v spend="${spend}" -v cap="${cap}" 'BEGIN { exit !(spend >= cap) }'
+    if awk -v spend="${spend}" -v cap="${cap}" 'BEGIN { exit !(spend >= cap) }'; then
+      echo "at-or-over"
+    else
+      echo "below"
+    fi
+    ;;
+
+  validate-do-delete-status)
+    [[ $# -eq 2 ]] || usage
+    status="$2"
+    [[ "${status}" =~ ^[0-9]{3}$ ]] || usage
+    if [[ "${status}" != "204" ]]; then
+      echo "unexpected DigitalOcean DELETE status: ${status}; want 204" >&2
+      exit 66
+    fi
     ;;
 
   validate-do-page-url)
