@@ -26,20 +26,17 @@ type allowEntry struct {
 }
 
 type executableEntry struct {
-	Path      string `json:"path"`
-	SHA256    string `json:"sha256"`
-	State     string `json:"state,omitempty"`
-	Rationale string `json:"rationale"`
+	Path          string `json:"path"`
+	WorkflowPath  string `json:"workflowPath"`
+	ContextSHA256 string `json:"contextSHA256"`
+	SHA256        string `json:"sha256"`
+	State         string `json:"state"`
+	Rationale     string `json:"rationale"`
 }
 
-func trustedPolicyExecutable(executablePath string) bool {
-	switch executablePath {
-	case ".github/workflows/scripts/check-public-workflow-policy.sh",
-		".github/workflows/scripts/test-public-workflow-policy.sh":
-		return true
-	default:
-		return false
-	}
+func trustedPolicyExecutable(entry executableEntry) bool {
+	return entry.WorkflowPath == ".github/workflows/public-workflow-policy.yml" &&
+		entry.Path == ".github/workflows/scripts/check-public-workflow-policy.sh"
 }
 
 type commandEntry struct {
@@ -61,49 +58,76 @@ type actionEntry struct {
 }
 
 type trustGroup struct {
-	Path          string
-	ContextSHA256 string
-	State         string
+	Path          string `json:"path"`
+	ContextSHA256 string `json:"contextSHA256,omitempty"`
+	State         string `json:"state"`
+	Presence      string `json:"presence"`
 }
 
 func selectTrustGroups(groups []trustGroup, workflowContexts map[string]string) (map[string]bool, []string) {
 	selected := make(map[string]bool)
 	findings := []string{}
-	byPath := make(map[string]map[string]string)
-	stateContexts := make(map[string]map[string]string)
+	byPath := make(map[string]map[string]trustGroup)
 	for _, group := range groups {
-		if group.State != "active" && group.State != "staged" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(group.ContextSHA256) {
+		cleanPath := path.Clean(strings.ReplaceAll(group.Path, "\\", "/"))
+		validPath := group.Path == cleanPath && strings.HasPrefix(cleanPath, ".github/workflows/") &&
+			(path.Ext(cleanPath) == ".yml" || path.Ext(cleanPath) == ".yaml")
+		if group.Presence == "absent" && path.Dir(cleanPath) != ".github/workflows" {
+			validPath = false
+		}
+		validContext := group.Presence == "present" && regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(group.ContextSHA256)
+		validAbsent := group.Presence == "absent" && group.ContextSHA256 == ""
+		if !validPath || (group.State != "active" && group.State != "staged") || (!validContext && !validAbsent) {
 			findings = append(findings, fmt.Sprintf("invalid trust group for %s", group.Path))
 			continue
 		}
 		if byPath[group.Path] == nil {
-			byPath[group.Path] = make(map[string]string)
-			stateContexts[group.Path] = make(map[string]string)
+			byPath[group.Path] = make(map[string]trustGroup)
 		}
-		if prior, ok := byPath[group.Path][group.ContextSHA256]; ok && prior != group.State {
-			findings = append(findings, fmt.Sprintf("mixed trust group state for %s context %s", group.Path, group.ContextSHA256))
-		}
-		byPath[group.Path][group.ContextSHA256] = group.State
-		if prior, ok := stateContexts[group.Path][group.State]; ok && prior != group.ContextSHA256 {
+		if _, ok := byPath[group.Path][group.State]; ok {
 			findings = append(findings, fmt.Sprintf("multiple %s trust groups for %s", group.State, group.Path))
 		}
-		stateContexts[group.Path][group.State] = group.ContextSHA256
+		byPath[group.Path][group.State] = group
+		other := "active"
+		if group.State == "active" {
+			other = "staged"
+		}
+		if prior, ok := byPath[group.Path][other]; ok && prior.Presence == group.Presence && prior.ContextSHA256 == group.ContextSHA256 {
+			findings = append(findings, fmt.Sprintf("mixed trust group state for %s context %s", group.Path, group.ContextSHA256))
+		}
 	}
 	for workflowPath, context := range workflowContexts {
-		state, ok := byPath[workflowPath][context]
-		if !ok {
+		var matched trustGroup
+		for _, group := range byPath[workflowPath] {
+			if group.Presence == "present" && group.ContextSHA256 == context {
+				matched = group
+			}
+		}
+		if matched.State == "" {
 			findings = append(findings, fmt.Sprintf("no trust group matches workflow %s context %s", workflowPath, context))
 			continue
 		}
-		if state == "staged" && stateContexts[workflowPath]["active"] == "" {
+		if matched.State == "staged" && byPath[workflowPath]["active"].State == "" {
 			findings = append(findings, fmt.Sprintf("staged trust group for %s requires retained active group", workflowPath))
 		}
 		selected[workflowPath+"\x00"+context] = true
 	}
-	for workflowPath := range byPath {
-		if _, ok := workflowContexts[workflowPath]; !ok {
-			findings = append(findings, fmt.Sprintf("trust group references missing workflow %s", workflowPath))
+	for workflowPath, states := range byPath {
+		if _, ok := workflowContexts[workflowPath]; ok {
+			continue
 		}
+		selectedGroup := states["active"]
+		if states["staged"].Presence == "absent" {
+			selectedGroup = states["staged"]
+		}
+		if selectedGroup.Presence != "absent" {
+			findings = append(findings, fmt.Sprintf("no absent trust group matches missing workflow %s", workflowPath))
+			continue
+		}
+		if selectedGroup.State == "staged" && states["active"].State == "" {
+			findings = append(findings, fmt.Sprintf("staged trust group for %s requires retained active group", workflowPath))
+		}
+		selected[workflowPath+"\x00absent"] = true
 	}
 	sort.Strings(findings)
 	return selected, findings
@@ -1187,11 +1211,12 @@ func inspectShell(prefix, workflowPath, contextSHA256, source string, file *synt
 					return true
 				}
 				scriptRel := filepath.ToSlash(lexicalRel)
-				if _, ok := executables[scriptRel]; !ok {
+				executableKey := workflowPath + "\x00" + scriptRel
+				if _, ok := executables[executableKey]; !ok {
 					findings.add("%s invokes unallowlisted executable script %s", prefix, command)
 					return true
 				}
-				executableReferenced[scriptRel] = true
+				executableReferenced[executableKey] = true
 				key := commandKey(workflowPath, base, statementSHA256, contextSHA256)
 				if _, ok := commands[key]; !ok {
 					findings.add("%s executes unreviewed exact statement containing local script %s (sha256:%s context:%s)", prefix, scriptRel, statementSHA256, contextSHA256)
@@ -1260,7 +1285,7 @@ func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, err
 }
 
 func main() {
-	var repoArg, scanArg, allowPath, executablePath, commandPath, actionPath string
+	var repoArg, scanArg, allowPath, executablePath, commandPath, actionPath, presencePath string
 	workflowArgs := []string{}
 	args := os.Args[1:]
 	for len(args) > 0 {
@@ -1307,6 +1332,13 @@ func main() {
 			}
 			actionPath = args[1]
 			args = args[2:]
+		case "--presence-allowlist":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "--presence-allowlist requires a path")
+				os.Exit(2)
+			}
+			presencePath = args[1]
+			args = args[2:]
 		case "--":
 			workflowArgs = append(workflowArgs, args[1:]...)
 			args = nil
@@ -1320,7 +1352,7 @@ func main() {
 		}
 	}
 	if repoArg == "" {
-		fmt.Fprintln(os.Stderr, "usage: policytool --repo TRUST_ROOT [--scan-root CANDIDATE_ROOT] [--allowlist FILE] [--executable-allowlist FILE] [--command-allowlist FILE] [--action-allowlist FILE] [WORKFLOW...]")
+		fmt.Fprintln(os.Stderr, "usage: policytool --repo TRUST_ROOT [--scan-root CANDIDATE_ROOT] [--allowlist FILE] [--executable-allowlist FILE] [--command-allowlist FILE] [--action-allowlist FILE] [--presence-allowlist FILE] [WORKFLOW...]")
 		os.Exit(2)
 	}
 	repoRoot, err := filepath.Abs(repoArg)
@@ -1358,6 +1390,9 @@ func main() {
 	if actionPath == "" {
 		actionPath = filepath.Join(repoRoot, ".github", "public-workflow-action-allowlist.json")
 	}
+	if presencePath == "" {
+		presencePath = filepath.Join(repoRoot, ".github", "public-workflow-presence-allowlist.json")
+	}
 	if len(workflowArgs) == 0 {
 		for _, pattern := range []string{"*.yml", "*.yaml"} {
 			matches, globErr := filepath.Glob(filepath.Join(scanRoot, ".github", "workflows", pattern))
@@ -1367,10 +1402,6 @@ func main() {
 			}
 			workflowArgs = append(workflowArgs, matches...)
 		}
-	}
-	if len(workflowArgs) == 0 {
-		fmt.Fprintln(os.Stderr, "no public workflow files found")
-		os.Exit(1)
 	}
 	workflowContexts := make(map[string]string)
 	for _, workflowPath := range workflowArgs {
@@ -1410,19 +1441,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "read action allowlist: %v\n", err)
 		os.Exit(1)
 	}
-	groups := make([]trustGroup, 0, len(allowlist)+len(commandList)+len(actionList))
-	for _, entry := range allowlist {
-		groups = append(groups, trustGroup{Path: path.Clean(strings.ReplaceAll(strings.TrimSpace(entry.Path), "\\", "/")), ContextSHA256: entry.ContextSHA256, State: entry.State})
-	}
-	for _, entry := range commandList {
-		groups = append(groups, trustGroup{Path: path.Clean(strings.ReplaceAll(strings.TrimSpace(entry.Path), "\\", "/")), ContextSHA256: entry.ContextSHA256, State: entry.State})
-	}
-	for _, entry := range actionList {
-		groups = append(groups, trustGroup{Path: path.Clean(strings.ReplaceAll(strings.TrimSpace(entry.Path), "\\", "/")), ContextSHA256: entry.ContextSHA256, State: entry.State})
+	var groups []trustGroup
+	if err := decodeJSONFile(presencePath, &groups); err != nil {
+		fmt.Fprintf(os.Stderr, "read presence allowlist: %v\n", err)
+		os.Exit(1)
 	}
 	selectedGroups, groupFindings := selectTrustGroups(groups, workflowContexts)
 	findings.items = append(findings.items, groupFindings...)
+	if len(workflowArgs) == 0 && len(groups) == 0 {
+		findings.add("no public workflow files found and no trusted absence is declared")
+	}
+	declaredGroups := make(map[string]bool)
+	for _, group := range groups {
+		if group.Presence == "present" {
+			declaredGroups[group.Path+"\x00"+group.ContextSHA256+"\x00"+group.State] = true
+		}
+	}
 	executables := make(map[string]executableEntry)
+	seenExecutables := make(map[string]bool)
 	executableReferenced := make(map[string]bool)
 	for _, entry := range executableList {
 		rawPath := strings.TrimSpace(entry.Path)
@@ -1432,17 +1468,27 @@ func main() {
 			continue
 		}
 		entry.Path = path.Clean(slashPath)
-		if strings.TrimSpace(entry.Rationale) == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.SHA256) {
+		entry.WorkflowPath = path.Clean(strings.ReplaceAll(strings.TrimSpace(entry.WorkflowPath), "\\", "/"))
+		if strings.TrimSpace(entry.Rationale) == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.SHA256) ||
+			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.ContextSHA256) || (entry.State != "active" && entry.State != "staged") {
 			findings.add("invalid executable allowlist entry %s", entry.Path)
 			continue
 		}
-		if _, exists := executables[entry.Path]; exists {
+		if !declaredGroups[entry.WorkflowPath+"\x00"+entry.ContextSHA256+"\x00"+entry.State] {
+			findings.add("executable entry has no matching present trust group for %s", entry.WorkflowPath)
+		}
+		key := entry.WorkflowPath + "\x00" + entry.Path + "\x00" + entry.ContextSHA256
+		if seenExecutables[key] {
 			findings.add("duplicate executable allowlist entry %s", entry.Path)
+			continue
+		}
+		seenExecutables[key] = true
+		if !selectedGroups[entry.WorkflowPath+"\x00"+entry.ContextSHA256] {
 			continue
 		}
 		executableRoot := scanRoot
 		resolvedExecutableRoot := resolvedScanRoot
-		if trustedPolicyExecutable(entry.Path) {
+		if trustedPolicyExecutable(entry) {
 			executableRoot = repoRoot
 			resolvedExecutableRoot = resolvedRepoRoot
 		}
@@ -1461,7 +1507,7 @@ func main() {
 		if actual != entry.SHA256 {
 			findings.add("executable hash mismatch for %s", entry.Path)
 		}
-		executables[entry.Path] = entry
+		executables[entry.WorkflowPath+"\x00"+entry.Path] = entry
 	}
 	commands := make(map[string]commandEntry)
 	seenCommands := make(map[string]bool)
@@ -1487,6 +1533,9 @@ func main() {
 			strings.TrimSpace(entry.Rationale) == "" {
 			findings.add("invalid command allowlist entry for %s: exact workflow path, command, statementSHA256, contextSHA256, and rationale are required", entry.Path)
 			continue
+		}
+		if !declaredGroups[entry.Path+"\x00"+entry.ContextSHA256+"\x00"+entry.State] {
+			findings.add("command entry has no matching present trust group for %s", entry.Path)
 		}
 		if knownProviderCommand(entry.Command, nil) {
 			findings.add("provider-capable command %s is categorically unallowlistable in %s", entry.Command, entry.Path)
@@ -1527,6 +1576,9 @@ func main() {
 			findings.add("invalid action allowlist entry for %s: exact workflow path, immutable uses reference, nodeSHA256, contextSHA256, and rationale are required", entry.Path)
 			continue
 		}
+		if !declaredGroups[entry.Path+"\x00"+entry.ContextSHA256+"\x00"+entry.State] {
+			findings.add("action entry has no matching present trust group for %s", entry.Path)
+		}
 		if providerMarker(entry.Uses) || strings.Contains(strings.ToLower(entry.Uses), "digitalocean/") {
 			findings.add("provider action %s is categorically unallowlistable in %s", entry.Uses, entry.Path)
 			continue
@@ -1562,6 +1614,9 @@ func main() {
 			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.ContextSHA256) ||
 			(entry.State != "active" && entry.State != "staged") || strings.TrimSpace(entry.Rationale) == "" {
 			findings.add("invalid allowlist entry for %s: exact path, secret, and rationale are required", entry.Path)
+		}
+		if !declaredGroups[entry.Path+"\x00"+entry.ContextSHA256+"\x00"+entry.State] {
+			findings.add("secret entry has no matching present trust group for %s", entry.Path)
 		}
 		if seenAllowed[seenKey] {
 			findings.add("duplicate allowlist entry %s in %s", entry.Secret, entry.Path)
@@ -1761,9 +1816,9 @@ func main() {
 			findings.add("stale allowlist entry %s in %s", entry.Secret, entry.Path)
 		}
 	}
-	for key := range executables {
+	for key, entry := range executables {
 		if !executableReferenced[key] {
-			findings.add("stale executable allowlist entry %s", key)
+			findings.add("stale executable allowlist entry %s in %s", entry.Path, entry.WorkflowPath)
 		}
 	}
 	for key, entry := range commands {

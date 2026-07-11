@@ -18,10 +18,11 @@ defaults:
 
 jobs:
   policy:
-    if: github.event_name != 'push' || github.event.before != '0000000000000000000000000000000000000000'
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted base policy
+        id: trusted-checkout
+        continue-on-error: true
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -36,11 +37,28 @@ jobs:
           path: candidate
           persist-credentials: false
 
+      - name: Select exact trusted policy root
+        id: policy-root
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          root=trusted
+          if [ ! -x trusted/.github/workflows/scripts/check-public-workflow-policy.sh ]; then
+            if [ "$EVENT_NAME" = push ] && [ "$BEFORE_SHA" = 0d368a29ba572e050c62cba90ae56908abbd4156 ]; then
+              root=candidate
+            else
+              echo "trusted workflow policy is missing or incomplete" >&2
+              exit 1
+            fi
+          fi
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go for the trusted analyzer
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: trusted/.github/workflows/policytool/go.mod
+          go-version-file: ${{ steps.policy-root.outputs.root }}/.github/workflows/policytool/go.mod
           cache: false
 
       - name: Scan candidate workflows with trusted base policy
-        run: cd trusted && ./.github/workflows/scripts/check-public-workflow-policy.sh --scan-root "${GITHUB_WORKSPACE}/candidate"
+        run: cd "${{ steps.policy-root.outputs.root }}" && ./.github/workflows/scripts/check-public-workflow-policy.sh --scan-root "${GITHUB_WORKSPACE}/candidate"

@@ -1,0 +1,32 @@
+[
+  {
+    "path": ".github/workflows/ci.yml",
+    "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
+    "state": "active",
+    "presence": "present"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "contextSHA256": "76ae5e10669861daa9dca018cc21a03b7af709aa45698794d6f9d056b53bf850",
+    "state": "active",
+    "presence": "present"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "contextSHA256": "7050841760118fabda90c31437dfad886dca4b0bedcabc07e96fb8d9d9636e2e",
+    "state": "active",
+    "presence": "present"
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "presence": "present"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
+    "state": "active",
+    "presence": "present"
+  }
+]

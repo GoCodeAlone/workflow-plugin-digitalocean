@@ -8,3 +8,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo future
+      - run: ./scripts/lifecycle.sh

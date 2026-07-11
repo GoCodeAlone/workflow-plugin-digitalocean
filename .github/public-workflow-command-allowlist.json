@@ -592,22 +592,6 @@
     "state": "active"
   },
   {
-    "path": ".github/workflows/public-workflow-policy.yml",
-    "command": "cd",
-    "statementSHA256": "c1720785864bf6396ab6fef1522482d86469540a8902bc0b53b6d5df214883ef",
-    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
-    "rationale": "Exact reviewed cd statement and inherited execution context.",
-    "state": "active"
-  },
-  {
-    "path": ".github/workflows/public-workflow-policy.yml",
-    "command": "check-public-workflow-policy.sh",
-    "statementSHA256": "c1720785864bf6396ab6fef1522482d86469540a8902bc0b53b6d5df214883ef",
-    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
-    "rationale": "Exact reviewed check-public-workflow-policy.sh statement and inherited execution context.",
-    "state": "active"
-  },
-  {
     "path": ".github/workflows/release.yml",
     "command": "$assignment",
     "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
@@ -726,5 +710,69 @@
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
     "rationale": "Exact reviewed wfctl statement and inherited execution context.",
     "state": "active"
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "6e78bfd0781f308df8a82c819888f28647df16892ba5a7cef1571b725e102383",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact bootstrap root assignment."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact bootstrap guard assignment."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "[",
+    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact bootstrap condition."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact bootstrap failure output."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact bootstrap failure exit."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "7c133076e6ce17d413f1327ea6d975f452d350aba142430d9ad85847205e36b8",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact policy-root output."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "cd",
+    "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact selected-root scan."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "check-public-workflow-policy.sh",
+    "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact selected-root policy wrapper."
   }
 ]

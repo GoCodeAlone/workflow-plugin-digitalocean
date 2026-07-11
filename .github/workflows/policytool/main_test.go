@@ -349,30 +349,56 @@ func TestExecutionAffectingEnvironmentNames(t *testing.T) {
 func TestTrustGroupThreeStateLifecycle(t *testing.T) {
 	active := strings.Repeat("a", 64)
 	staged := strings.Repeat("b", 64)
-	transition := []trustGroup{{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: staged, State: "staged"}}
+	wf := ".github/workflows/wf.yml"
+	transition := []trustGroup{{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}}
 	for name, phase := range map[string]struct {
 		groups  []trustGroup
 		context string
 	}{
 		"phase1": {transition, active},
 		"phase2": {transition, staged},
-		"phase3": {[]trustGroup{{Path: "wf.yml", ContextSHA256: staged, State: "active"}}, staged},
+		"phase3": {[]trustGroup{{Path: wf, ContextSHA256: staged, State: "active", Presence: "present"}}, staged},
 	} {
-		selected, findings := selectTrustGroups(phase.groups, map[string]string{"wf.yml": phase.context})
-		if len(findings) != 0 || !selected["wf.yml\x00"+phase.context] {
+		selected, findings := selectTrustGroups(phase.groups, map[string]string{wf: phase.context})
+		if len(findings) != 0 || !selected[wf+"\x00"+phase.context] {
 			t.Errorf("%s selection = %v, findings = %v", name, selected, findings)
 		}
 	}
-	for name, groups := range map[string][]trustGroup{
-		"unmatched":       {{Path: "wf.yml", ContextSHA256: active, State: "active"}},
-		"mixed":           {{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: active, State: "staged"}},
-		"multiple staged": {{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: staged, State: "staged"}, {Path: "wf.yml", ContextSHA256: strings.Repeat("c", 64), State: "staged"}},
-		"invalid state":   {{Path: "wf.yml", ContextSHA256: active, State: "pending"}},
-		"lone staged":     {{Path: "wf.yml", ContextSHA256: staged, State: "staged"}},
+	for _, phase := range []struct {
+		name     string
+		groups   []trustGroup
+		contexts map[string]string
+	}{
+		{"add phase1", []trustGroup{{Path: ".github/workflows/new.yml", State: "active", Presence: "absent"}, {Path: ".github/workflows/new.yml", ContextSHA256: staged, State: "staged", Presence: "present"}}, map[string]string{}},
+		{"add phase2", []trustGroup{{Path: ".github/workflows/new.yml", State: "active", Presence: "absent"}, {Path: ".github/workflows/new.yml", ContextSHA256: staged, State: "staged", Presence: "present"}}, map[string]string{".github/workflows/new.yml": staged}},
+		{"delete phase2", []trustGroup{{Path: ".github/workflows/old.yml", ContextSHA256: active, State: "active", Presence: "present"}, {Path: ".github/workflows/old.yml", State: "staged", Presence: "absent"}}, map[string]string{}},
+		{"absent tombstone", []trustGroup{{Path: ".github/workflows/old.yml", State: "active", Presence: "absent"}}, map[string]string{}},
 	} {
-		_, findings := selectTrustGroups(groups, map[string]string{"wf.yml": staged})
+		selected, findings := selectTrustGroups(phase.groups, phase.contexts)
+		if len(findings) != 0 || len(selected) != 1 {
+			t.Errorf("%s selection = %v, findings = %v", phase.name, selected, findings)
+		}
+	}
+	for name, groups := range map[string][]trustGroup{
+		"unmatched":       {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}},
+		"mixed":           {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: active, State: "staged", Presence: "present"}},
+		"multiple staged": {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}, {Path: wf, ContextSHA256: strings.Repeat("c", 64), State: "staged", Presence: "present"}},
+		"invalid state":   {{Path: wf, ContextSHA256: active, State: "pending", Presence: "present"}},
+		"lone staged":     {{Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}},
+	} {
+		_, findings := selectTrustGroups(groups, map[string]string{wf: staged})
 		if len(findings) == 0 {
 			t.Errorf("%s trust groups were accepted", name)
+		}
+	}
+	duplicate := trustGroup{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}
+	if _, findings := selectTrustGroups([]trustGroup{duplicate, duplicate}, map[string]string{wf: active}); len(findings) == 0 {
+		t.Error("duplicate active trust groups were accepted")
+	}
+	for _, invalidPath := range []string{"", "../../outside.yml", ".github/workflows/nested/workflow.yml", ".github/workflows/workflow.txt", ".github\\workflows\\workflow.yml"} {
+		group := trustGroup{Path: invalidPath, State: "active", Presence: "absent"}
+		if _, findings := selectTrustGroups([]trustGroup{group}, map[string]string{}); len(findings) == 0 {
+			t.Errorf("invalid tombstone path %q was accepted", invalidPath)
 		}
 	}
 }

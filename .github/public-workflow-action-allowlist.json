@@ -72,30 +72,6 @@
     "state": "active"
   },
   {
-    "path": ".github/workflows/public-workflow-policy.yml",
-    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "nodeSHA256": "68957f5c605710a62288f36960978b63956f371a8a08a7e1299e9b63d126657c",
-    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
-    "rationale": "Exact reviewed immutable action node and inherited execution context.",
-    "state": "active"
-  },
-  {
-    "path": ".github/workflows/public-workflow-policy.yml",
-    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "nodeSHA256": "f282c6c71fc53419253c53a8ae0a234c5bbbd327dd9c441379b366e5b23dcadb",
-    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
-    "rationale": "Exact reviewed immutable action node and inherited execution context.",
-    "state": "active"
-  },
-  {
-    "path": ".github/workflows/public-workflow-policy.yml",
-    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
-    "nodeSHA256": "801b375a83ab60305e1b8951182cbc99e368f67047aa3b7cdd2b91aa2c776d85",
-    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
-    "rationale": "Exact reviewed immutable action node and inherited execution context.",
-    "state": "active"
-  },
-  {
     "path": ".github/workflows/release.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "3e5cbc2bc14eefe54d00005483246362bda6b9987c3b1713d37e5c2da4e18dbf",
@@ -134,5 +110,29 @@
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
     "rationale": "Exact reviewed immutable action node and inherited execution context.",
     "state": "active"
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "8ddc920b847e5e03515a92d8be49290bd9039f458fffcdeea7ad0a30f48e15dc",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact trusted checkout."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "f282c6c71fc53419253c53a8ae0a234c5bbbd327dd9c441379b366e5b23dcadb",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact candidate checkout."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "3c2f0c49ba03bc87e0aeebcd40257f3285d9b3e4a0b79982f795d6bfd5117bf9",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "rationale": "Exact selected policy Go setup."
   }
 ]

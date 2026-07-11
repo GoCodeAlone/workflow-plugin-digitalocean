@@ -1,16 +1,33 @@
 [
   {
     "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
-    "sha256": "045da1b206f049acea6cfeba18b6347f1bb57873ae87af466e91a456ba792fe2",
+    "workflowPath": ".github/workflows/ci.yml",
+    "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
+    "state": "active",
+    "sha256": "127bc19c41bdd63371a1e2196d256d2780f8719f66aac0e449246bc9f8708041",
     "rationale": "Enforces the credential-free public workflow boundary before other CI proof."
   },
   {
     "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
-    "sha256": "2c35f9f9f8a01afeeb57f481e325ed20932bffc0d48e06c957238db0e79d9677",
+    "workflowPath": ".github/workflows/ci.yml",
+    "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
+    "state": "active",
+    "sha256": "6f57b7b5f9e8fe8e48064532fe7030d514d56f5f680e4c656170ec058ccd40f4",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
   },
   {
+    "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
+    "workflowPath": ".github/workflows/public-workflow-policy.yml",
+    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "state": "active",
+    "sha256": "127bc19c41bdd63371a1e2196d256d2780f8719f66aac0e449246bc9f8708041",
+    "rationale": "Runs only the trusted policy wrapper for candidate-data scanning."
+  },
+  {
     "path": "scripts/workflow-iac-host-conformance.sh",
+    "workflowPath": ".github/workflows/iac-host-conformance.yml",
+    "contextSHA256": "7050841760118fabda90c31437dfad886dca4b0bedcabc07e96fb8d9d9636e2e",
+    "state": "active",
     "sha256": "5066dea5a461524cbda244f7ca00cdd85127457406af9966fd638d3648fd276a",
     "rationale": "Runs credential-free released-engine host conformance for the provider plugin."
   }

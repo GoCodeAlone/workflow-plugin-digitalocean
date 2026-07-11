@@ -21,12 +21,20 @@ fi
 governance_workflow="${repo_root}/.github/workflows/public-workflow-policy.yml"
 protection_verifier="${repo_root}/.github/workflows/scripts/verify-public-workflow-branch-protection.sh"
 grep -Fq -- "github.event.before" "${governance_workflow}"
+grep -Fq -- "0d368a29ba572e050c62cba90ae56908abbd4156" "${governance_workflow}"
+if grep -Fq -- "0d368a29ba572e050c62cba90ae56908abbd4155" "${governance_workflow}" || \
+  grep -Fq -- "github.event.before != '0000000000000000000000000000000000000000'" "${governance_workflow}"; then
+  echo "bootstrap workflow permits a non-exact prior SHA" >&2
+  exit 1
+fi
 grep -Fq -- "branches: [main]" "${governance_workflow}"
 grep -Fq -- 'required_check="Public Workflow Policy / policy"' "${protection_verifier}"
 grep -Fq -- 'required_approving_review_count >= 1' "${protection_verifier}"
 grep -Fq -- 'dismiss_stale_reviews' "${protection_verifier}"
 grep -Fq -- 'bypass_pull_request_allowances.users' "${protection_verifier}"
 grep -Fq -- 'conditions.ref_name.exclude' "${protection_verifier}"
+grep -Fq -- 'required_status_checks.strict == true' "${protection_verifier}"
+grep -Fq -- 'strict_required_status_checks_policy == true' "${protection_verifier}"
 grep -Fq -- 'Workflow authority changes use three pull requests' "${repo_root}/docs/public-workflow-policy.md"
 
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
@@ -52,29 +60,212 @@ printf '[]\n' >"${fixture_actions}"
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
 
+bootstrap_selector="${tmp_dir}/select-policy-root.sh"
+awk '
+  $0 == "      - name: Select exact trusted policy root" { in_step=1; next }
+  in_step && $0 == "        run: |" { in_run=1; next }
+  in_run && /^      - name:/ { exit }
+  in_run { sub(/^          /, ""); print }
+' "${governance_workflow}" >"${bootstrap_selector}"
+bootstrap_root="${tmp_dir}/bootstrap"
+mkdir -p "${bootstrap_root}/candidate/.github/workflows/scripts"
+printf '#!/usr/bin/env bash\n' >"${bootstrap_root}/candidate/.github/workflows/scripts/check-public-workflow-policy.sh"
+chmod +x "${bootstrap_root}/candidate/.github/workflows/scripts/check-public-workflow-policy.sh"
+bootstrap_output="${tmp_dir}/bootstrap-output"
+(cd "${bootstrap_root}" && BEFORE_SHA=0d368a29ba572e050c62cba90ae56908abbd4156 EVENT_NAME=push GITHUB_OUTPUT="${bootstrap_output}" bash "${bootstrap_selector}")
+grep -Fxq -- 'root=candidate' "${bootstrap_output}"
+for rejected_before in \
+  0d368a29ba572e050c62cba90ae56908abbd4155 \
+  0000000000000000000000000000000000000000 \
+  ffffffffffffffffffffffffffffffffffffffff; do
+  set +e
+  (cd "${bootstrap_root}" && BEFORE_SHA="${rejected_before}" EVENT_NAME=push GITHUB_OUTPUT="${bootstrap_output}" bash "${bootstrap_selector}") >/dev/null 2>&1
+  bootstrap_status=$?
+  set -e
+  if [[ "${bootstrap_status}" -eq 0 ]]; then
+    echo "bootstrap accepted non-exact prior SHA ${rejected_before}" >&2
+    exit 1
+  fi
+done
+set +e
+(cd "${bootstrap_root}" && BEFORE_SHA=0d368a29ba572e050c62cba90ae56908abbd4156 EVENT_NAME=pull_request_target GITHUB_OUTPUT="${bootstrap_output}" bash "${bootstrap_selector}") >/dev/null 2>&1
+bootstrap_pr_status=$?
+set -e
+if [[ "${bootstrap_pr_status}" -eq 0 ]]; then
+  echo "bootstrap accepted exact SHA outside the push event" >&2
+  exit 1
+fi
+mkdir -p "${bootstrap_root}/trusted/.github/workflows/scripts"
+printf '#!/usr/bin/env bash\n' >"${bootstrap_root}/trusted/.github/workflows/scripts/check-public-workflow-policy.sh"
+chmod +x "${bootstrap_root}/trusted/.github/workflows/scripts/check-public-workflow-policy.sh"
+: >"${bootstrap_output}"
+(cd "${bootstrap_root}" && BEFORE_SHA=ffffffffffffffffffffffffffffffffffffffff EVENT_NAME=pull_request_target GITHUB_OUTPUT="${bootstrap_output}" bash "${bootstrap_selector}")
+grep -Fxq -- 'root=trusted' "${bootstrap_output}"
+
+classic_protection="${tmp_dir}/classic-protection.json"
+ruleset_protection="${tmp_dir}/ruleset-protection.json"
+invalid_protection="${tmp_dir}/invalid-protection.json"
+printf '{}\n' >"${invalid_protection}"
+cat >"${classic_protection}" <<'JSON'
+{
+  "enforce_admins":{"enabled":true},
+  "required_status_checks":{"strict":true,"contexts":["Public Workflow Policy / policy"]},
+  "required_pull_request_reviews":{
+    "required_approving_review_count":1,
+    "dismiss_stale_reviews":true,
+    "bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}
+  },
+  "restrictions":null,
+  "allow_force_pushes":{"enabled":false},
+  "allow_deletions":{"enabled":false}
+}
+JSON
+cat >"${ruleset_protection}" <<'JSON'
+{
+  "enforcement":"active",
+  "bypass_actors":[],
+  "conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},
+  "rules":[
+    {"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}},
+    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy"}]}}
+  ]
+}
+JSON
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" \
+  "${protection_verifier}" example/repo main >/dev/null
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" \
+  "${protection_verifier}" example/repo main >/dev/null
+
+assert_protection_strict_rejected() {
+  local kind="$1"
+  local fixture="$2"
+  local classic_file="${invalid_protection}"
+  local ruleset_file="${invalid_protection}"
+  if [[ "${kind}" == classic ]]; then
+    classic_file="${fixture}"
+  else
+    ruleset_file="${fixture}"
+  fi
+  set +e
+  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_file}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_file}" \
+    "${protection_verifier}" example/repo main >/dev/null 2>&1
+  local status=$?
+  set -e
+  if [[ "${status}" -eq 0 ]]; then
+    echo "${kind} protection accepted missing/false strict status checks" >&2
+    exit 1
+  fi
+}
+jq 'del(.required_status_checks.strict)' "${classic_protection}" >"${classic_protection}.missing"
+jq '.required_status_checks.strict=false' "${classic_protection}" >"${classic_protection}.false"
+assert_protection_strict_rejected classic "${classic_protection}.missing"
+assert_protection_strict_rejected classic "${classic_protection}.false"
+jq 'del(.rules[1].parameters.strict_required_status_checks_policy)' "${ruleset_protection}" >"${ruleset_protection}.missing"
+jq '.rules[1].parameters.strict_required_status_checks_policy=false' "${ruleset_protection}" >"${ruleset_protection}.false"
+assert_protection_strict_rejected ruleset "${ruleset_protection}.missing"
+assert_protection_strict_rejected ruleset "${ruleset_protection}.false"
+
 lifecycle_root="${tmp_dir}/lifecycle"
 mkdir -p "${lifecycle_root}/.github/workflows"
+mkdir -p "${lifecycle_root}/scripts"
 lifecycle_workflow="${lifecycle_root}/.github/workflows/lifecycle.yml"
 lifecycle_transition="${tmp_dir}/lifecycle-transition.json"
-cat >"${lifecycle_transition}" <<'JSON'
+lifecycle_presence="${tmp_dir}/lifecycle-presence.json"
+cat >"${lifecycle_presence}" <<'JSON'
 [
-  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"819b561be4b01d042acf9c152963504db679c1f35863be463a27d0b1f829fce2","contextSHA256":"dcf906587b32bfc1562c84913ccba51d6051dab4d30c32a6c426b2995d27f155","state":"active","rationale":"Current lifecycle context."},
-  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"fe696343d9c54236742da9a5f73af7180c94578dca254d9099440c71775da76a","contextSHA256":"2ad4749f601564e0b7845eb4d2f07fe4ec87dee2617af375bdddcc21f70e9e2d","state":"staged","rationale":"Future lifecycle context."}
+  {"path":".github/workflows/lifecycle.yml","contextSHA256":"462dc1ee56aa917ca0ca80bce78a0ec4744efa7b805480c09617df432ada0c61","state":"active","presence":"present"},
+  {"path":".github/workflows/lifecycle.yml","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"staged","presence":"present"}
 ]
 JSON
+cat >"${lifecycle_transition}" <<'JSON'
+[
+  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"819b561be4b01d042acf9c152963504db679c1f35863be463a27d0b1f829fce2","contextSHA256":"462dc1ee56aa917ca0ca80bce78a0ec4744efa7b805480c09617df432ada0c61","state":"active","rationale":"Current lifecycle context."},
+  {"path":".github/workflows/lifecycle.yml","command":"lifecycle.sh","statementSHA256":"dba5e9682987ecf0db39babf5824d3bdea717b091db48e154c082bced59f6b79","contextSHA256":"462dc1ee56aa917ca0ca80bce78a0ec4744efa7b805480c09617df432ada0c61","state":"active","rationale":"Current lifecycle executable."},
+  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"fe696343d9c54236742da9a5f73af7180c94578dca254d9099440c71775da76a","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"staged","rationale":"Future lifecycle context."},
+  {"path":".github/workflows/lifecycle.yml","command":"lifecycle.sh","statementSHA256":"dba5e9682987ecf0db39babf5824d3bdea717b091db48e154c082bced59f6b79","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"staged","rationale":"Future lifecycle executable."}
+]
+JSON
+lifecycle_executables="${tmp_dir}/lifecycle-executables.json"
+cat >"${lifecycle_executables}" <<'JSON'
+[
+  {"path":"scripts/lifecycle.sh","workflowPath":".github/workflows/lifecycle.yml","contextSHA256":"462dc1ee56aa917ca0ca80bce78a0ec4744efa7b805480c09617df432ada0c61","state":"active","sha256":"2e1f5a51dcffcd76df111e383338b6d7e68d8b01ab088636ea87758a05b0e084","rationale":"Current script hash."},
+  {"path":"scripts/lifecycle.sh","workflowPath":".github/workflows/lifecycle.yml","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"staged","sha256":"cacb7804eaa7158147c9216632414e3ec06c3bd463d7a72f2a9aa7b6b06290e0","rationale":"Future script hash."}
+]
+JSON
+printf '#!/usr/bin/env bash\necho old\n' >"${lifecycle_root}/scripts/lifecycle.sh"
 cp "${fixtures}/lifecycle-old.yml" "${lifecycle_workflow}"
-"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
+printf '#!/usr/bin/env bash\necho future\n' >"${lifecycle_root}/scripts/lifecycle.sh"
 cp "${fixtures}/lifecycle-future.yml" "${lifecycle_workflow}"
-"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
 lifecycle_cleanup="${tmp_dir}/lifecycle-cleanup.json"
-jq '[.[1] | .state="active"]' "${lifecycle_transition}" >"${lifecycle_cleanup}"
-"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_cleanup}" --action-allowlist "${empty_allowlist}"
+jq 'map(select(.state=="staged") | .state="active")' "${lifecycle_transition}" >"${lifecycle_cleanup}"
+jq '[.[1] | .state="active"]' "${lifecycle_presence}" >"${lifecycle_presence}.cleanup"
+jq '[.[1] | .state="active"]' "${lifecycle_executables}" >"${lifecycle_executables}.cleanup"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_presence}.cleanup" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.cleanup" --command-allowlist "${lifecycle_cleanup}" --action-allowlist "${empty_allowlist}"
+
+# Workflow additions and deletions use the same trusted three-phase lifecycle.
+# An absent tombstone authorizes zero matching workflow files without weakening
+# the default failure for an undeclared empty workflow set.
+lifecycle_add_presence="${tmp_dir}/lifecycle-add-presence.json"
+cat >"${lifecycle_add_presence}" <<'JSON'
+[
+  {"path":".github/workflows/lifecycle.yml","state":"active","presence":"absent"},
+  {"path":".github/workflows/lifecycle.yml","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"staged","presence":"present"}
+]
+JSON
+jq '[.[] | select(.state=="staged")]' "${lifecycle_transition}" >"${lifecycle_transition}.add"
+jq '[.[] | select(.state=="staged")]' "${lifecycle_executables}" >"${lifecycle_executables}.add"
+rm -f "${lifecycle_workflow}" "${lifecycle_root}/scripts/lifecycle.sh"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_add_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.add" --command-allowlist "${lifecycle_transition}.add" --action-allowlist "${empty_allowlist}"
+printf '#!/usr/bin/env bash\necho future\n' >"${lifecycle_root}/scripts/lifecycle.sh"
+cp "${fixtures}/lifecycle-future.yml" "${lifecycle_workflow}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_add_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.add" --command-allowlist "${lifecycle_transition}.add" --action-allowlist "${empty_allowlist}"
+jq '[.[1] | .state="active"]' "${lifecycle_add_presence}" >"${lifecycle_add_presence}.cleanup"
+jq 'map(.state="active")' "${lifecycle_transition}.add" >"${lifecycle_transition}.add-cleanup"
+jq 'map(.state="active")' "${lifecycle_executables}.add" >"${lifecycle_executables}.add-cleanup"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_add_presence}.cleanup" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.add-cleanup" --command-allowlist "${lifecycle_transition}.add-cleanup" --action-allowlist "${empty_allowlist}"
+
+lifecycle_delete_presence="${tmp_dir}/lifecycle-delete-presence.json"
+cat >"${lifecycle_delete_presence}" <<'JSON'
+[
+  {"path":".github/workflows/lifecycle.yml","contextSHA256":"69c5280913b6dbe34e7f59977b889b60411da8308dd01e6e1c3997391a44581d","state":"active","presence":"present"},
+  {"path":".github/workflows/lifecycle.yml","state":"staged","presence":"absent"}
+]
+JSON
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_delete_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.add-cleanup" --command-allowlist "${lifecycle_transition}.add-cleanup" --action-allowlist "${empty_allowlist}"
+rm -f "${lifecycle_workflow}" "${lifecycle_root}/scripts/lifecycle.sh"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_delete_presence}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}.add-cleanup" --command-allowlist "${lifecycle_transition}.add-cleanup" --action-allowlist "${empty_allowlist}"
+jq '[.[1] | .state="active"]' "${lifecycle_delete_presence}" >"${lifecycle_delete_presence}.cleanup"
+"${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${lifecycle_delete_presence}.cleanup" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${empty_allowlist}" --action-allowlist "${empty_allowlist}"
+
+set +e
+undeclared_empty_output="$("${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${empty_allowlist}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${empty_allowlist}" --action-allowlist "${empty_allowlist}" 2>&1)"
+undeclared_empty_status=$?
+set -e
+if [[ "${undeclared_empty_status}" -eq 0 ]] || ! grep -Fq -- "no public workflow files found and no trusted absence is declared" <<<"${undeclared_empty_output}"; then
+  echo "empty workflow set passed without a trusted absence declaration" >&2
+  printf '%s\n' "${undeclared_empty_output}" >&2
+  exit 1
+fi
+invalid_tombstone="${tmp_dir}/invalid-tombstone.json"
+printf '[{"path":"../../outside.yml","state":"active","presence":"absent"}]\n' >"${invalid_tombstone}"
+set +e
+invalid_tombstone_output="$("${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${invalid_tombstone}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${empty_allowlist}" --action-allowlist "${empty_allowlist}" 2>&1)"
+invalid_tombstone_status=$?
+set -e
+if [[ "${invalid_tombstone_status}" -eq 0 ]] || ! grep -Fq -- "invalid trust group for ../../outside.yml" <<<"${invalid_tombstone_output}"; then
+  echo "malformed tombstone authorized an empty workflow inventory" >&2
+  printf '%s\n' "${invalid_tombstone_output}" >&2
+  exit 1
+fi
+
 assert_lifecycle_invalid() {
   local manifest="$1"
   local expected="$2"
   set +e
   local output
-  output="$("${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${manifest}" --action-allowlist "${empty_allowlist}" 2>&1)"
+  output="$("${checker_binary}" --scan-root "${lifecycle_root}" --presence-allowlist "${manifest}" --allowlist "${empty_allowlist}" --executable-allowlist "${lifecycle_executables}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}" 2>&1)"
   local status=$?
   set -e
   if [[ "${status}" -eq 0 ]] || ! grep -Fq -- "${expected}" <<<"${output}"; then
@@ -84,18 +275,21 @@ assert_lifecycle_invalid() {
   fi
 }
 lifecycle_invalid="${tmp_dir}/lifecycle-invalid.json"
-jq '.[0].state="pending" | [.[0]]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+# Restore the future fixture used by the invalid-manifest cases below.
+printf '#!/usr/bin/env bash\necho future\n' >"${lifecycle_root}/scripts/lifecycle.sh"
+cp "${fixtures}/lifecycle-future.yml" "${lifecycle_workflow}"
+jq '.[0].state="pending" | [.[0]]' "${lifecycle_presence}" >"${lifecycle_invalid}"
 assert_lifecycle_invalid "${lifecycle_invalid}" "invalid trust group"
-jq '.[0].contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" | [.[0]]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+jq '.[0].contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" | [.[0]]' "${lifecycle_presence}" >"${lifecycle_invalid}"
 assert_lifecycle_invalid "${lifecycle_invalid}" "no trust group matches workflow"
-jq '.[0] as $active | .[1] as $staged | [$active, $staged, ($staged | .contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+jq '.[0] as $active | .[1] as $staged | [$active, $staged, ($staged | .contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")]' "${lifecycle_presence}" >"${lifecycle_invalid}"
 assert_lifecycle_invalid "${lifecycle_invalid}" "multiple staged trust groups"
-jq '.[0] as $active | [$active, ($active | .state="staged")]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+jq '.[0] as $active | [$active, ($active | .state="staged")]' "${lifecycle_presence}" >"${lifecycle_invalid}"
 assert_lifecycle_invalid "${lifecycle_invalid}" "mixed trust group state"
 checker="${tmp_dir}/check-public-workflow-policy.sh"
 cat >"${checker}" <<EOF
 #!/usr/bin/env bash
-exec "${checker_binary}" --executable-allowlist "${fixture_executables}" --command-allowlist "${fixture_commands}" --action-allowlist "${fixture_actions}" "\$@"
+exec "${checker_binary}" --presence-allowlist "${empty_allowlist}" --executable-allowlist "${fixture_executables}" --command-allowlist "${fixture_commands}" --action-allowlist "${fixture_actions}" "\$@"
 EOF
 chmod +x "${checker}"
 
@@ -171,17 +365,20 @@ trailing_secret="${tmp_dir}/trailing-secret.json"
 trailing_executable="${tmp_dir}/trailing-executable.json"
 trailing_command="${tmp_dir}/trailing-command.json"
 trailing_action="${tmp_dir}/trailing-action.json"
+trailing_presence="${tmp_dir}/trailing-presence.json"
 printf '[] {}\n' >"${trailing_secret}"
 printf '[] garbage\n' >"${trailing_executable}"
 printf '[] {}\n' >"${trailing_command}"
 printf '[] garbage\n' >"${trailing_action}"
-for trust_input in secret executable command action; do
+printf '[] {}\n' >"${trailing_presence}"
+for trust_input in secret executable command action presence; do
   args=()
   case "${trust_input}" in
     secret) args=(--allowlist "${trailing_secret}") ;;
     executable) args=(--executable-allowlist "${trailing_executable}") ;;
     command) args=(--command-allowlist "${trailing_command}") ;;
     action) args=(--action-allowlist "${trailing_action}") ;;
+    presence) args=(--presence-allowlist "${trailing_presence}") ;;
   esac
   set +e
   trailing_output="$("${checker_binary}" "${args[@]}" 2>&1)"
@@ -205,7 +402,8 @@ for manifest in \
   public-workflow-secret-allowlist.json \
   public-workflow-executable-allowlist.json \
   public-workflow-command-allowlist.json \
-  public-workflow-action-allowlist.json; do
+  public-workflow-action-allowlist.json \
+  public-workflow-presence-allowlist.json; do
   printf '[]\n' >"${candidate_root}/.github/${manifest}"
 done
 printf 'this is not Go source\n' >"${candidate_root}/.github/workflows/policytool/main.go"
@@ -214,7 +412,31 @@ printf 'not a module\n' >"${candidate_root}/.github/workflows/policytool/go.mod"
 
 candidate_checker="${candidate_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${candidate_checker}"
-"${checker_binary}" --scan-root "${candidate_root}"
+set +e
+candidate_checker_output="$("${checker_binary}" --scan-root "${candidate_root}" 2>&1)"
+candidate_checker_status=$?
+set -e
+if [[ "${candidate_checker_status}" -eq 0 ]] || ! grep -Fq -- \
+  "executable hash mismatch for .github/workflows/scripts/check-public-workflow-policy.sh" <<<"${candidate_checker_output}"; then
+  echo "candidate CI checker mutation was validated against the trusted copy" >&2
+  printf '%s\n' "${candidate_checker_output}" >&2
+  exit 1
+fi
+cp "${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh" "${candidate_checker}"
+
+candidate_policy_test="${candidate_root}/.github/workflows/scripts/test-public-workflow-policy.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${candidate_policy_test}"
+set +e
+candidate_test_output="$("${checker_binary}" --scan-root "${candidate_root}" 2>&1)"
+candidate_test_status=$?
+set -e
+if [[ "${candidate_test_status}" -eq 0 ]] || ! grep -Fq -- \
+  "executable hash mismatch for .github/workflows/scripts/test-public-workflow-policy.sh" <<<"${candidate_test_output}"; then
+  echo "candidate CI policy-test mutation was validated against the trusted copy" >&2
+  printf '%s\n' "${candidate_test_output}" >&2
+  exit 1
+fi
+cp "${repo_root}/.github/workflows/scripts/test-public-workflow-policy.sh" "${candidate_policy_test}"
 
 cat >"${candidate_root}/.github/workflows/candidate-live.yml" <<'YAML'
 name: Candidate live cloud workflow
@@ -425,6 +647,14 @@ assert_exact_mutation_rejected \
   "uses unreviewed exact action goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
+pass_presence="${tmp_dir}/pass-presence.json"
+cat >"${pass_presence}" <<'JSON'
+[
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state":"active","presence":"present"},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state":"active","presence":"present"},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state":"active","presence":"present"}
+]
+JSON
 cat >"${pass_allowlist}" <<'JSON'
 [
   {
@@ -499,6 +729,7 @@ cat >"${pass_actions}" <<'JSON'
 JSON
 
 "${checker}" \
+  --presence-allowlist "${pass_presence}" \
   --allowlist "${pass_allowlist}" \
   --command-allowlist "${pass_commands}" \
   --action-allowlist "${pass_actions}" \
@@ -512,6 +743,7 @@ sed -i.bak 's/SAFE_VALUE=one/SAFE_VALUE=two/' "${mutated_workflow}"
 rm -f "${mutated_workflow}.bak"
 set +e
 assignment_mutation_output="$("${checker}" \
+  --presence-allowlist "${pass_presence}" \
   --allowlist "${pass_allowlist}" \
   --command-allowlist "${pass_commands}" \
   --action-allowlist "${pass_actions}" \
@@ -622,6 +854,8 @@ for expected in \
 done
 
 reject_allowlist="${tmp_dir}/reject-allowlist.json"
+reject_presence="${tmp_dir}/reject-presence.json"
+printf '[{"path":".github/workflows/scripts/fixtures/public-workflow-policy/reject.yml","contextSHA256":"e604ecf5a5ac14b51f40aa220e0aa14aeef76f9ddf297b6b69002d155a1f1715","state":"active","presence":"present"}]\n' >"${reject_presence}"
 cat >"${reject_allowlist}" <<'JSON'
 [
   {
@@ -647,6 +881,7 @@ JSON
 
 set +e
 reject_output="$("${checker}" \
+  --presence-allowlist "${reject_presence}" \
   --allowlist "${reject_allowlist}" \
   "${fixtures}/reject.yml" 2>&1)"
 reject_status=$?
@@ -682,15 +917,18 @@ executable_escape="${tmp_dir}/executable-escape.sh"
 ln -s /dev/null "${executable_escape}"
 executable_escape_rel="${executable_escape#"${repo_root}/"}"
 invalid_executables="${tmp_dir}/invalid-executables.json"
+negative_presence="${tmp_dir}/negative-presence.json"
+printf '[{"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state":"active","presence":"present"}]\n' >"${negative_presence}"
 cat >"${invalid_executables}" <<EOF
 [
-  {"path":"scripts/workflow-iac-host-conformance.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Hash mismatch and stale-entry mutation fixture."},
-  {"path":"../escape.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Traversal mutation fixture."},
-  {"path":"${executable_escape_rel}","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Symlink escape mutation fixture."}
+  {"path":"scripts/workflow-iac-host-conformance.sh","workflowPath":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state":"active","rationale":"Hash mismatch and stale-entry mutation fixture."},
+  {"path":"../escape.sh","workflowPath":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state":"active","rationale":"Traversal mutation fixture."},
+  {"path":"${executable_escape_rel}","workflowPath":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state":"active","rationale":"Symlink escape mutation fixture."}
 ]
 EOF
 set +e
 executable_integrity_output="$("${checker}" \
+  --presence-allowlist "${negative_presence}" \
   --allowlist "${empty_allowlist}" \
   --executable-allowlist "${invalid_executables}" \
   "${fixtures}/pass-negative-guard.yml" 2>&1)"
