@@ -168,13 +168,115 @@ func lineIsNegativeGuard(line string) bool {
 }
 
 var (
-	secretRefRE    = regexp.MustCompile(`(?i)secrets\.([A-Za-z0-9_]+)`)
+	secretRefRE    = regexp.MustCompile(`(?i)secrets(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[[[:space:]]*['"]([A-Za-z_][A-Za-z0-9_]*)['"][[:space:]]*\])`)
 	providerCLIRE  = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(doctl|gcloud|az|aws)([^A-Za-z0-9_.-]|$)`)
 	integrationRE  = regexp.MustCompile(`(^|[[:space:]])-tags(?:=|[[:space:]])[^[:space:]]*integration`)
 	namedLiveRE    = regexp.MustCompile(`(?i)(-run[=[:space:]]+[^[:space:]]*live|test[A-Za-z0-9_]*live|conformance_live_cloud)`)
 	providerSDKRE  = regexp.MustCompile(`(?i)(digitalocean/godo|aws-sdk|azure-sdk|cloud\.google\.com/go|google-cloud-)`)
 	providerAPIRE  = regexp.MustCompile(`(?i)(api\.digitalocean\.com|management\.azure\.com|[A-Za-z0-9.-]+\.amazonaws\.com|[A-Za-z0-9.-]+\.googleapis\.com|api\.cloudflare\.com)`)
+	githubRunnerRE = regexp.MustCompile(`^(ubuntu-(latest|[0-9]{2}\.[0-9]{2})(-arm)?|windows-(latest|[0-9]{4})|macos-(latest|[0-9]{2})(-(large|xlarge))?)$`)
 )
+
+func secretReferences(node *yaml.Node) map[string]bool {
+	values := []string{}
+	scalars(node, &values)
+	secrets := make(map[string]bool)
+	for _, value := range values {
+		for _, match := range secretRefRE.FindAllStringSubmatch(value, -1) {
+			name := match[1]
+			if name == "" {
+				name = match[2]
+			}
+			secrets[strings.ToUpper(name)] = true
+		}
+	}
+	return secrets
+}
+
+func validateSecretReferences(rel, prefix string, secrets map[string]bool, allowed map[string]allowEntry, referenced map[string]bool, findings *findingSet) {
+	for secret := range secrets {
+		key := rel + "\x00" + secret
+		referenced[key] = true
+		if knownCloudSecret(secret) {
+			findings.add("%s references known cloud secret %s", prefix, secret)
+		} else if _, ok := allowed[key]; !ok {
+			findings.add("%s secret %s is not allowlisted", prefix, secret)
+		}
+	}
+}
+
+func checkRunnerSelector(prefix string, runsOn *yaml.Node, findings *findingSet) {
+	if runsOn == nil {
+		findings.add("%s does not declare a GitHub-hosted runner selector", prefix)
+		return
+	}
+	var selectors []string
+	switch runsOn.Kind {
+	case yaml.ScalarNode:
+		selectors = append(selectors, runsOn.Value)
+	case yaml.SequenceNode:
+		for _, item := range runsOn.Content {
+			if item.Kind != yaml.ScalarNode {
+				findings.add("%s uses a non-scalar runner selector", prefix)
+				continue
+			}
+			selectors = append(selectors, item.Value)
+		}
+	default:
+		findings.add("%s uses an unsupported runner selector shape", prefix)
+		return
+	}
+	if len(selectors) == 0 {
+		findings.add("%s does not declare a GitHub-hosted runner selector", prefix)
+	}
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if strings.Contains(selector, "${{") {
+			findings.add("%s uses forbidden dynamic runner selector %s", prefix, selector)
+			continue
+		}
+		if strings.EqualFold(selector, "self-hosted") {
+			findings.add("%s uses forbidden self-hosted runner", prefix)
+			continue
+		}
+		if !githubRunnerRE.MatchString(selector) {
+			findings.add("%s runner selector %s is not recognized as GitHub-hosted", prefix, selector)
+		}
+	}
+}
+
+func providerUsesKind(reference string) string {
+	lower := strings.ToLower(strings.TrimSpace(reference))
+	path := strings.SplitN(lower, "@", 2)[0]
+	providerActions := []string{
+		"digitalocean/action-doctl",
+		"aws-actions/configure-aws-credentials",
+		"aws-actions/amazon-ecr-login",
+		"aws-actions/amazon-ecs-deploy-task-definition",
+		"azure/login",
+		"azure/aks-set-context",
+		"azure/webapps-deploy",
+		"google-github-actions/auth",
+		"cloudflare/wrangler-action",
+	}
+	for _, action := range providerActions {
+		if path == action {
+			return "action"
+		}
+	}
+	if strings.HasPrefix(path, "google-github-actions/deploy-") {
+		return "action"
+	}
+	if strings.Contains(path, "/.github/workflows/") {
+		owner := strings.SplitN(path, "/", 2)[0]
+		providerOwner := owner == "digitalocean" || owner == "aws-actions" || owner == "azure" || owner == "google-github-actions" || owner == "cloudflare"
+		livePurpose := strings.Contains(path, "live") || strings.Contains(path, "deploy") || strings.Contains(path, "infra") || strings.Contains(path, "conformance") || strings.Contains(path, "smoke")
+		if providerOwner && livePurpose {
+			return "reusable workflow"
+		}
+	}
+	return ""
+}
 
 func knownCloudSecret(name string) bool {
 	name = strings.ToUpper(name)
@@ -277,6 +379,16 @@ func main() {
 		for name := range credentialVariables {
 			findings.add("workflow %s declares known cloud credential variable %s", rel, name)
 		}
+		globalSecrets := make(map[string]bool)
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == "jobs" {
+				continue
+			}
+			for secret := range secretReferences(root.Content[i+1]) {
+				globalSecrets[secret] = true
+			}
+		}
+		validateSecretReferences(rel, "workflow "+rel, globalSecrets, allowed, referenced, findings)
 		manual := triggerPresent(root, "workflow_dispatch")
 		scheduled := triggerPresent(root, "schedule")
 		jobs := mappingValue(root, "jobs")
@@ -289,13 +401,7 @@ func main() {
 			job := jobs.Content[i+1]
 			prefix := rel + " job " + jobName
 
-			var runnerValues []string
-			scalars(mappingValue(job, "runs-on"), &runnerValues)
-			for _, runner := range runnerValues {
-				if strings.EqualFold(strings.TrimSpace(runner), "self-hosted") {
-					findings.add("%s uses forbidden self-hosted runner", prefix)
-				}
-			}
+			checkRunnerSelector(prefix, mappingValue(job, "runs-on"), findings)
 
 			var permissionValues []string
 			permissions := mappingValue(job, "permissions")
@@ -311,30 +417,35 @@ func main() {
 				}
 			}
 
-			var jobScalars []string
-			scalars(job, &jobScalars)
 			jobSecrets := make(map[string]bool)
-			for _, value := range jobScalars {
-				for _, match := range secretRefRE.FindAllStringSubmatch(value, -1) {
-					secret := strings.ToUpper(match[1])
-					jobSecrets[secret] = true
-					key := rel + "\x00" + secret
-					referenced[key] = true
-					if knownCloudSecret(secret) {
-						findings.add("%s references known cloud secret %s", prefix, secret)
-					} else if _, ok := allowed[key]; !ok {
-						findings.add("%s secret %s is not allowlisted", prefix, secret)
-					}
-				}
+			for secret := range globalSecrets {
+				jobSecrets[secret] = true
+			}
+			localSecrets := secretReferences(job)
+			validateSecretReferences(rel, prefix, localSecrets, allowed, referenced, findings)
+			for secret := range localSecrets {
+				jobSecrets[secret] = true
 			}
 
 			providerAuthority := false
 			hasIntegrationTag := false
 			hasProviderSDK := false
 			namedLive := false
+			if uses := mappingValue(job, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
+				if kind := providerUsesKind(uses.Value); kind != "" {
+					providerAuthority = true
+					findings.add("%s invokes forbidden provider %s %s", prefix, kind, uses.Value)
+				}
+			}
 			steps := mappingValue(job, "steps")
 			if steps != nil && steps.Kind == yaml.SequenceNode {
 				for _, step := range steps.Content {
+					if uses := mappingValue(step, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
+						if kind := providerUsesKind(uses.Value); kind != "" {
+							providerAuthority = true
+							findings.add("%s invokes forbidden provider %s %s", prefix, kind, uses.Value)
+						}
+					}
 					run := mappingValue(step, "run")
 					if run == nil || run.Kind != yaml.ScalarNode {
 						continue

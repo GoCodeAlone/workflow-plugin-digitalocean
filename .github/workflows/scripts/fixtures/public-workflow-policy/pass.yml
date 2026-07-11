@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/credential-free-setup
       - name: Exercise local integration boundary
         run: GOWORK=off go test -tags=integration ./internal/local/...
       - name: Reject provider dependencies
@@ -32,3 +34,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" dist/*
+
+  macos-build:
+    runs-on: macos-14
+    steps:
+      - run: go test ./...
+
+  windows-build:
+    runs-on: windows-2022
+    steps:
+      - run: go test ./...

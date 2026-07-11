@@ -83,6 +83,105 @@ done
 
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
+
+uses_allowlist="${tmp_dir}/uses-allowlist.json"
+cat >"${uses_allowlist}" <<'JSON'
+[
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-provider-uses.yml",
+    "secret": "DEPLOY_AUTH",
+    "rationale": "An opaque alias must not hide authority granted to a provider action."
+  }
+]
+JSON
+set +e
+uses_output="$("${checker}" \
+  --allowlist "${uses_allowlist}" \
+  "${fixtures}/reject-provider-uses.yml" 2>&1)"
+uses_status=$?
+set -e
+
+if [[ "${uses_status}" -eq 0 ]]; then
+  echo "expected provider action and reusable workflow references to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "forbidden provider action digitalocean/action-doctl@v2" \
+  "forbidden provider reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
+  "provider authority with secret DEPLOY_AUTH"; do
+  if ! grep -Fq -- "${expected}" <<<"${uses_output}"; then
+    echo "missing expected provider uses diagnostic: ${expected}" >&2
+    printf '%s\n' "${uses_output}" >&2
+    exit 1
+  fi
+done
+
+secret_syntax_allowlist="${tmp_dir}/secret-syntax-allowlist.json"
+cat >"${secret_syntax_allowlist}" <<'JSON'
+[
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml",
+    "secret": "DEPLOY_AUTH",
+    "rationale": "A global opaque alias must remain visible to provider-authority analysis."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml",
+    "secret": "DIGITALOCEAN_TOKEN",
+    "rationale": "Known provider credentials remain forbidden regardless of syntax or rationale."
+  }
+]
+JSON
+set +e
+secret_syntax_output="$("${checker}" \
+  --allowlist "${secret_syntax_allowlist}" \
+  "${fixtures}/reject-secret-syntax.yml" 2>&1)"
+secret_syntax_status=$?
+set -e
+
+if [[ "${secret_syntax_status}" -eq 0 ]]; then
+  echo "expected bracket and global secret references to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml references known cloud secret DIGITALOCEAN_TOKEN" \
+  "provider authority with secret DEPLOY_AUTH" \
+  "secret UNREVIEWED_TOKEN is not allowlisted"; do
+  if ! grep -Fq -- "${expected}" <<<"${secret_syntax_output}"; then
+    echo "missing expected secret syntax diagnostic: ${expected}" >&2
+    printf '%s\n' "${secret_syntax_output}" >&2
+    exit 1
+  fi
+done
+if grep -Fq -- "stale allowlist entry" <<<"${secret_syntax_output}"; then
+  echo "bracket secret references were not matched to their exact allowlist entries" >&2
+  printf '%s\n' "${secret_syntax_output}" >&2
+  exit 1
+fi
+
+set +e
+runner_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-runners.yml" 2>&1)"
+runner_status=$?
+set -e
+
+if [[ "${runner_status}" -eq 0 ]]; then
+  echo "expected non-GitHub-hosted runner selectors to fail policy" >&2
+  exit 1
+fi
+# The GitHub expression below is an intentionally literal expected diagnostic.
+# shellcheck disable=SC2016
+for expected in \
+  "runner selector private-linux is not recognized as GitHub-hosted" \
+  "runner selector linux is not recognized as GitHub-hosted" \
+  'forbidden dynamic runner selector ${{ vars.RUNNER_LABEL }}'; do
+  if ! grep -Fq -- "${expected}" <<<"${runner_output}"; then
+    echo "missing expected runner policy diagnostic: ${expected}" >&2
+    printf '%s\n' "${runner_output}" >&2
+    exit 1
+  fi
+done
+
 set +e
 global_output="$("${checker}" \
   --allowlist "${empty_allowlist}" \
