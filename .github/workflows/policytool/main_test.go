@@ -305,3 +305,78 @@ func TestDangerousAssignmentsAndEnvironmentRedirects(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkingDirectoryIsCategoricallyRejected(t *testing.T) {
+	for name, source := range map[string]string{
+		"literal": "working-directory: ./subdir\n",
+		"dynamic": "working-directory: ${{ vars.WORKDIR }}\n",
+		"mapping": "working-directory:\n  path: ./subdir\n",
+	} {
+		var node yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &node); err != nil {
+			t.Fatal(err)
+		}
+		findings := &findingSet{}
+		checkWorkingDirectory("fixture "+name, node.Content[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("%s working-directory was accepted", name)
+		}
+	}
+}
+
+func TestExecutionAffectingEnvironmentNames(t *testing.T) {
+	for _, name := range []string{
+		"PATH", "BASH_ENV", "ENV", "SHELLOPTS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES",
+		"NODE_OPTIONS", "PYTHONPATH", "PYTHONHOME", "RUBYOPT", "PERL5OPT", "PERL5LIB",
+		"GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_SSH", "GIT_SSH_COMMAND", "HOME", "IFS", "CDPATH",
+		"CC", "CXX", "AR", "LD", "GOROOT", "GOPATH", "GOENV", "GOFLAGS", "GOTOOLCHAIN",
+		"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBRARY_PATH", "CPATH", "RUSTC_WRAPPER", "JAVA_TOOL_OPTIONS",
+	} {
+		if !executionAffectingEnv(name) {
+			t.Errorf("%s was not rejected", name)
+		}
+	}
+	for _, name := range []string{"GOPRIVATE", "GH_TOKEN", "GITHUB_TOKEN", "RELEASES_TOKEN", "WFCTL_CONFORMANCE_VERSION"} {
+		if executionAffectingEnv(name) {
+			t.Errorf("required safe environment %s was rejected", name)
+		}
+	}
+}
+
+func TestAuthorizationContextBindsInheritedEnvironmentAndDefaults(t *testing.T) {
+	parseMapping := func(source string) *yaml.Node {
+		t.Helper()
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Content[0]
+	}
+	workflow := parseMapping("env:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\n")
+	job := parseMapping("env:\n  JOB_MODE: one\n")
+	step := parseMapping("env:\n  STEP_MODE: one\nrun: echo safe\n")
+	original := authorizationContextDigest(workflow, job, step)
+	for _, changed := range []*yaml.Node{
+		parseMapping("env:\n  SAFE_MODE: two\ndefaults:\n  run:\n    shell: bash\n"),
+		parseMapping("env:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\n    working-directory: ./subdir\n"),
+	} {
+		if authorizationContextDigest(changed, job, step) == original {
+			t.Fatal("workflow inherited context mutation retained digest")
+		}
+	}
+	changedJob := parseMapping("env:\n  JOB_MODE: two\n")
+	if authorizationContextDigest(workflow, changedJob, step) == original {
+		t.Fatal("job inherited context mutation retained digest")
+	}
+}
+
+func TestAssignmentOnlyCallIsRecognized(t *testing.T) {
+	file := parseShell(t, `SAFE_VALUE=one`)
+	call := firstCall(t, file)
+	if !assignmentOnlyCall(call) {
+		t.Fatal("standalone safe assignment was not recognized")
+	}
+	if assignmentOnlyCall(firstCall(t, parseShell(t, `SAFE_VALUE=one echo safe`))) {
+		t.Fatal("command with an assignment prefix was treated as assignment-only")
+	}
+}
