@@ -4,6 +4,18 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 checker_binary="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 fixtures="${repo_root}/.github/workflows/scripts/fixtures/public-workflow-policy"
+policytool="${repo_root}/.github/workflows/policytool"
+
+if GOWORK=off go list -m all | grep -Eq '^mvdan\.cc/sh/v3 '; then
+  echo "policy parser dependency leaked into the plugin module graph" >&2
+  exit 1
+fi
+if [[ "$(cd "${policytool}" && GOWORK=off go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" != "v3.13.1" ]]; then
+  echo "policy tool must pin mvdan.cc/sh/v3 v3.13.1" >&2
+  exit 1
+fi
+(cd "${policytool}" && GOWORK=off go test ./...)
+
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 trap 'rm -rf "${tmp_dir}"' EXIT
 export TMPDIR="${tmp_dir}"
@@ -370,6 +382,71 @@ if [[ "${deny_execution_status}" -eq 0 ]] || ! grep -Fq -- \
   printf '%s\n' "${deny_execution_output}" >&2
   exit 1
 fi
+
+set +e
+shell_inheritance_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-shell-inheritance.yml" 2>&1)"
+shell_inheritance_status=$?
+missing_shell_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-missing-shell.yml" 2>&1)"
+missing_shell_status=$?
+unsafe_program_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-unsafe-programs.yml" 2>&1)"
+unsafe_program_status=$?
+set -e
+
+if [[ "${shell_inheritance_status}" -eq 0 || "${missing_shell_status}" -eq 0 ]]; then
+  echo "expected inherited, overridden, and missing shells to fail policy" >&2
+  exit 1
+fi
+# The GitHub expression below is an intentionally literal expected diagnostic.
+# shellcheck disable=SC2016
+for expected in \
+  'workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-shell-inheritance.yml uses forbidden dynamic shell ${{ vars.DEFAULT_SHELL }}' \
+  "job job-python uses forbidden custom shell python" \
+  "job job-pwsh uses forbidden custom shell pwsh" \
+  "job job-pwsh executes forbidden network client invoke-restmethod" \
+  "job job-custom uses forbidden custom shell fish" \
+  "job step-override uses forbidden custom shell powershell"; do
+  if ! grep -Fq -- "${expected}" <<<"${shell_inheritance_output}"; then
+    echo "missing effective shell diagnostic: ${expected}" >&2
+    printf '%s\n' "${shell_inheritance_output}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq -- "job implicit-platform-default does not declare an explicit Bash shell" <<<"${missing_shell_output}"; then
+  echo "missing implicit platform shell diagnostic" >&2
+  printf '%s\n' "${missing_shell_output}" >&2
+  exit 1
+fi
+
+if [[ "${unsafe_program_status}" -eq 0 ]]; then
+  echo "expected provider-capable and dynamic programs to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "job curl-endpoint executes forbidden network client curl" \
+  "job wget-endpoint executes forbidden network client wget" \
+  "job http-client executes forbidden network client http" \
+  "job python-code executes forbidden interpreter python" \
+  "job node-code executes forbidden interpreter node" \
+  "job dynamic-interpreter-script executes forbidden interpreter python" \
+  "job powershell-endpoint executes forbidden interpreter pwsh" \
+  "job go-run executes forbidden go run" \
+  "job npx-exec executes forbidden package executor npx" \
+  "job npm-exec executes forbidden package executor npm exec" \
+  "job docker-run executes forbidden container command docker run" \
+  "job docker-login executes forbidden container command docker login" \
+  "job docker-push executes forbidden container command docker push"; do
+  if ! grep -Fq -- "${expected}" <<<"${unsafe_program_output}"; then
+    echo "missing unsafe program diagnostic: ${expected}" >&2
+    printf '%s\n' "${unsafe_program_output}" >&2
+    exit 1
+  fi
+done
 
 invalid_paths_allowlist="${tmp_dir}/invalid-paths-allowlist.json"
 cat >"${invalid_paths_allowlist}" <<'JSON'

@@ -3,6 +3,10 @@ name: No secrets are used by provider rejection guards
 on:
   pull_request:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   reject-provider-markers:
     name: No secrets are used

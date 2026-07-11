@@ -1,0 +1,74 @@
+name: Forbidden dynamic and provider-capable programs
+
+on:
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  curl-endpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl "${{ vars.ENDPOINT }}"
+
+  wget-endpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: wget https://example.invalid/resource
+
+  http-client:
+    runs-on: ubuntu-latest
+    steps:
+      - run: http GET "${{ vars.ENDPOINT }}"
+
+  python-code:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python -c "$CODE"
+
+  node-code:
+    runs-on: ubuntu-latest
+    steps:
+      - run: node -e "${{ vars.CODE }}"
+
+  dynamic-interpreter-script:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python "$SCRIPT"
+
+  powershell-endpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pwsh -Command 'Invoke-RestMethod -Uri https://api.digitalocean.com/v2/droplets'
+
+  go-run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: go run ./cmd/tool
+
+  npx-exec:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npx provider-tool
+
+  npm-exec:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm exec provider-tool
+
+  docker-run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker run provider/image
+
+  docker-login:
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker login registry.example.invalid
+
+  docker-push:
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker push registry.example.invalid/provider/image

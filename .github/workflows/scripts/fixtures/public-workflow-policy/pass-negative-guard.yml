@@ -3,6 +3,10 @@ name: Credential-free negative provider guard
 on:
   pull_request:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   boundary-guard:
     runs-on: ubuntu-latest
