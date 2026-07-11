@@ -28,7 +28,9 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - name: Validate conformance workflow ownership
-        run: ./.github/workflows/scripts/test-conformance-workflows.sh
+        run: |
+          ./.github/workflows/scripts/test-conformance-workflows.sh
+          ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
 
   wfctl-strict-contracts:
     runs-on: ubuntu-latest
