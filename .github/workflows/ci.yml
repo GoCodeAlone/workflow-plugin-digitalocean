@@ -31,6 +31,7 @@ jobs:
         run: |
           ./.github/workflows/scripts/test-conformance-workflows.sh
           ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
+          ./.github/workflows/scripts/test-conformance-safety-helpers.sh
 
   wfctl-strict-contracts:
     runs-on: ubuntu-latest

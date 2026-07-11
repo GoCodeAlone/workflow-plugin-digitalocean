@@ -36,7 +36,8 @@ runs the plugin's `TestConformance` entrypoint, and invokes tag cleanup under
 Change a threshold only by appending a dated approval entry here and updating
 `.github/workflows/conformance-budget-check.yml` in the same PR. The reusable
 budget job queries `/v2/customers/my/balance` and aborts before the smoke job can
-start when usage is over the hard stop.
+start when usage meets or exceeds the hard stop. Both the budget job and hourly
+scrubber use the same executable predicate, including the exact `$25` boundary.
 
 ## Token rotation
 
@@ -61,7 +62,9 @@ Cleanup has two layers:
 1. `conformance-smoke.yml` always runs `wfctl infra cleanup --fix` with the
    unique `wf-do-conformance-<run>-<attempt>` tag.
 2. `conformance-leak-scrubber.yml` hourly deletes tagged Droplets older than
-   one hour and files or updates an incident.
+   one hour and files or updates an incident. Every pagination URL is checked
+   before authenticated use: only exact `https://api.digitalocean.com`
+   authority is accepted, and repeated pages abort the traversal.
 
 The helper deduplicates on two labels. Automated leak issues use
 `conformance-leak-incident` plus `auto-filed-leak`; automated budget issues use
@@ -80,6 +83,8 @@ gated removal.
 
 ```sh
 ./.github/workflows/scripts/test-conformance-workflows.sh
+./.github/workflows/scripts/test-conformance-workflow-mutations.sh
+./.github/workflows/scripts/test-conformance-safety-helpers.sh
 actionlint .github/workflows/*.yml
 GOWORK=off go test -tags=conformance ./internal/... -run '^TestConformance$' -count=1
 ```

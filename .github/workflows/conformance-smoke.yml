@@ -53,13 +53,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Configure Git for private dependencies when available
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
       - name: Check workflow ownership structure
         run: ./.github/workflows/scripts/test-conformance-workflows.sh
       - name: Run provider conformance without cloud credentials
@@ -107,13 +100,6 @@ jobs:
             echo "::error::DO_CONFORMANCE_API_TOKEN is required for trusted live conformance"
             exit 1
           }
-      - name: Configure Git for private dependencies when available
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
       - name: Build accepted plugin loader layout
         run: |
           set -euo pipefail

@@ -32,7 +32,7 @@ jobs:
       - name: Fetch month-to-date usage
         run: |
           set -euo pipefail
-          curl --silent --show-error --fail \
+          curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 \
             -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
             https://api.digitalocean.com/v2/customers/my/balance \
             > "${RUNNER_TEMP}/do-conformance-balance.json"
@@ -43,15 +43,15 @@ jobs:
           set -euo pipefail
           SPEND="$(jq -er '.month_to_date_usage // "0" | tonumber' "${RUNNER_TEMP}/do-conformance-balance.json")"
           echo "month_to_date_usage=${SPEND}" >> "${GITHUB_STEP_SUMMARY}"
-          if awk "BEGIN { exit !(${SPEND} > ${BUDGET_HARD_CAP_USD}) }"; then
-            echo "::error title=Budget exceeded::DigitalOcean conformance month-to-date \$${SPEND} exceeds the \$${BUDGET_HARD_CAP_USD} cap"
+          if .github/workflows/scripts/conformance-safety.sh budget-at-or-over "${SPEND}" "${BUDGET_HARD_CAP_USD}"; then
+            echo "::error title=Budget exceeded::DigitalOcean conformance month-to-date \$${SPEND} meets or exceeds the \$${BUDGET_HARD_CAP_USD} cap"
             exit 1
           fi
-          if awk "BEGIN { exit !(${SPEND} > ${BUDGET_SOFT_CAP_USD}) }"; then
-            echo "::warning title=Budget approaching cap::DigitalOcean conformance month-to-date \$${SPEND} exceeds \$${BUDGET_SOFT_CAP_USD}"
+          if .github/workflows/scripts/conformance-safety.sh budget-at-or-over "${SPEND}" "${BUDGET_SOFT_CAP_USD}"; then
+            echo "::warning title=Budget approaching cap::DigitalOcean conformance month-to-date \$${SPEND} meets or exceeds \$${BUDGET_SOFT_CAP_USD}"
             PRIMARY_LABEL=conformance-budget-incident \
             HELPER_LABEL=auto-filed-budget \
             ISSUE_TITLE="DigitalOcean conformance budget soft alert" \
               .github/workflows/scripts/file-or-comment-leak-issue.sh \
-                "${SPEND}" "Month-to-date usage exceeds the soft cap"
+                "${SPEND}" "Month-to-date usage meets or exceeds the soft cap"
           fi

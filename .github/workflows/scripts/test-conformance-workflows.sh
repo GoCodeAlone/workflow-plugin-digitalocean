@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Literal workflow fragments intentionally use single quotes.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 repo_root="${CONFORMANCE_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -52,7 +54,7 @@ step_block() {
 hard_cap_block() {
   local file="$1"
   awk '
-    /^          if awk .*BUDGET_HARD_CAP_USD.*; then$/ {
+    /^          if .*conformance-safety.sh budget-at-or-over .*BUDGET_HARD_CAP_USD.*; then$/ {
       found = 1
       printing = 1
     }
@@ -78,6 +80,22 @@ block_must_not_contain() {
   fi
 }
 
+block_must_precede() {
+  local label="$1"
+  local block="$2"
+  local first="$3"
+  local second="$4"
+  local first_line
+  local second_line
+  first_line="$(grep -nF -- "${first}" <<< "${block}" | head -n1 | cut -d: -f1 || true)"
+  second_line="$(grep -nF -- "${second}" <<< "${block}" | head -n1 | cut -d: -f1 || true)"
+  [[ -n "${first_line}" ]] || fail "${label} missing ordered fragment: ${first}"
+  [[ -n "${second_line}" ]] || fail "${label} missing ordered fragment: ${second}"
+  if [[ "${first_line}" -ge "${second_line}" ]]; then
+    fail "${label} must place '${first}' before '${second}'"
+  fi
+}
+
 assert_trusted_live_gate() {
   local label="$1"
   local block="$2"
@@ -92,9 +110,11 @@ budget=.github/workflows/conformance-budget-check.yml
 scrubber=.github/workflows/conformance-leak-scrubber.yml
 cleanup=.github/conformance/cleanup.yaml
 helper=.github/workflows/scripts/file-or-comment-leak-issue.sh
+safety_helper=.github/workflows/scripts/conformance-safety.sh
+safety_test=.github/workflows/scripts/test-conformance-safety-helpers.sh
 runbook=docs/conformance-runbook.md
 
-for file in "${smoke}" "${budget}" "${scrubber}" "${cleanup}" "${helper}" "${runbook}"; do
+for file in "${smoke}" "${budget}" "${scrubber}" "${cleanup}" "${helper}" "${safety_helper}" "${safety_test}" "${runbook}"; do
   must_exist "${file}"
 done
 
@@ -107,12 +127,17 @@ must_not_contain "${smoke}" "pull_request_target:"
 workflow_preamble="$(awk '$0 == "jobs:" { exit } { print }' "${smoke}")"
 block_must_not_contain "workflow preamble" "${workflow_preamble}" "DO_CONFORMANCE_API_TOKEN"
 block_must_not_contain "workflow preamble" "${workflow_preamble}" "DIGITALOCEAN_TOKEN"
+block_must_not_contain "workflow preamble" "${workflow_preamble}" "RELEASES_TOKEN"
+block_must_not_contain "workflow preamble" "${workflow_preamble}" "git config"
 
 credential_job="$(job_block "${smoke}" credential-free)" || fail "missing credential-free job"
 block_must_contain "credential-free job" "${credential_job}" "runs-on: ubuntu-latest"
 block_must_not_contain "credential-free job" "${credential_job}" "self-hosted"
 block_must_not_contain "credential-free job" "${credential_job}" "DO_CONFORMANCE_API_TOKEN"
 block_must_not_contain "credential-free job" "${credential_job}" "DIGITALOCEAN_TOKEN"
+block_must_not_contain "credential-free job" "${credential_job}" "RELEASES_TOKEN"
+block_must_not_contain "credential-free job" "${credential_job}" "git config"
+block_must_not_contain "credential-free job" "${credential_job}" '${{ secrets.'
 block_must_contain "credential-free job" "${credential_job}" "GOWORK=off go test -tags=conformance"
 
 budget_call_job="$(job_block "${smoke}" budget-check)" || fail "missing budget-check call job"
@@ -123,6 +148,8 @@ live_job="$(job_block "${smoke}" live-smoke)" || fail "missing live-smoke job"
 assert_trusted_live_gate "live-smoke job" "${live_job}"
 block_must_contain "live-smoke job" "${live_job}" "runs-on: [self-hosted, linux]"
 block_must_contain "live-smoke job" "${live_job}" "needs: [budget-check]"
+block_must_not_contain "live-smoke job" "${live_job}" "RELEASES_TOKEN"
+block_must_not_contain "live-smoke job" "${live_job}" "git config --global"
 
 # W0 consumes a released Workflow CLI and the plugin's existing conformance
 # entrypoint. It must not reach forward to Task 2 contracts or Workflow source.
@@ -160,6 +187,7 @@ block_must_contain "budget token preflight" "${budget_preflight}" 'test -n "${DO
 must_contain "${budget}" 'month_to_date_usage'
 must_contain "${budget}" 'BUDGET_HARD_CAP_USD: 25'
 hard_cap_branch="$(hard_cap_block "${budget}")" || fail "missing hard-cap branch"
+block_must_contain "hard-cap branch" "${hard_cap_branch}" "conformance-safety.sh budget-at-or-over"
 block_must_contain "hard-cap branch" "${hard_cap_branch}" 'exit 1'
 
 # The scheduled owner-local scrubber is independently token-gated and uses
@@ -175,6 +203,17 @@ scrubber_job="$(job_block "${scrubber}" scrub)" || fail "missing scrub job"
 block_must_contain "scrub job" "${scrubber_job}" "runs-on: [self-hosted, linux]"
 scrubber_preflight="$(step_block "${scrubber}" "Fail when the scrubber token is missing")" || fail "missing scrubber token preflight"
 block_must_contain "scrubber token preflight" "${scrubber_preflight}" 'test -n "${DO_CONFORMANCE_API_TOKEN:-}"'
+scrubber_pages="$(step_block "${scrubber}" "List and delete expired tagged Droplets")" || fail "missing scrubber pagination step"
+block_must_contain "scrubber pagination step" "${scrubber_pages}" "conformance-safety.sh"
+block_must_contain "scrubber pagination step" "${scrubber_pages}" "validate-do-page-url"
+block_must_contain "scrubber pagination step" "${scrubber_pages}" '"${seen_pages}"'
+block_must_contain "scrubber pagination step" "${scrubber_pages}" "curl --disable"
+block_must_contain "scrubber pagination step" "${scrubber_pages}" "--proto '=https'"
+block_must_precede "scrubber pagination step" "${scrubber_pages}" \
+  "validate-do-page-url" 'response="$(curl'
+
+scrubber_budget="$(step_block "${scrubber}" "Escalate spend at or above the hard cap")" || fail "missing scrubber budget step"
+block_must_contain "scrubber budget step" "${scrubber_budget}" "conformance-safety.sh budget-at-or-over"
 
 # The apply and cleanup commands share one provider-local config; it creates a
 # tagged smoke Droplet and supplies the provider loader for cleanup.
@@ -188,5 +227,6 @@ must_contain .github/workflows/ci.yml "WFCTL_CONFORMANCE_VERSION: v0.85.4"
 must_not_contain .github/workflows/ci.yml "WFCTL_CONFORMANCE_REF"
 must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-workflows.sh"
 must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-workflow-mutations.sh"
+must_contain .github/workflows/ci.yml "./.github/workflows/scripts/test-conformance-safety-helpers.sh"
 
 echo "conformance workflow structure: ok"

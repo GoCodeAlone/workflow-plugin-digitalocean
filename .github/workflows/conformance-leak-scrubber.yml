@@ -38,10 +38,14 @@ jobs:
           set -euo pipefail
           now_epoch="$(date -u +%s)"
           page_url="https://api.digitalocean.com/v2/droplets?per_page=200"
+          seen_pages="$(mktemp "${RUNNER_TEMP}/do-conformance-pages.XXXXXX")"
+          trap 'rm -f "${seen_pages}"' EXIT
           scrubbed=0
           details=""
           while [ -n "${page_url}" ]; do
-            response="$(curl --silent --show-error --fail \
+            .github/workflows/scripts/conformance-safety.sh \
+              validate-do-page-url "${page_url}" "${seen_pages}"
+            response="$(curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 \
               -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
               "${page_url}")"
             while IFS=$'\t' read -r id name created_at; do
@@ -49,7 +53,7 @@ jobs:
               created_epoch="$(date -u -d "${created_at}" +%s)"
               age="$((now_epoch - created_epoch))"
               if [ "${age}" -gt "${AGE_THRESHOLD_SECONDS}" ]; then
-                curl --silent --show-error --fail \
+                curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 \
                   -X DELETE \
                   -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
                   "https://api.digitalocean.com/v2/droplets/${id}"
@@ -77,19 +81,19 @@ jobs:
         run: |
           .github/workflows/scripts/file-or-comment-leak-issue.sh \
             "${SCRUB_COUNT}" "${SCRUB_DETAILS}"
-      - name: Escalate spend above the hard cap
+      - name: Escalate spend at or above the hard cap
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          balance="$(curl --silent --show-error --fail \
+          balance="$(curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 \
             -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
             https://api.digitalocean.com/v2/customers/my/balance)"
           spend="$(jq -er '.month_to_date_usage // "0" | tonumber' <<< "${balance}")"
-          if awk "BEGIN { exit !(${spend} > ${BUDGET_HARD_CAP_USD}) }"; then
+          if .github/workflows/scripts/conformance-safety.sh budget-at-or-over "${spend}" "${BUDGET_HARD_CAP_USD}"; then
             PRIMARY_LABEL=conformance-budget-incident \
             HELPER_LABEL=auto-filed-budget \
             ISSUE_TITLE="DigitalOcean conformance budget incident" \
               .github/workflows/scripts/file-or-comment-leak-issue.sh \
-                "${spend}" "Month-to-date usage remains above the hard cap"
+                "${spend}" "Month-to-date usage remains at or above the hard cap"
           fi
