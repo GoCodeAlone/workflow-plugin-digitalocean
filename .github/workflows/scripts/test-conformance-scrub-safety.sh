@@ -20,6 +20,18 @@ require_text() {
   fi
 }
 
+forbid_text() {
+  local name="$1"
+  local file="$2"
+  local text="$3"
+  if grep -Fq -- "${text}" "${file}"; then
+    echo "scrub safety ${name}: forbidden ${text}" >&2
+    failures=$((failures + 1))
+  else
+    echo "scrub safety ${name}: ok"
+  fi
+}
+
 require_order() {
   local name="$1"
   local file="$2"
@@ -52,6 +64,9 @@ check_curl_timeouts() {
 check_curl_timeouts "${budget}"
 check_curl_timeouts "${scrubber}"
 
+require_text list-status-capture "${scrubber}" 'list_status="$(curl'
+require_text list-response-validation "${scrubber}" 'validate-do-list-response "${list_status}" "${list_body}"'
+require_order list-validate-before-rows "${scrubber}" 'validate-do-list-response "${list_status}" "${list_body}"' 'rows="$(jq'
 require_text delete-status-capture "${scrubber}" 'delete_status="$(curl'
 require_text delete-status-validation "${scrubber}" 'validate-do-delete-status "${delete_status}"'
 require_order delete-before-count "${scrubber}" 'validate-do-delete-status "${delete_status}"' 'scrubbed="$((scrubbed + 1))"'
@@ -64,6 +79,20 @@ require_text final-failure-step "${scrubber}" "Fail after incomplete cleanup rep
 require_text final-failure-exit "${scrubber}" "exit 1"
 require_order incident-before-budget "${scrubber}" "File or update the cleanup incident" "Escalate spend at or above the hard cap"
 require_order budget-before-final "${scrubber}" "Escalate spend at or above the hard cap" "Fail after incomplete cleanup reporting"
+
+forbid_text literal-details-no-percent-b "${scrubber}" "printf '%b'"
+require_text literal-details-percent-s "${scrubber}" "printf '%s'"
+literal_newline_marker="\$'\\n'"
+require_text literal-failure-newline "${scrubber}" "${literal_newline_marker}"
+
+detail_fixture='provider \\n stays literal; delimiter-like <<EOF'
+rendered="$(printf '%s' "${detail_fixture}")"
+if [[ "${rendered}" != "${detail_fixture}" ]]; then
+  echo "scrub safety literal-detail-roundtrip: evidence changed" >&2
+  failures=$((failures + 1))
+else
+  echo "scrub safety literal-detail-roundtrip: ok"
+fi
 
 if [[ "${failures}" -ne 0 ]]; then
   exit 1

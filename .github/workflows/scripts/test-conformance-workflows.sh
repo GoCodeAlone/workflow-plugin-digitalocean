@@ -214,7 +214,7 @@ block_must_contain "scrubber pagination step" "${scrubber_pages}" '"${seen_pages
 block_must_contain "scrubber pagination step" "${scrubber_pages}" "curl --disable"
 block_must_contain "scrubber pagination step" "${scrubber_pages}" "--proto '=https'"
 block_must_precede "scrubber pagination step" "${scrubber_pages}" \
-  "validate-do-page-url" 'response="$(curl'
+  "validate-do-page-url" 'list_status="$(curl'
 
 scrubber_budget="$(step_block "${scrubber}" "Escalate spend at or above the hard cap")" || fail "missing scrubber budget step"
 block_must_contain "scrubber budget step" "${scrubber_budget}" "conformance-safety.sh budget-state"

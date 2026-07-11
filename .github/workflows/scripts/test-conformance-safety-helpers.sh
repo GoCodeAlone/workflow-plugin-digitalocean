@@ -4,8 +4,14 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 helper="${repo_root}/.github/workflows/scripts/conformance-safety.sh"
 seen_file="$(mktemp)"
-trap 'rm -f "${seen_file}"' EXIT
+fixture_dir="$(mktemp -d)"
+trap 'rm -f "${seen_file}"; rm -rf "${fixture_dir}"' EXIT
 failures=0
+
+printf '%s' '{"droplets":[]}' > "${fixture_dir}/valid.json"
+: > "${fixture_dir}/empty.json"
+printf '%s' '{}' > "${fixture_dir}/object.json"
+printf '%s' 'not-json' > "${fixture_dir}/malformed.json"
 
 expect_status() {
   local name="$1"
@@ -66,6 +72,14 @@ expect_status delete-299 66 "${helper}" validate-do-delete-status 299
 expect_status delete-300 66 "${helper}" validate-do-delete-status 300
 expect_status delete-399 66 "${helper}" validate-do-delete-status 399
 expect_status delete-400 66 "${helper}" validate-do-delete-status 400
+
+# Droplet listing is usable only for exact HTTP 200 with the required array.
+expect_status list-valid-empty 0 "${helper}" validate-do-list-response 200 "${fixture_dir}/valid.json"
+expect_status list-empty-body 67 "${helper}" validate-do-list-response 200 "${fixture_dir}/empty.json"
+expect_status list-empty-object 67 "${helper}" validate-do-list-response 200 "${fixture_dir}/object.json"
+expect_status list-malformed 67 "${helper}" validate-do-list-response 200 "${fixture_dir}/malformed.json"
+expect_status list-204 67 "${helper}" validate-do-list-response 204 "${fixture_dir}/valid.json"
+expect_status list-302 67 "${helper}" validate-do-list-response 302 "${fixture_dir}/valid.json"
 
 # Pagination permits only exact DigitalOcean HTTPS authority and never follows
 # the same URL twice in one traversal.

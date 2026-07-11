@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 budget-state <spend> <cap> | validate-do-delete-status <status> | validate-do-page-url <url> <seen-file>" >&2
+  echo "usage: $0 budget-state <spend> <cap> | validate-do-delete-status <status> | validate-do-list-response <status> <body-file> | validate-do-page-url <url> <seen-file>" >&2
   exit 64
 }
 
@@ -32,6 +32,23 @@ case "${1:-}" in
     if [[ "${status}" != "204" ]]; then
       echo "unexpected DigitalOcean DELETE status: ${status}; want 204" >&2
       exit 66
+    fi
+    ;;
+
+  validate-do-list-response)
+    [[ $# -eq 3 ]] || usage
+    status="$2"
+    body_file="$3"
+    [[ "${status}" =~ ^[0-9]{3}$ ]] || usage
+    if [[ "${status}" != "200" ]]; then
+      echo "unexpected DigitalOcean list status: ${status}; want 200" >&2
+      exit 67
+    fi
+    if [[ ! -f "${body_file}" ]] || ! jq -e \
+      'type == "object" and (.droplets | type == "array")' \
+      "${body_file}" >/dev/null 2>&1; then
+      echo "invalid DigitalOcean list response: expected object with droplets array" >&2
+      exit 67
     fi
     ;;
 

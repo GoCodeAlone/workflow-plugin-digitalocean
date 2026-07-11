@@ -42,7 +42,7 @@ jobs:
 
           record_failure() {
             failure_count="$((failure_count + 1))"
-            details="${details}- FAILURE: $1\n"
+            details="${details}- FAILURE: $1"$'\n'
             echo "::error::$1"
           }
 
@@ -56,7 +56,7 @@ jobs:
               echo "count=${scrubbed}"
               echo "failures=${failure_count}"
               echo "details<<${delimiter}"
-              printf '%b' "${details}"
+              printf '%s' "${details}"
               echo "${delimiter}"
             } >> "${GITHUB_OUTPUT}"
             {
@@ -77,12 +77,28 @@ jobs:
               record_failure "pagination URL rejected: ${page_error}"
               break
             fi
-            if ! response="$(curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
+            list_body="$(mktemp "${RUNNER_TEMP}/do-conformance-list.XXXXXX")"
+            set +e
+            list_status="$(curl --disable --silent --show-error --fail --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
               -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
-              "${page_url}")"; then
-              record_failure "failed to list Droplets from a validated DigitalOcean page"
+              --output "${list_body}" \
+              --write-out '%{http_code}' \
+              "${page_url}")"
+            list_curl_status=$?
+            set -e
+            if [[ "${list_curl_status}" -ne 0 ]]; then
+              record_failure "failed to list Droplets from a validated DigitalOcean page (HTTP ${list_status:-unknown})"
+              rm -f "${list_body}"
               break
             fi
+            if ! .github/workflows/scripts/conformance-safety.sh \
+              validate-do-list-response "${list_status}" "${list_body}"; then
+              record_failure "DigitalOcean Droplet list returned unusable HTTP ${list_status} response"
+              rm -f "${list_body}"
+              break
+            fi
+            response="$(<"${list_body}")"
+            rm -f "${list_body}"
             if ! rows="$(jq -r --arg prefix "${CONFORMANCE_TAG_PREFIX}" \
               '.droplets[]? | select(.tags // [] | any(startswith($prefix))) | [.id, .name, .created_at] | @tsv' \
               <<< "${response}")"; then
@@ -121,7 +137,7 @@ jobs:
                   continue
                 fi
                 scrubbed="$((scrubbed + 1))"
-                details="${details}- droplet ${id} (${name}, age=${age}s)\n"
+                details="${details}- droplet ${id} (${name}, age=${age}s)"$'\n'
               fi
             done <<< "${rows}"
             if ! next_page="$(jq -r '.links.pages.next // "" | if type == "string" then . else error("next page must be a string") end' <<< "${response}")"; then
