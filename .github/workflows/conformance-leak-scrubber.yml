@@ -1,0 +1,95 @@
+name: DigitalOcean Conformance Leak Scrubber
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: digitalocean-conformance-leak-scrubber
+  cancel-in-progress: false
+
+jobs:
+  scrub:
+    name: Delete expired conformance Droplets
+    runs-on: [self-hosted, linux]
+    env:
+      DO_CONFORMANCE_API_TOKEN: ${{ secrets.DO_CONFORMANCE_API_TOKEN }}
+      AGE_THRESHOLD_SECONDS: 3600
+      CONFORMANCE_TAG_PREFIX: wf-do-conformance-
+      BUDGET_HARD_CAP_USD: 25
+    steps:
+      - name: Check out provider plugin
+        uses: actions/checkout@v4
+      - name: Fail when the scrubber token is missing
+        run: |
+          set -euo pipefail
+          test -n "${DO_CONFORMANCE_API_TOKEN:-}" || {
+            echo "::error::DO_CONFORMANCE_API_TOKEN is required for scheduled cleanup"
+            exit 1
+          }
+      - name: List and delete expired tagged Droplets
+        id: scrub
+        run: |
+          set -euo pipefail
+          now_epoch="$(date -u +%s)"
+          page_url="https://api.digitalocean.com/v2/droplets?per_page=200"
+          scrubbed=0
+          details=""
+          while [ -n "${page_url}" ]; do
+            response="$(curl --silent --show-error --fail \
+              -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
+              "${page_url}")"
+            while IFS=$'\t' read -r id name created_at; do
+              [ -n "${id}" ] || continue
+              created_epoch="$(date -u -d "${created_at}" +%s)"
+              age="$((now_epoch - created_epoch))"
+              if [ "${age}" -gt "${AGE_THRESHOLD_SECONDS}" ]; then
+                curl --silent --show-error --fail \
+                  -X DELETE \
+                  -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
+                  "https://api.digitalocean.com/v2/droplets/${id}"
+                scrubbed="$((scrubbed + 1))"
+                details="${details}- droplet ${id} (${name}, age=${age}s)\n"
+              fi
+            done < <(jq -r --arg prefix "${CONFORMANCE_TAG_PREFIX}" \
+              '.droplets[]? | select(.tags // [] | any(startswith($prefix))) | [.id, .name, .created_at] | @tsv' \
+              <<< "${response}")
+            page_url="$(jq -r '.links.pages.next // ""' <<< "${response}")"
+          done
+          echo "count=${scrubbed}" >> "${GITHUB_OUTPUT}"
+          {
+            echo 'details<<EOF'
+            printf '%b' "${details}"
+            echo 'EOF'
+          } >> "${GITHUB_OUTPUT}"
+          echo "scrubbed_count=${scrubbed}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: File or update the leak incident
+        if: steps.scrub.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRUB_COUNT: ${{ steps.scrub.outputs.count }}
+          SCRUB_DETAILS: ${{ steps.scrub.outputs.details }}
+        run: |
+          .github/workflows/scripts/file-or-comment-leak-issue.sh \
+            "${SCRUB_COUNT}" "${SCRUB_DETAILS}"
+      - name: Escalate spend above the hard cap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          balance="$(curl --silent --show-error --fail \
+            -H "Authorization: Bearer ${DO_CONFORMANCE_API_TOKEN}" \
+            https://api.digitalocean.com/v2/customers/my/balance)"
+          spend="$(jq -er '.month_to_date_usage // "0" | tonumber' <<< "${balance}")"
+          if awk "BEGIN { exit !(${spend} > ${BUDGET_HARD_CAP_USD}) }"; then
+            PRIMARY_LABEL=conformance-budget-incident \
+            HELPER_LABEL=auto-filed-budget \
+            ISSUE_TITLE="DigitalOcean conformance budget incident" \
+              .github/workflows/scripts/file-or-comment-leak-issue.sh \
+                "${spend}" "Month-to-date usage remains above the hard cap"
+          fi
