@@ -9,9 +9,6 @@ defaults:
   run:
     shell: bash
 
-env:
-  GOPRIVATE: github.com/GoCodeAlone/*
-
 jobs:
   workflow-engine-range:
     runs-on: ubuntu-latest
@@ -24,18 +21,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Configure Git for private repos
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
-
       - name: Determine Workflow engine versions
         id: versions
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           WORKFLOW_CURRENT_VERSION: ${{ vars.WORKFLOW_CURRENT_VERSION }}
         run: |
           set -euo pipefail
@@ -75,12 +64,3 @@ jobs:
       - name: Conformance against current engine release
         if: steps.versions.outputs.current != steps.versions.outputs.min
         run: ./scripts/workflow-iac-host-conformance.sh "${{ steps.versions.outputs.current }}" current
-
-      - name: Remove private repo Git credential rewrite
-        if: always()
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global --unset-all url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf || true
-          fi

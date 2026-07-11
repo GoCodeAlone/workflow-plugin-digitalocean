@@ -24,7 +24,9 @@ jobs:
         with:
           version: v0.64.3
       - name: Validate plugin contract for publish (pre-build)
-        run: wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: wfctl plugin validate-contract --for-publish --tag "$REF_NAME" .
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           distribution: goreleaser
@@ -46,16 +48,19 @@ jobs:
           fi
           wfctl plugin verify-capabilities --binary "$BIN" .
       - name: Verify shipped plugin.json carries tag (post-build)
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           if [ -f .release/plugin.json ]; then
-            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir .release .
+            wfctl plugin validate-contract --for-publish --tag "$REF_NAME" --release-dir .release .
           else
-            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir . .
+            wfctl plugin validate-contract --for-publish --tag "$REF_NAME" --release-dir . .
           fi
       - name: Publish release (was draft during asset upload)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit ${{ github.ref_name }} --draft=false --repo ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release edit "$REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
 
   notify-workflow-registry:
     name: Notify workflow-registry

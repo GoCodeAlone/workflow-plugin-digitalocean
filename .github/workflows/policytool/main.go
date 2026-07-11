@@ -519,6 +519,17 @@ func validateSecretReferences(rel, prefix string, secrets map[string]bool, allow
 	}
 }
 
+func validatePullRequestSecrets(prefix string, pullRequest bool, secrets map[string]bool, findings *findingSet) {
+	if !pullRequest {
+		return
+	}
+	for secret := range secrets {
+		if secret != "GITHUB_TOKEN" {
+			findings.add("%s pull_request workflow references forbidden repository secret %s", prefix, secret)
+		}
+	}
+}
+
 func validateCredentialSelectors(prefix string, node *yaml.Node, findings *findingSet) {
 	values := []string{}
 	scalars(node, &values)
@@ -1680,6 +1691,7 @@ func main() {
 		validateSecretReferences(rel, "workflow "+rel, globalSecrets, allowed, referenced, findings)
 		manual := triggerPresent(root, "workflow_dispatch")
 		scheduled := triggerPresent(root, "schedule")
+		pullRequest := triggerPresent(root, "pull_request")
 		jobs := mappingValue(root, "jobs")
 		if jobs == nil || jobs.Kind != yaml.MappingNode {
 			findings.add("workflow %s must declare jobs", rel)
@@ -1712,6 +1724,7 @@ func main() {
 			for secret := range localSecrets {
 				jobSecrets[secret] = true
 			}
+			validatePullRequestSecrets(prefix, pullRequest, jobSecrets, findings)
 
 			providerAuthority := false
 			hasIntegrationTag := false

@@ -35,8 +35,6 @@ jobs:
 
   scheduled-release:
     runs-on: ubuntu-latest
-    env:
-      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Publish GitHub release

@@ -105,7 +105,9 @@ grep -Fxq -- 'root=trusted' "${bootstrap_output}"
 classic_protection="${tmp_dir}/classic-protection.json"
 ruleset_protection="${tmp_dir}/ruleset-protection.json"
 invalid_protection="${tmp_dir}/invalid-protection.json"
+repository_metadata="${tmp_dir}/repository-metadata.json"
 printf '{}\n' >"${invalid_protection}"
+printf '{"default_branch":"main"}\n' >"${repository_metadata}"
 cat >"${classic_protection}" <<'JSON'
 {
   "enforce_admins":{"enabled":true},
@@ -128,21 +130,28 @@ cat >"${ruleset_protection}" <<'JSON'
 {
   "enforcement":"active",
   "bypass_actors":[],
-  "conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},
+  "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
   "rules":[
     {"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}},
-    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy","integration_id":15368}]}}
+    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy","integration_id":15368}]}},
+    {"type":"non_fast_forward"},
+    {"type":"deletion"}
   ]
 }
 JSON
-PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" \
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
   "${protection_verifier}" example/repo main >/dev/null
-PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" \
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
   "${protection_verifier}" example/repo main >/dev/null
+ruleset_explicit="${ruleset_protection}.explicit"
+jq '.conditions.ref_name.include=["refs/heads/release"]' "${ruleset_protection}" >"${ruleset_explicit}"
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_explicit}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+  "${protection_verifier}" example/repo release >/dev/null
 
 assert_protection_rejected() {
   local kind="$1"
   local fixture="$2"
+  local branch="${3:-main}"
   local classic_file="${invalid_protection}"
   local ruleset_file="${invalid_protection}"
   if [[ "${kind}" == classic ]]; then
@@ -151,8 +160,8 @@ assert_protection_rejected() {
     ruleset_file="${fixture}"
   fi
   set +e
-  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_file}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_file}" \
-    "${protection_verifier}" example/repo main >/dev/null 2>&1
+  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_file}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_file}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+    "${protection_verifier}" example/repo "${branch}" >/dev/null 2>&1
   local status=$?
   set -e
   if [[ "${status}" -eq 0 ]]; then
@@ -184,6 +193,11 @@ assert_protection_rejected ruleset "${ruleset_protection}.producer-missing"
 assert_protection_rejected ruleset "${ruleset_protection}.producer-wrong"
 assert_protection_rejected ruleset "${ruleset_protection}.producer-null"
 assert_protection_rejected ruleset "${ruleset_protection}.legacy-context-only"
+jq '.rules |= map(select(.type != "non_fast_forward"))' "${ruleset_protection}" >"${ruleset_protection}.missing-non-fast-forward"
+jq '.rules |= map(select(.type != "deletion"))' "${ruleset_protection}" >"${ruleset_protection}.missing-deletion"
+assert_protection_rejected ruleset "${ruleset_protection}.missing-non-fast-forward"
+assert_protection_rejected ruleset "${ruleset_protection}.missing-deletion"
+assert_protection_rejected ruleset "${ruleset_protection}" release
 
 lifecycle_root="${tmp_dir}/lifecycle"
 mkdir -p "${lifecycle_root}/.github/workflows"
@@ -563,11 +577,13 @@ assert_exact_mutation_rejected() {
   fi
 }
 
-assert_exact_mutation_rejected \
-  "git config key/value" \
+if rg -n 'secrets\.|RELEASES_TOKEN|GOPRIVATE|x-access-token' \
   "${repo_root}/.github/workflows/ci.yml" \
-  's|insteadOf "https://github.com/"|insteadOf "https://github.example.invalid/"|' \
-  "unreviewed exact statement containing git"
+  "${repo_root}/.github/workflows/iac-host-conformance.yml" \
+  "${repo_root}/.github/workflows/grpc-version-sync.yml"; then
+  echo "pull_request-capable workflow retains repository-secret authority" >&2
+  exit 1
+fi
 assert_exact_mutation_rejected \
   "wfctl trailing target" \
   "${repo_root}/.github/workflows/ci.yml" \
@@ -618,6 +634,16 @@ assert_exact_mutation_rejected \
   "${repo_root}/.github/workflows/ci.yml" \
   $'s/        run: |/        run: |\\\n          set -x/g' \
   "unreviewed exact statement containing set"
+assert_exact_mutation_rejected \
+  "pull request repository secret" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's/SAFE_JOB_MODE: strict/SAFE_JOB_MODE: strict\n      PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
+  "pull_request workflow references forbidden repository secret RELEASES_TOKEN"
+assert_exact_mutation_rejected \
+  "release tag shell interpolation" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/gh release edit "\$REF_NAME"/gh release edit ${{ github.ref_name }}/' \
+  "executes unreviewed exact statement containing gh"
 
 for action_mutation in \
   '${{ vars.ACTION_REF }}' \
@@ -670,7 +696,7 @@ pass_allowlist="${tmp_dir}/pass-allowlist.json"
 pass_presence="${tmp_dir}/pass-presence.json"
 cat >"${pass_presence}" <<'JSON'
 [
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state":"active","presence":"present"},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state":"active","presence":"present"},
   {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state":"active","presence":"present"},
   {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state":"active","presence":"present"}
 ]
@@ -679,14 +705,8 @@ cat >"${pass_allowlist}" <<'JSON'
 [
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
-    "secret": "RELEASES_TOKEN",
-    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
-    "state": "active", "rationale": "Read-only access to private Go module and release metadata dependencies."
-  },
-  {
-    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "secret": "GITHUB_TOKEN",
-    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "contextSHA256": "f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972",
     "state": "active", "rationale": "GitHub-provided token publishes release assets to this repository."
   }
 ]
@@ -699,27 +719,27 @@ cat >"${pass_commands}" <<'JSON'
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
     "statementSHA256": "5384574a39b2103666734bbe92565841174832d0b8865a6d5f521eb663438c51",
-    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "contextSHA256": "f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972",
     "state": "active", "rationale": "Run the exact credential-free integration test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
     "statementSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
-    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "contextSHA256": "f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972",
     "state": "active", "rationale": "Run the exact credential-free default Go test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "gh",
     "statementSHA256": "0a111d913d8601e23bc6e43fa1b4b6a5fa65c44c342a26c23f10bf8fa119827a",
-    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "contextSHA256": "f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972",
     "state": "active", "rationale": "Exercise the exact GitHub release upload fixture."
   },
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"echo","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard echo statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"exit","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard exit statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"rg","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard search statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"$assignment","statementSHA256":"df3893e5269970fcf8bb076be5b5f849eec4a7237b311ab4129af31b78271a09","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact safe standalone assignment fixture."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"echo","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact rejection-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"exit","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact rejection-guard exit statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"rg","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact rejection-guard search statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"$assignment","statementSHA256":"df3893e5269970fcf8bb076be5b5f849eec4a7237b311ab4129af31b78271a09","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact safe standalone assignment fixture."},
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
     "command": "go",
@@ -739,12 +759,12 @@ JSON
 pass_actions="${tmp_dir}/pass-actions.json"
 cat >"${pass_actions}" <<'JSON'
 [
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff","nodeSHA256":"4097668e631432c1244a4dd4d9557c50491bf42112c9ba85e62d3fcf637047d1","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","nodeSHA256":"0d8a6b42c70a0f3275850fe9d63cfb646c0a9e0d7f6ea1c8b45171a1076060b7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","nodeSHA256":"93dce32c457545dd0624d77c36ec255298b321308974a9cf046e67691e5dd745","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94","nodeSHA256":"e755472a8b992588d44f5bed60d0ebdf304a0854661bd6b598ca4f6bceafa4b9","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","nodeSHA256":"cab2cf5943a542ede48aea46c28a4b26d392cede1cd1685eed568c01fa4f0c39","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."}
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff","nodeSHA256":"4097668e631432c1244a4dd4d9557c50491bf42112c9ba85e62d3fcf637047d1","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","nodeSHA256":"0d8a6b42c70a0f3275850fe9d63cfb646c0a9e0d7f6ea1c8b45171a1076060b7","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","nodeSHA256":"93dce32c457545dd0624d77c36ec255298b321308974a9cf046e67691e5dd745","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94","nodeSHA256":"e755472a8b992588d44f5bed60d0ebdf304a0854661bd6b598ca4f6bceafa4b9","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","nodeSHA256":"cab2cf5943a542ede48aea46c28a4b26d392cede1cd1685eed568c01fa4f0c39","contextSHA256":"f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972","state": "active", "rationale":"Exact immutable fixture action node."}
 ]
 JSON
 

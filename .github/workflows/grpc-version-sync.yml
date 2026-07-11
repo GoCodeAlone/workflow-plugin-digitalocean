@@ -21,9 +21,6 @@ defaults:
   run:
     shell: bash
 
-env:
-  GOPRIVATE: github.com/GoCodeAlone/*
-
 jobs:
   grpc-version-sync:
     runs-on: ubuntu-latest
@@ -34,13 +31,6 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - name: Configure Git for private repos
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
       - name: Resolve plugin's workflow dep version
         id: workflow_version
         run: |
@@ -50,7 +40,7 @@ jobs:
           echo "Plugin pins workflow ${WORKFLOW_VERSION}"
       - name: Fetch grpc-versions.txt from workflow release
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           WORKFLOW_VERSION: ${{ steps.workflow_version.outputs.workflow }}
         run: |
           set -euo pipefail

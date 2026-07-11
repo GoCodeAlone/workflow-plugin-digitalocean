@@ -85,9 +85,10 @@ gh api "repos/${repo}/branches/${branch}/protection/required_status_checks" |
 
 For a repository ruleset, the update payload's `required_status_checks` rule
 must contain the producer ID as well; submit the full existing ruleset update
-payload with a rule shaped like:
+payload with rules including:
 
 ```json
+[
 {
   "type": "required_status_checks",
   "parameters": {
@@ -99,7 +100,10 @@ payload with a rule shaped like:
       }
     ]
   }
-}
+},
+{"type": "non_fast_forward"},
+{"type": "deletion"}
+]
 ```
 
 ```bash
@@ -120,4 +124,8 @@ gh api repos/GoCodeAlone/workflow-plugin-digitalocean/commits/main/check-runs \
 
 This script is read-only. It verifies classic branch protection or an active
 ruleset, requires strict freshness and exact producer ID `15368`, and never
-changes repository settings.
+changes repository settings. An applicable ruleset must also contain both
+`non_fast_forward` and `deletion` rules. The verifier reads repository metadata
+and accepts `~DEFAULT_BRANCH` only when the requested branch equals the
+repository's actual `default_branch`; non-default branches require their exact
+`refs/heads/<branch>` selector.

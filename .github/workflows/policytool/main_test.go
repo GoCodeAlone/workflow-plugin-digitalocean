@@ -403,6 +403,24 @@ func TestTrustGroupThreeStateLifecycle(t *testing.T) {
 	}
 }
 
+func TestPullRequestWorkflowsRejectRepositorySecrets(t *testing.T) {
+	for name, test := range map[string]struct {
+		pullRequest bool
+		secrets     map[string]bool
+		wantFinding bool
+	}{
+		"repository secret": {true, map[string]bool{"RELEASES_TOKEN": true}, true},
+		"automatic token":   {true, map[string]bool{"GITHUB_TOKEN": true}, false},
+		"release workflow":  {false, map[string]bool{"RELEASES_TOKEN": true}, false},
+	} {
+		findings := &findingSet{}
+		validatePullRequestSecrets("fixture "+name, test.pullRequest, test.secrets, findings)
+		if got := len(findings.items) > 0; got != test.wantFinding {
+			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
+		}
+	}
+}
+
 func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
 	for _, source := range []string{
 		`GOWORK=off go test ./...`,

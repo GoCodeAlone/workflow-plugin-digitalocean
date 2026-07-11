@@ -2,17 +2,17 @@
   {
     "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
     "workflowPath": ".github/workflows/ci.yml",
-    "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
     "state": "active",
-    "sha256": "127bc19c41bdd63371a1e2196d256d2780f8719f66aac0e449246bc9f8708041",
+    "sha256": "2cbcfbc8cf4531f7c8268d3b46997614d4757c5fc555843ca66d29bde814881e",
     "rationale": "Enforces the credential-free public workflow boundary before other CI proof."
   },
   {
     "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
     "workflowPath": ".github/workflows/ci.yml",
-    "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
     "state": "active",
-    "sha256": "3b29c9dfe5372f177e299e2b62c2a3b04e62fea22be23fd86711a8de474388f2",
+    "sha256": "40a9174a5e857b1fc01d1cc8bf063613cef93a1813ccfe589d490559378b3ef6",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
   },
   {
@@ -20,13 +20,13 @@
     "workflowPath": ".github/workflows/public-workflow-policy.yml",
     "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
     "state": "active",
-    "sha256": "127bc19c41bdd63371a1e2196d256d2780f8719f66aac0e449246bc9f8708041",
+    "sha256": "2cbcfbc8cf4531f7c8268d3b46997614d4757c5fc555843ca66d29bde814881e",
     "rationale": "Runs only the trusted policy wrapper for candidate-data scanning."
   },
   {
     "path": "scripts/workflow-iac-host-conformance.sh",
     "workflowPath": ".github/workflows/iac-host-conformance.yml",
-    "contextSHA256": "7050841760118fabda90c31437dfad886dca4b0bedcabc07e96fb8d9d9636e2e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
     "state": "active",
     "sha256": "5066dea5a461524cbda244f7ca00cdd85127457406af9966fd638d3648fd276a",
     "rationale": "Runs credential-free released-engine host conformance for the provider plugin."
