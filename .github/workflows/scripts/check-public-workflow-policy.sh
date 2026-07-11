@@ -49,6 +49,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -93,25 +94,6 @@ func scalars(node *yaml.Node, out *[]string) {
 	for _, child := range node.Content {
 		scalars(child, out)
 	}
-}
-
-func hasMappingScalar(node *yaml.Node, key, value string) bool {
-	if node == nil {
-		return false
-	}
-	if node.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			if node.Content[i].Value == key && node.Content[i+1].Kind == yaml.ScalarNode && strings.EqualFold(node.Content[i+1].Value, value) {
-				return true
-			}
-		}
-	}
-	for _, child := range node.Content {
-		if hasMappingScalar(child, key, value) {
-			return true
-		}
-	}
-	return false
 }
 
 func knownCredentialVariables(node *yaml.Node, out map[string]bool) {
@@ -163,8 +145,22 @@ func lineIsNegativeGuard(line string) bool {
 		return true
 	}
 	guardTool := regexp.MustCompile(`(^|[;&|![:space:]])(rg|grep|egrep|fgrep)([[:space:]]|$)`).MatchString(line)
-	negativeCheck := strings.HasPrefix(line, "!") || strings.Contains(line, "if ") || strings.Contains(line, "test !")
-	return guardTool && negativeCheck
+	if !guardTool || !strings.HasPrefix(line, "if ") {
+		return false
+	}
+	then := strings.LastIndex(line, "; then")
+	if then < 0 || strings.TrimSpace(line[then+len("; then"):]) != "" {
+		return false
+	}
+	condition := strings.TrimSpace(strings.TrimPrefix(line[:then], "if "))
+	if strings.Contains(condition, "$(") || strings.Contains(condition, "`") || strings.Contains(condition, "&&") || strings.Contains(condition, "||") || strings.Contains(condition, ";") {
+		return false
+	}
+	fields := strings.Fields(condition)
+	if len(fields) == 0 {
+		return false
+	}
+	return fields[0] == "rg" || fields[0] == "grep" || fields[0] == "egrep" || fields[0] == "fgrep"
 }
 
 var (
@@ -175,6 +171,12 @@ var (
 	providerSDKRE  = regexp.MustCompile(`(?i)(digitalocean/godo|aws-sdk|azure-sdk|cloud\.google\.com/go|google-cloud-)`)
 	providerAPIRE  = regexp.MustCompile(`(?i)(api\.digitalocean\.com|management\.azure\.com|[A-Za-z0-9.-]+\.amazonaws\.com|[A-Za-z0-9.-]+\.googleapis\.com|api\.cloudflare\.com)`)
 	githubRunnerRE = regexp.MustCompile(`^(ubuntu-(latest|[0-9]{2}\.[0-9]{2})(-arm)?|windows-(latest|[0-9]{4})|macos-(latest|[0-9]{2})(-(large|xlarge))?)$`)
+	secretIndexRE  = regexp.MustCompile(`(?i)secrets\[[^]\r\n]+\]`)
+	secretWildcardRE = regexp.MustCompile(`(?i)secrets\.\*`)
+	literalSecretIndexRE = regexp.MustCompile(`(?i)^secrets\[[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*\]$`)
+	varsRefRE      = regexp.MustCompile(`(?i)vars(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[[[:space:]]*['"]([A-Za-z_][A-Za-z0-9_]*)['"][[:space:]]*\])`)
+	varsIndexRE    = regexp.MustCompile(`(?i)vars\[[^]\r\n]+\]`)
+	literalVarsIndexRE = regexp.MustCompile(`(?i)^vars\[[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*\]$`)
 )
 
 func secretReferences(node *yaml.Node) map[string]bool {
@@ -201,6 +203,36 @@ func validateSecretReferences(rel, prefix string, secrets map[string]bool, allow
 			findings.add("%s references known cloud secret %s", prefix, secret)
 		} else if _, ok := allowed[key]; !ok {
 			findings.add("%s secret %s is not allowlisted", prefix, secret)
+		}
+	}
+}
+
+func validateCredentialSelectors(prefix string, node *yaml.Node, findings *findingSet) {
+	values := []string{}
+	scalars(node, &values)
+	for _, value := range values {
+		for _, selector := range secretWildcardRE.FindAllString(value, -1) {
+			findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
+		}
+		for _, selector := range secretIndexRE.FindAllString(value, -1) {
+			if !literalSecretIndexRE.MatchString(selector) {
+				findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
+			}
+		}
+		for _, match := range varsRefRE.FindAllStringSubmatch(value, -1) {
+			name := match[1]
+			if name == "" {
+				name = match[2]
+			}
+			name = strings.ToUpper(name)
+			if knownCloudSecret(name) {
+				findings.add("%s references known cloud credential variable reference %s", prefix, name)
+			}
+		}
+		for _, selector := range varsIndexRE.FindAllString(value, -1) {
+			if !literalVarsIndexRE.MatchString(selector) {
+				findings.add("%s uses forbidden dynamic variable selector %s", prefix, selector)
+			}
 		}
 	}
 }
@@ -245,37 +277,86 @@ func checkRunnerSelector(prefix string, runsOn *yaml.Node, findings *findingSet)
 	}
 }
 
-func providerUsesKind(reference string) string {
+func checkPermissions(prefix string, permissions *yaml.Node, findings *findingSet) {
+	if permissions == nil {
+		return
+	}
+	if permissions.Kind == yaml.ScalarNode {
+		value := strings.TrimSpace(permissions.Value)
+		switch {
+		case value == "read-all":
+			return
+		case value == "write-all":
+			findings.add("%s uses forbidden permissions: write-all", prefix)
+		case strings.Contains(value, "${{"):
+			findings.add("%s uses forbidden dynamic permissions selector %s", prefix, value)
+		default:
+			findings.add("%s uses unsupported permissions scalar %s", prefix, value)
+		}
+		return
+	}
+	if permissions.Kind != yaml.MappingNode {
+		findings.add("%s uses unsupported permissions shape", prefix)
+		return
+	}
+	known := map[string]bool{
+		"actions": true, "attestations": true, "checks": true, "contents": true,
+		"deployments": true, "discussions": true, "id-token": true, "issues": true,
+		"models": true, "packages": true, "pages": true, "pull-requests": true,
+		"security-events": true, "statuses": true,
+	}
+	for i := 0; i+1 < len(permissions.Content); i += 2 {
+		key := permissions.Content[i].Value
+		valueNode := permissions.Content[i+1]
+		if !known[key] {
+			findings.add("%s declares unsupported permission %s", prefix, key)
+			continue
+		}
+		if valueNode.Kind != yaml.ScalarNode {
+			findings.add("%s permission %s uses unsupported value shape", prefix, key)
+			continue
+		}
+		value := strings.TrimSpace(valueNode.Value)
+		if strings.Contains(value, "${{") {
+			findings.add("%s permission %s uses forbidden dynamic value %s", prefix, key, value)
+			continue
+		}
+		if value != "read" && value != "write" && value != "none" {
+			findings.add("%s permission %s uses unsupported value %s", prefix, key, value)
+			continue
+		}
+		if key == "id-token" && value == "write" {
+			findings.add("%s grants forbidden id-token: write", prefix)
+		}
+	}
+}
+
+func unreviewedUsesDiagnostic(reference string, jobLevel bool) string {
 	lower := strings.ToLower(strings.TrimSpace(reference))
-	path := strings.SplitN(lower, "@", 2)[0]
-	providerActions := []string{
-		"digitalocean/action-doctl",
-		"aws-actions/configure-aws-credentials",
-		"aws-actions/amazon-ecr-login",
-		"aws-actions/amazon-ecs-deploy-task-definition",
-		"azure/login",
-		"azure/aks-set-context",
-		"azure/webapps-deploy",
-		"google-github-actions/auth",
-		"cloudflare/wrangler-action",
+	if jobLevel {
+		return fmt.Sprintf("uses unrecognized reusable workflow %s", reference)
 	}
-	for _, action := range providerActions {
-		if path == action {
-			return "action"
+	if strings.HasPrefix(lower, "docker://") {
+		return fmt.Sprintf("uses Docker action %s is forbidden", reference)
+	}
+	if strings.HasPrefix(lower, "./") {
+		return fmt.Sprintf("uses local action %s is forbidden", reference)
+	}
+	parts := strings.SplitN(lower, "@", 2)
+	if len(parts) == 2 && parts[1] != "" {
+		reviewed := map[string]bool{
+			"actions/checkout": true,
+			"actions/setup-go": true,
+			"actions/upload-artifact": true,
+			"gocodealone/setup-wfctl": true,
+			"goreleaser/goreleaser-action": true,
+			"peter-evans/repository-dispatch": true,
+		}
+		if reviewed[parts[0]] {
+			return ""
 		}
 	}
-	if strings.HasPrefix(path, "google-github-actions/deploy-") {
-		return "action"
-	}
-	if strings.Contains(path, "/.github/workflows/") {
-		owner := strings.SplitN(path, "/", 2)[0]
-		providerOwner := owner == "digitalocean" || owner == "aws-actions" || owner == "azure" || owner == "google-github-actions" || owner == "cloudflare"
-		livePurpose := strings.Contains(path, "live") || strings.Contains(path, "deploy") || strings.Contains(path, "infra") || strings.Contains(path, "conformance") || strings.Contains(path, "smoke")
-		if providerOwner && livePurpose {
-			return "reusable workflow"
-		}
-	}
-	return ""
+	return fmt.Sprintf("uses unreviewed action %s", reference)
 }
 
 func knownCloudSecret(name string) bool {
@@ -292,14 +373,32 @@ func knownCloudSecret(name string) bool {
 	return strings.Contains(name, "KUBE") && regexp.MustCompile(`(CONFIG|TOKEN|SECRET|CREDENTIAL)`).MatchString(name)
 }
 
-func normalizePath(repoRoot, path string) (string, error) {
-	abs, err := filepath.Abs(path)
+func pathEscapes(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
+}
+
+func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, error) {
+	abs, err := filepath.Abs(workflowPath)
 	if err != nil {
 		return "", err
 	}
 	rel, err := filepath.Rel(repoRoot, abs)
 	if err != nil {
 		return "", err
+	}
+	if pathEscapes(rel) {
+		return "", fmt.Errorf("workflow path %s is outside repository", workflowPath)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflow path %s: %w", workflowPath, err)
+	}
+	resolvedRel, err := filepath.Rel(resolvedRepoRoot, resolved)
+	if err != nil {
+		return "", err
+	}
+	if pathEscapes(resolvedRel) {
+		return "", fmt.Errorf("workflow path %s resolves outside repository", workflowPath)
 	}
 	return filepath.ToSlash(rel), nil
 }
@@ -312,6 +411,11 @@ func main() {
 	repoRoot, err := filepath.Abs(os.Args[2])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	resolvedRepoRoot, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve repository root: %v\n", err)
 		os.Exit(2)
 	}
 	allowPath := os.Args[4]
@@ -334,7 +438,17 @@ func main() {
 	findings := &findingSet{}
 	allowed := make(map[string]allowEntry)
 	for _, entry := range allowlist {
-		entry.Path = filepath.ToSlash(filepath.Clean(entry.Path))
+		rawPath := strings.TrimSpace(entry.Path)
+		slashPath := strings.ReplaceAll(rawPath, "\\", "/")
+		if filepath.IsAbs(rawPath) || path.IsAbs(slashPath) || filepath.VolumeName(rawPath) != "" {
+			findings.add("allowlist path %s must be repository-relative", rawPath)
+			continue
+		}
+		entry.Path = path.Clean(slashPath)
+		if entry.Path == ".." || strings.HasPrefix(entry.Path, "../") {
+			findings.add("allowlist path %s escapes the repository", rawPath)
+			continue
+		}
 		entry.Secret = strings.ToUpper(strings.TrimSpace(entry.Secret))
 		key := entry.Path + "\x00" + entry.Secret
 		if entry.Path == "." || strings.TrimSpace(entry.Secret) == "" || strings.TrimSpace(entry.Rationale) == "" {
@@ -351,9 +465,9 @@ func main() {
 
 	referenced := make(map[string]bool)
 	for _, workflowPath := range workflowArgs {
-		rel, err := normalizePath(repoRoot, workflowPath)
+		rel, err := normalizePath(repoRoot, resolvedRepoRoot, workflowPath)
 		if err != nil {
-			findings.add("normalize workflow path %s: %v", workflowPath, err)
+			findings.add("%v", err)
 			continue
 		}
 		data, err := os.ReadFile(workflowPath)
@@ -371,9 +485,7 @@ func main() {
 			continue
 		}
 		root := doc.Content[0]
-		if hasMappingScalar(root, "id-token", "write") {
-			findings.add("workflow %s grants forbidden id-token: write", rel)
-		}
+		checkPermissions("workflow "+rel, mappingValue(root, "permissions"), findings)
 		credentialVariables := make(map[string]bool)
 		knownCredentialVariables(root, credentialVariables)
 		for name := range credentialVariables {
@@ -384,6 +496,7 @@ func main() {
 			if root.Content[i].Value == "jobs" {
 				continue
 			}
+			validateCredentialSelectors("workflow "+rel, root.Content[i+1], findings)
 			for secret := range secretReferences(root.Content[i+1]) {
 				globalSecrets[secret] = true
 			}
@@ -403,25 +516,14 @@ func main() {
 
 			checkRunnerSelector(prefix, mappingValue(job, "runs-on"), findings)
 
-			var permissionValues []string
-			permissions := mappingValue(job, "permissions")
-			if permissions == nil {
-				permissions = mappingValue(root, "permissions")
-			}
-			if idToken := mappingValue(permissions, "id-token"); idToken != nil {
-				scalars(idToken, &permissionValues)
-				for _, value := range permissionValues {
-					if strings.EqualFold(value, "write") {
-						findings.add("%s grants forbidden id-token: write", prefix)
-					}
-				}
-			}
+			checkPermissions(prefix, mappingValue(job, "permissions"), findings)
 
 			jobSecrets := make(map[string]bool)
 			for secret := range globalSecrets {
 				jobSecrets[secret] = true
 			}
 			localSecrets := secretReferences(job)
+			validateCredentialSelectors(prefix, job, findings)
 			validateSecretReferences(rel, prefix, localSecrets, allowed, referenced, findings)
 			for secret := range localSecrets {
 				jobSecrets[secret] = true
@@ -432,18 +534,18 @@ func main() {
 			hasProviderSDK := false
 			namedLive := false
 			if uses := mappingValue(job, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
-				if kind := providerUsesKind(uses.Value); kind != "" {
+				if diagnostic := unreviewedUsesDiagnostic(uses.Value, true); diagnostic != "" {
 					providerAuthority = true
-					findings.add("%s invokes forbidden provider %s %s", prefix, kind, uses.Value)
+					findings.add("%s %s", prefix, diagnostic)
 				}
 			}
 			steps := mappingValue(job, "steps")
 			if steps != nil && steps.Kind == yaml.SequenceNode {
 				for _, step := range steps.Content {
 					if uses := mappingValue(step, "uses"); uses != nil && uses.Kind == yaml.ScalarNode {
-						if kind := providerUsesKind(uses.Value); kind != "" {
+						if diagnostic := unreviewedUsesDiagnostic(uses.Value, false); diagnostic != "" {
 							providerAuthority = true
-							findings.add("%s invokes forbidden provider %s %s", prefix, kind, uses.Value)
+							findings.add("%s %s", prefix, diagnostic)
 						}
 					}
 					run := mappingValue(step, "run")

@@ -4,8 +4,9 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 checker="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 fixtures="${repo_root}/.github/workflows/scripts/fixtures/public-workflow-policy"
-tmp_dir="$(mktemp -d)"
+tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 trap 'rm -rf "${tmp_dir}"' EXIT
+export TMPDIR="${tmp_dir}"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 cat >"${pass_allowlist}" <<'JSON'
@@ -25,7 +26,8 @@ JSON
 
 "${checker}" \
   --allowlist "${pass_allowlist}" \
-  "${fixtures}/pass.yml"
+  "${fixtures}/pass.yml" \
+  "${fixtures}/pass-negative-guard.yml"
 
 reject_allowlist="${tmp_dir}/reject-allowlist.json"
 cat >"${reject_allowlist}" <<'JSON'
@@ -84,6 +86,55 @@ done
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
 
+set +e
+permissions_output="$(TMPDIR="${tmp_dir}" "${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-permissions.yml" 2>&1)"
+permissions_status=$?
+set -e
+
+if [[ "${permissions_status}" -eq 0 ]]; then
+  echo "expected unsafe permission shapes to fail policy" >&2
+  exit 1
+fi
+# The GitHub expression below is an intentionally literal expected diagnostic.
+# shellcheck disable=SC2016
+for expected in \
+  "workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-permissions.yml uses forbidden permissions: write-all" \
+  "job job-write-all uses forbidden permissions: write-all" \
+  'job dynamic-permissions uses forbidden dynamic permissions selector ${{ vars.PERMISSIONS }}' \
+  "job malformed-permissions uses unsupported permissions shape"; do
+  if ! grep -Fq -- "${expected}" <<<"${permissions_output}"; then
+    echo "missing expected permissions diagnostic: ${expected}" >&2
+    printf '%s\n' "${permissions_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+dynamic_secrets_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-dynamic-secrets.yml" 2>&1)"
+dynamic_secrets_status=$?
+set -e
+
+if [[ "${dynamic_secrets_status}" -eq 0 ]]; then
+  echo "expected dynamic credential selectors to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "dynamic secret selector secrets[vars.NAME]" \
+  "dynamic secret selector secrets[format('{0}_TOKEN', vars.PROVIDER)]" \
+  "dynamic secret selector secrets[vars.DIGITALOCEAN_TOKEN]" \
+  "dynamic secret selector secrets.*" \
+  "known cloud credential variable reference DIGITALOCEAN_TOKEN"; do
+  if ! grep -Fq -- "${expected}" <<<"${dynamic_secrets_output}"; then
+    echo "missing expected dynamic credential diagnostic: ${expected}" >&2
+    printf '%s\n' "${dynamic_secrets_output}" >&2
+    exit 1
+  fi
+done
+
 uses_allowlist="${tmp_dir}/uses-allowlist.json"
 cat >"${uses_allowlist}" <<'JSON'
 [
@@ -106,12 +157,118 @@ if [[ "${uses_status}" -eq 0 ]]; then
   exit 1
 fi
 for expected in \
-  "forbidden provider action digitalocean/action-doctl@v2" \
-  "forbidden provider reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
+  "unreviewed action digitalocean/action-doctl@v2" \
+  "unrecognized reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
   "provider authority with secret DEPLOY_AUTH"; do
   if ! grep -Fq -- "${expected}" <<<"${uses_output}"; then
     echo "missing expected provider uses diagnostic: ${expected}" >&2
     printf '%s\n' "${uses_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+unreviewed_uses_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-unreviewed-uses.yml" 2>&1)"
+unreviewed_uses_status=$?
+set -e
+
+if [[ "${unreviewed_uses_status}" -eq 0 ]]; then
+  echo "expected unreviewed action references to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "unreviewed action octocat/unknown-action@v1" \
+  "local action ./.github/actions/not-reviewed is forbidden" \
+  "Docker action docker://alpine:3.20 is forbidden" \
+  "unreviewed action digitalocean/experimental-deploy@v1" \
+  "unrecognized reusable workflow acme/platform/.github/workflows/deploy.yml@main"; do
+  if ! grep -Fq -- "${expected}" <<<"${unreviewed_uses_output}"; then
+    echo "missing expected unreviewed uses diagnostic: ${expected}" >&2
+    printf '%s\n' "${unreviewed_uses_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+guard_suffix_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-guard-suffix.yml" 2>&1)"
+guard_suffix_status=$?
+set -e
+
+if [[ "${guard_suffix_status}" -eq 0 ]]; then
+  echo "expected executable suffix after negative guard to fail policy" >&2
+  exit 1
+fi
+if ! grep -Fq -- "executable provider CLI doctl" <<<"${guard_suffix_output}"; then
+  echo "missing provider CLI diagnostic after negative guard suffix" >&2
+  printf '%s\n' "${guard_suffix_output}" >&2
+  exit 1
+fi
+if ! grep -Fq -- "job command-substitution executes forbidden provider authority: executable provider CLI doctl" <<<"${guard_suffix_output}"; then
+  echo "command substitution inside a negative guard bypassed provider CLI detection" >&2
+  printf '%s\n' "${guard_suffix_output}" >&2
+  exit 1
+fi
+
+invalid_paths_allowlist="${tmp_dir}/invalid-paths-allowlist.json"
+cat >"${invalid_paths_allowlist}" <<'JSON'
+[
+  {
+    "path": "/tmp/absolute-workflow.yml",
+    "secret": "PACKAGE_TOKEN",
+    "rationale": "Absolute paths must never be accepted as workflow policy exceptions."
+  },
+  {
+    "path": "../traversal-workflow.yml",
+    "secret": "RELEASES_TOKEN",
+    "rationale": "Parent traversal must never escape exact repository-relative matching."
+  }
+]
+JSON
+set +e
+invalid_allowlist_output="$("${checker}" \
+  --allowlist "${invalid_paths_allowlist}" \
+  "${fixtures}/pass-negative-guard.yml" 2>&1)"
+invalid_allowlist_status=$?
+set -e
+
+if [[ "${invalid_allowlist_status}" -eq 0 ]]; then
+  echo "expected unconfined allowlist paths to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "allowlist path /tmp/absolute-workflow.yml must be repository-relative" \
+  "allowlist path ../traversal-workflow.yml escapes the repository"; do
+  if ! grep -Fq -- "${expected}" <<<"${invalid_allowlist_output}"; then
+    echo "missing expected allowlist confinement diagnostic: ${expected}" >&2
+    printf '%s\n' "${invalid_allowlist_output}" >&2
+    exit 1
+  fi
+done
+
+escape_workflow="${tmp_dir}/symlink-escape.yml"
+ln -s /dev/null "${escape_workflow}"
+set +e
+outside_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  /dev/null \
+  "${escape_workflow}" 2>&1)"
+outside_status=$?
+set -e
+
+if [[ "${outside_status}" -eq 0 ]]; then
+  echo "expected outside and symlink-escaping workflow paths to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "workflow path /dev/null is outside repository" \
+  "resolves outside repository"; do
+  if ! grep -Fq -- "${expected}" <<<"${outside_output}"; then
+    echo "missing expected workflow confinement diagnostic: ${expected}" >&2
+    printf '%s\n' "${outside_output}" >&2
     exit 1
   fi
 done

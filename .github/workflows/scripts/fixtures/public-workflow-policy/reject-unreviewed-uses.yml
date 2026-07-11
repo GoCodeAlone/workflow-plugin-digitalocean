@@ -1,0 +1,28 @@
+name: Forbidden unreviewed actions
+
+on:
+  pull_request:
+
+jobs:
+  unknown-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: octocat/unknown-action@v1
+
+  local-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/not-reviewed
+
+  docker-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker://alpine:3.20
+
+  unlisted-provider-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: digitalocean/experimental-deploy@v1
+
+  unknown-reusable-workflow:
+    uses: acme/platform/.github/workflows/deploy.yml@main
