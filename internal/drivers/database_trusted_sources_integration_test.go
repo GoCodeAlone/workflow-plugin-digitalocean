@@ -60,15 +60,15 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 	}
 	resolved, err := d.resolveAppNamesMap(ctx, raw)
 	if err != nil {
-		t.Fatalf("resolveAppNamesMap(%q): %v", appName, err)
+		t.Fatal("trusted-source app resolution failed; resource identifiers are redacted")
 	}
 
 	gotUUID, ok := resolved[appName]
 	if !ok {
-		t.Fatalf("resolveAppNamesMap result missing key %q; map: %v", appName, resolved)
+		t.Fatal("trusted-source app resolution returned no matching entry; resource identifiers are redacted")
 	}
 	if !isUUIDLike(gotUUID) {
-		t.Errorf("resolved value %q for app %q does not look like a UUID", gotUUID, appName)
+		t.Error("trusted-source app resolution returned an invalid identifier; resource identifiers are redacted")
 	}
 
 	// ── 2. Independent cross-check via Apps.List ──────────────────────────────
@@ -77,7 +77,7 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 	for {
 		apps, resp, listErr := godoClient.Apps.List(ctx, opts)
 		if listErr != nil {
-			t.Fatalf("Apps.List (cross-check): %v", listErr)
+			t.Fatal("independent Apps API cross-check failed; resource identifiers are redacted")
 		}
 		for _, app := range apps {
 			if app.Spec != nil && app.Spec.Name == appName {
@@ -91,13 +91,12 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 		opts.Page++
 	}
 	if wantUUID == "" {
-		t.Fatalf("app %q not found in Apps.List; verify DO_TEST_APP_NAME is correct", appName)
+		t.Fatal("configured app was not found during cross-check; resource identifiers are redacted")
 	}
 
 	// ── 3. Assert resolved UUID == cross-checked UUID ─────────────────────────
 	if gotUUID != wantUUID {
-		t.Errorf("UUID mismatch for app %q:\n  resolveAppNamesMap → %q\n  Apps.List         → %q",
-			appName, gotUUID, wantUUID)
+		t.Error("trusted-source app resolution disagreed with the independent cross-check; resource identifiers are redacted")
 	}
-	t.Logf("✓ app %q resolved to UUID %q", appName, gotUUID)
+	t.Log("trusted-source app resolution matched the independent cross-check; resource identifiers are redacted")
 }

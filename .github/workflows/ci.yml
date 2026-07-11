@@ -25,14 +25,12 @@ jobs:
           if [ -n "${RELEASES_TOKEN}" ]; then
             git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-      - run: go test -race ./...
-      - run: go vet ./...
-      - name: Validate conformance workflow ownership
+      - run: GOWORK=off go test -race ./...
+      - run: GOWORK=off go vet ./...
+      - name: Enforce credential-free public workflows
         run: |
-          ./.github/workflows/scripts/test-conformance-workflows.sh
-          ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
-          ./.github/workflows/scripts/test-conformance-safety-helpers.sh
-          ./.github/workflows/scripts/test-conformance-scrub-safety.sh
+          ./.github/workflows/scripts/check-public-workflow-policy.sh
+          ./.github/workflows/scripts/test-public-workflow-policy.sh
 
   wfctl-strict-contracts:
     runs-on: ubuntu-latest
@@ -65,7 +63,6 @@ jobs:
           rm -rf "$tmp_dir"
 
   wfctl-conformance:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
