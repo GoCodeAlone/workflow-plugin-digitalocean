@@ -523,7 +523,7 @@
     "path": ".github/workflows/release.yml",
     "command": "$assignment",
     "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed $assignment statement and inherited execution context.",
     "state": "active"
   },
@@ -531,7 +531,7 @@
     "path": ".github/workflows/release.yml",
     "command": "$assignment",
     "statementSHA256": "910883cf7b2a3bca13cc72327145028019076951bb0148425f4e7cf9ebb583f2",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed $assignment statement and inherited execution context.",
     "state": "active"
   },
@@ -539,7 +539,7 @@
     "path": ".github/workflows/release.yml",
     "command": "[",
     "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed builtin statement and complete workflow context.",
     "state": "active"
   },
@@ -547,7 +547,7 @@
     "path": ".github/workflows/release.yml",
     "command": "[",
     "statementSHA256": "483a2b1e8cb4898a51c519ff9a454d60168919b020b438380f8fd841afa12250",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed builtin statement and complete workflow context.",
     "state": "active"
   },
@@ -555,7 +555,7 @@
     "path": ".github/workflows/release.yml",
     "command": "echo",
     "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed echo statement and inherited execution context.",
     "state": "active"
   },
@@ -563,7 +563,7 @@
     "path": ".github/workflows/release.yml",
     "command": "exit",
     "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed builtin statement and complete workflow context.",
     "state": "active"
   },
@@ -571,7 +571,7 @@
     "path": ".github/workflows/release.yml",
     "command": "gh",
     "statementSHA256": "9c9f36435e87ec26d9b5e08b27d7d5eb8b722b2749a7ee984f985b1d26d447a2",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed gh statement and inherited execution context.",
     "state": "active"
   },
@@ -579,7 +579,7 @@
     "path": ".github/workflows/release.yml",
     "command": "jq",
     "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed jq statement and inherited execution context.",
     "state": "active"
   },
@@ -587,7 +587,7 @@
     "path": ".github/workflows/release.yml",
     "command": "jq",
     "statementSHA256": "910883cf7b2a3bca13cc72327145028019076951bb0148425f4e7cf9ebb583f2",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed jq statement and inherited execution context.",
     "state": "active"
   },
@@ -595,7 +595,7 @@
     "path": ".github/workflows/release.yml",
     "command": "sed",
     "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed sed statement and inherited execution context.",
     "state": "active"
   },
@@ -603,7 +603,7 @@
     "path": ".github/workflows/release.yml",
     "command": "uname",
     "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed uname statement and inherited execution context.",
     "state": "active"
   },
@@ -611,7 +611,7 @@
     "path": ".github/workflows/release.yml",
     "command": "wfctl",
     "statementSHA256": "483a2b1e8cb4898a51c519ff9a454d60168919b020b438380f8fd841afa12250",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed wfctl statement and inherited execution context.",
     "state": "active"
   },
@@ -619,7 +619,7 @@
     "path": ".github/workflows/release.yml",
     "command": "wfctl",
     "statementSHA256": "f582015433d8275337b49e162ac0b0fe76b86363a68e42ebe73814b38e4dc789",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed wfctl statement and inherited execution context.",
     "state": "active"
   },
@@ -627,8 +627,24 @@
     "path": ".github/workflows/release.yml",
     "command": "wfctl",
     "statementSHA256": "e7caa91226208c3bfb8e107a01582d645ef79eff3ceefa7b79eb10c7158c35c4",
-    "contextSHA256": "bc0ba916235b769647b63ac9ce23561392e416a4dac4c2c804341592b16e3fb4",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
     "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "git",
+    "statementSHA256": "8a8dea32ba85ab1140409e072bba02f7ffe5e2499bd98785e9d9787a36a2c016",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "rationale": "Fetch only the protected main ref before releasing a tagged commit.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "git",
+    "statementSHA256": "fa57beadffd02d8f90409c161a2d5efc056b0c9cff3e07809dbd8a5d306e1d1a",
+    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "rationale": "Require the exact tag commit to be contained in protected main.",
     "state": "active"
   },
   {

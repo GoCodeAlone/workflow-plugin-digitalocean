@@ -15,7 +15,16 @@ allowlist. Known cloud credentials remain categorically forbidden. Job-level
 `secrets: inherit` and mapped inherited-secret values are rejected everywhere.
 Release publication uses the automatic repository-scoped GitHub token; the
 stable-tag registry notification separately uses its exact reviewed dispatch
-token and immutable action.
+token and immutable action. That exception is contingent on an active
+repository tag ruleset with target `tag`, exact include `refs/tags/v*`, no
+excludes, creation/update/deletion rules, and exactly one always-on
+`OrganizationAdmin` bypass with no actor ID. The current implementation is
+`Protect release tags` (ID `18817055`), but the verifier trusts the behavior,
+not that mutable name or repository-local ID. This limits the reviewed noncloud
+token to organization-owner-controlled release tags. The release job also
+fetches the fixed `main` ref and rejects a tag commit that is not already
+contained in protected `main`; the registry notification depends on that job
+and cannot receive its token after an ancestry failure.
 
 Workflow authority changes use three pull requests. The presence manifest is
 the canonical inventory: `present` groups bind a workflow path to its complete
@@ -62,6 +71,11 @@ Zero, adjacent, unknown, or later missing-policy bases fail closed. If `main`
 moves before bootstrap merges, rebase and update this exact SHA through review;
 never replace it with a generic missing-policy skip. After bootstrap,
 subsequent `.github/workflows` changes use trusted prior-revision policy.
+Because that exact base has no public policy workflow or trust manifests, the
+initial bootstrap pull request finalizes all active trust atomically. The
+required status check is installed immediately after the bootstrap merge; it
+is necessarily absent during bootstrap because no base workflow produces it.
+This exception does not apply to any later workflow-authority change.
 
 The same stable `Public Workflow Policy / policy` check also runs on pushes to
 `main`, comparing `github.event.before` as trusted policy authority with the new
@@ -137,4 +151,8 @@ changes repository settings. An applicable ruleset must also contain both
 `non_fast_forward` and `deletion` rules. The verifier reads repository metadata
 and accepts `~DEFAULT_BRANCH` only when the requested branch equals the
 repository's actual `default_branch`; non-default branches require their exact
-`refs/heads/<branch>` selector.
+`refs/heads/<branch>` selector. The same invocation also requires the exact
+release-tag ruleset described above. Run this combined check as an
+administrator/operator release prerequisite: GitHub intentionally hides
+ruleset bypass actors from the read-only `github.token`, so the public policy
+workflow cannot prove this privileged governance state.

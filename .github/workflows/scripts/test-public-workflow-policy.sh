@@ -35,6 +35,17 @@ grep -Fq -- 'bypass_pull_request_allowances.users' "${protection_verifier}"
 grep -Fq -- 'conditions.ref_name.exclude' "${protection_verifier}"
 grep -Fq -- 'required_status_checks.strict == true' "${protection_verifier}"
 grep -Fq -- 'strict_required_status_checks_policy == true' "${protection_verifier}"
+grep -Fq -- 'refs/tags/v*' "${protection_verifier}"
+grep -Fq -- '.type == "creation"' "${protection_verifier}"
+grep -Fq -- '.type == "update"' "${protection_verifier}"
+grep -Fq -- '.type == "deletion"' "${protection_verifier}"
+grep -Fq -- '.actor_type == "OrganizationAdmin"' "${protection_verifier}"
+grep -Fq -- 'git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main' "${repo_root}/.github/workflows/release.yml"
+grep -Fq -- 'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' "${repo_root}/.github/workflows/release.yml"
+if rg -F -- 'verify-public-workflow-branch-protection.sh' "${governance_workflow}"; then
+  echo "public policy workflow cannot inspect privileged repository governance" >&2
+  exit 1
+fi
 grep -Fq -- 'Workflow authority changes use three pull requests' "${repo_root}/docs/public-workflow-policy.md"
 
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
@@ -106,6 +117,7 @@ classic_protection="${tmp_dir}/classic-protection.json"
 ruleset_protection="${tmp_dir}/ruleset-protection.json"
 invalid_protection="${tmp_dir}/invalid-protection.json"
 repository_metadata="${tmp_dir}/repository-metadata.json"
+tag_protection="${tmp_dir}/tag-protection.json"
 printf '{}\n' >"${invalid_protection}"
 printf '{"default_branch":"main"}\n' >"${repository_metadata}"
 cat >"${classic_protection}" <<'JSON'
@@ -128,6 +140,7 @@ cat >"${classic_protection}" <<'JSON'
 JSON
 cat >"${ruleset_protection}" <<'JSON'
 {
+  "target":"branch",
   "enforcement":"active",
   "bypass_actors":[],
   "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
@@ -139,13 +152,24 @@ cat >"${ruleset_protection}" <<'JSON'
   ]
 }
 JSON
-PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+cat >"${tag_protection}" <<'JSON'
+{
+  "id":18817055,
+  "name":"Protect release tags",
+  "target":"tag",
+  "enforcement":"active",
+  "bypass_actors":[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"always"}],
+  "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
+  "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}]
+}
+JSON
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" PUBLIC_WORKFLOW_TAG_RULESET_JSON_FILE="${tag_protection}" \
   "${protection_verifier}" example/repo main >/dev/null
-PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" PUBLIC_WORKFLOW_TAG_RULESET_JSON_FILE="${tag_protection}" \
   "${protection_verifier}" example/repo main >/dev/null
 ruleset_explicit="${ruleset_protection}.explicit"
 jq '.conditions.ref_name.include=["refs/heads/release"]' "${ruleset_protection}" >"${ruleset_explicit}"
-PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_explicit}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_explicit}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" PUBLIC_WORKFLOW_TAG_RULESET_JSON_FILE="${tag_protection}" \
   "${protection_verifier}" example/repo release >/dev/null
 
 assert_protection_rejected() {
@@ -160,7 +184,7 @@ assert_protection_rejected() {
     ruleset_file="${fixture}"
   fi
   set +e
-  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_file}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_file}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" \
+  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_file}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_file}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" PUBLIC_WORKFLOW_TAG_RULESET_JSON_FILE="${tag_protection}" \
     "${protection_verifier}" example/repo "${branch}" >/dev/null 2>&1
   local status=$?
   set -e
@@ -198,6 +222,37 @@ jq '.rules |= map(select(.type != "deletion"))' "${ruleset_protection}" >"${rule
 assert_protection_rejected ruleset "${ruleset_protection}.missing-non-fast-forward"
 assert_protection_rejected ruleset "${ruleset_protection}.missing-deletion"
 assert_protection_rejected ruleset "${ruleset_protection}" release
+
+assert_tag_protection_rejected() {
+  local fixture="$1"
+  set +e
+  PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${classic_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_REPOSITORY_JSON_FILE="${repository_metadata}" PUBLIC_WORKFLOW_TAG_RULESET_JSON_FILE="${fixture}" \
+    "${protection_verifier}" example/repo main >/dev/null 2>&1
+  local status=$?
+  set -e
+  if [[ "${status}" -eq 0 ]]; then
+    echo "tag protection accepted invalid fixture: ${fixture}" >&2
+    exit 1
+  fi
+}
+for rule_type in creation update deletion; do
+  jq --arg type "${rule_type}" '.rules |= map(select(.type != $type))' "${tag_protection}" >"${tag_protection}.missing-${rule_type}"
+  assert_tag_protection_rejected "${tag_protection}.missing-${rule_type}"
+done
+jq '.conditions.ref_name.include=["refs/tags/*"]' "${tag_protection}" >"${tag_protection}.broader-include"
+jq '.conditions.ref_name.include += ["refs/tags/*"]' "${tag_protection}" >"${tag_protection}.extra-include"
+jq '.conditions.ref_name.exclude=["refs/tags/v0.*"]' "${tag_protection}" >"${tag_protection}.exclude"
+jq '.bypass_actors=[]' "${tag_protection}" >"${tag_protection}.missing-bypass"
+jq '.bypass_actors += [{"actor_id":1,"actor_type":"RepositoryRole","bypass_mode":"always"}]' "${tag_protection}" >"${tag_protection}.extra-bypass"
+jq 'del(.bypass_actors[0].actor_id)' "${tag_protection}" >"${tag_protection}.missing-bypass-actor-id"
+jq '.bypass_actors[0].actor_id=1' "${tag_protection}" >"${tag_protection}.wrong-bypass-actor-id"
+jq '.bypass_actors[0].actor_type="Team"' "${tag_protection}" >"${tag_protection}.wrong-bypass-actor-type"
+jq '.bypass_actors[0].bypass_mode="pull_request"' "${tag_protection}" >"${tag_protection}.wrong-bypass-mode"
+jq '.target="branch"' "${tag_protection}" >"${tag_protection}.wrong-target"
+jq '.enforcement="evaluate"' "${tag_protection}" >"${tag_protection}.wrong-enforcement"
+for invalid_tag_fixture in broader-include extra-include exclude missing-bypass extra-bypass missing-bypass-actor-id wrong-bypass-actor-id wrong-bypass-actor-type wrong-bypass-mode wrong-target wrong-enforcement; do
+  assert_tag_protection_rejected "${tag_protection}.${invalid_tag_fixture}"
+done
 
 lifecycle_root="${tmp_dir}/lifecycle"
 mkdir -p "${lifecycle_root}/.github/workflows"
@@ -649,6 +704,16 @@ assert_exact_mutation_rejected \
   "${repo_root}/.github/workflows/release.yml" \
   's/--draft=false/--draft=true/' \
   "unreviewed exact statement containing gh"
+assert_exact_mutation_rejected \
+  "release ancestry command removed" \
+  "${repo_root}/.github/workflows/release.yml" \
+  '/git merge-base --is-ancestor/d' \
+  "uses unreviewed exact action actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+assert_exact_mutation_rejected \
+  "release ancestry ref changed" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's|refs/remotes/origin/main|refs/remotes/origin/release|g' \
+  "uses unreviewed exact action actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 assert_exact_mutation_rejected \
   "sed target" \
   "${repo_root}/.github/workflows/ci.yml" \
