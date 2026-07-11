@@ -507,7 +507,7 @@ func secretReferences(node *yaml.Node) map[string]bool {
 	return secrets
 }
 
-func validateSecretReferences(rel, prefix string, secrets map[string]bool, allowed map[string]allowEntry, referenced map[string]bool, findings *findingSet) {
+func validateSecretReferences(rel, prefix string, secrets map[string]bool, referenced map[string]bool, findings *findingSet) {
 	for secret := range secrets {
 		key := rel + "\x00" + secret
 		referenced[key] = true
@@ -515,43 +515,7 @@ func validateSecretReferences(rel, prefix string, secrets map[string]bool, allow
 			continue
 		} else if knownCloudSecret(secret) {
 			findings.add("%s references known cloud secret %s", prefix, secret)
-		} else if _, ok := allowed[key]; !ok {
-			findings.add("%s secret %s is not allowlisted", prefix, secret)
-		}
-	}
-}
-
-func reviewedNonCloudSecretsAllowed(root *yaml.Node) bool {
-	on := mappingValue(root, "on")
-	if on == nil {
-		return false
-	}
-	switch on.Kind {
-	case yaml.ScalarNode:
-		return on.Value == "push"
-	case yaml.SequenceNode:
-		if len(on.Content) == 0 {
-			return false
-		}
-		for _, trigger := range on.Content {
-			if trigger.Kind != yaml.ScalarNode || trigger.Value != "push" {
-				return false
-			}
-		}
-		return true
-	case yaml.MappingNode:
-		return len(on.Content) == 2 && on.Content[0].Value == "push"
-	default:
-		return false
-	}
-}
-
-func validateWorkflowSecretAuthority(prefix string, root *yaml.Node, secrets map[string]bool, findings *findingSet) {
-	if reviewedNonCloudSecretsAllowed(root) {
-		return
-	}
-	for secret := range secrets {
-		if secret != "GITHUB_TOKEN" {
+		} else {
 			findings.add("%s public workflow references forbidden repository secret %s", prefix, secret)
 		}
 	}
@@ -1738,7 +1702,7 @@ func main() {
 				globalSecrets[secret] = true
 			}
 		}
-		validateSecretReferences(rel, "workflow "+rel, globalSecrets, allowed, referenced, findings)
+		validateSecretReferences(rel, "workflow "+rel, globalSecrets, referenced, findings)
 		manual := triggerPresent(root, "workflow_dispatch")
 		scheduled := triggerPresent(root, "schedule")
 		jobs := mappingValue(root, "jobs")
@@ -1770,11 +1734,10 @@ func main() {
 			localSecrets := secretReferences(job)
 			validateInheritedSecrets(prefix, mappingValue(job, "secrets"), findings)
 			validateCredentialSelectors(prefix, job, findings)
-			validateSecretReferences(rel, prefix, localSecrets, allowed, referenced, findings)
+			validateSecretReferences(rel, prefix, localSecrets, referenced, findings)
 			for secret := range localSecrets {
 				jobSecrets[secret] = true
 			}
-			validateWorkflowSecretAuthority(prefix, root, jobSecrets, findings)
 
 			providerAuthority := false
 			hasIntegrationTag := false

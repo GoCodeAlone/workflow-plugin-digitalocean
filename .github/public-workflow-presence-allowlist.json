@@ -25,7 +25,7 @@
   },
   {
     "path": ".github/workflows/release.yml",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
     "state": "active",
     "presence": "present"
   }

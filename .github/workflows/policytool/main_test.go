@@ -405,37 +405,24 @@ func TestTrustGroupThreeStateLifecycle(t *testing.T) {
 
 func TestWorkflowSecretAuthorityBoundary(t *testing.T) {
 	for name, test := range map[string]struct {
-		trigger     string
 		secrets     map[string]bool
-		allowlisted bool
 		wantFinding bool
 	}{
-		"workflow call allowlisted": {"workflow_call", map[string]bool{"RELEASES_TOKEN": true}, true, true},
-		"push allowlisted noncloud": {"push", map[string]bool{"REPO_DISPATCH_TOKEN": true}, true, false},
-		"push unallowlisted":        {"push", map[string]bool{"REPO_DISPATCH_TOKEN": true}, false, true},
-		"push cloud allowlisted":    {"push", map[string]bool{"DIGITALOCEAN_TOKEN": true}, true, true},
-		"automatic token":           {"workflow_call", map[string]bool{"GITHUB_TOKEN": true}, false, false},
+		"workflow call noncloud": {map[string]bool{"RELEASES_TOKEN": true}, true},
+		"branch push noncloud":   {map[string]bool{"PUBLISH_TOKEN": true}, true},
+		"tag push noncloud":      {map[string]bool{"REGISTRY_TOKEN": true}, true},
+		"cloud secret":           {map[string]bool{"DIGITALOCEAN_TOKEN": true}, true},
+		"automatic token":        {map[string]bool{"GITHUB_TOKEN": true}, false},
 	} {
-		var doc yaml.Node
-		if err := yaml.Unmarshal([]byte("on:\n  "+test.trigger+":\njobs: {}\n"), &doc); err != nil {
-			t.Fatal(err)
-		}
-		allowed := map[string]allowEntry{}
-		if test.allowlisted {
-			for secret := range test.secrets {
-				allowed["fixture.yml\x00"+secret] = allowEntry{Path: "fixture.yml", Secret: secret}
-			}
-		}
 		findings := &findingSet{}
-		validateSecretReferences("fixture.yml", "fixture "+name, test.secrets, allowed, map[string]bool{}, findings)
-		validateWorkflowSecretAuthority("fixture "+name, doc.Content[0], test.secrets, findings)
+		validateSecretReferences("fixture.yml", "fixture "+name, test.secrets, map[string]bool{}, findings)
 		if got := len(findings.items) > 0; got != test.wantFinding {
 			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
 		}
 	}
 }
 
-func TestWorkflowCallEnvironmentRejectsAllowlistedSecret(t *testing.T) {
+func TestWorkflowCallEnvironmentRejectsNamedSecret(t *testing.T) {
 	const workflowPath = ".github/workflows/reusable.yml"
 	var doc yaml.Node
 	source := "on: workflow_call\njobs:\n  deploy:\n    environment: production\n    uses: acme/platform/.github/workflows/deploy.yml@0123456789012345678901234567890123456789\n    secrets:\n      token: ${{ secrets.RELEASES_TOKEN }}\n"
@@ -444,12 +431,10 @@ func TestWorkflowCallEnvironmentRejectsAllowlistedSecret(t *testing.T) {
 	}
 	job := mappingValue(mappingValue(doc.Content[0], "jobs"), "deploy")
 	secrets := secretReferences(job)
-	allowed := map[string]allowEntry{workflowPath + "\x00RELEASES_TOKEN": {Path: workflowPath, Secret: "RELEASES_TOKEN"}}
 	findings := &findingSet{}
-	validateSecretReferences(workflowPath, "fixture workflow_call", secrets, allowed, map[string]bool{}, findings)
-	validateWorkflowSecretAuthority("fixture workflow_call", doc.Content[0], secrets, findings)
+	validateSecretReferences(workflowPath, "fixture workflow_call", secrets, map[string]bool{}, findings)
 	if len(findings.items) == 0 {
-		t.Fatal("workflow_call environment accepted an allowlisted repository secret")
+		t.Fatal("workflow_call environment accepted a named repository secret")
 	}
 }
 

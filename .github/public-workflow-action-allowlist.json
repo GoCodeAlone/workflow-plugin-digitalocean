@@ -75,7 +75,7 @@
     "path": ".github/workflows/release.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "3e5cbc2bc14eefe54d00005483246362bda6b9987c3b1713d37e5c2da4e18dbf",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
     "rationale": "Exact reviewed immutable action node and inherited execution context.",
     "state": "active"
   },
@@ -83,7 +83,7 @@
     "path": ".github/workflows/release.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "e791bd1b96e7e25083de0122264bb45e4fb5ac5bde0c346d99a1f813370923d4",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
     "rationale": "Exact reviewed immutable action node and inherited execution context.",
     "state": "active"
   },
@@ -91,7 +91,7 @@
     "path": ".github/workflows/release.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
     "rationale": "Exact reviewed immutable action node and inherited execution context.",
     "state": "active"
   },
@@ -99,7 +99,7 @@
     "path": ".github/workflows/release.yml",
     "uses": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94",
     "nodeSHA256": "e5e477318c53fd26f9730d1dd44ad050447fc601d831dd95e16cf327ed11e980",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
     "rationale": "Exact reviewed immutable action node and inherited execution context.",
     "state": "active"
   },
@@ -126,13 +126,5 @@
     "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
     "state": "active",
     "rationale": "Exact selected policy Go setup."
-  },
-  {
-    "path": ".github/workflows/release.yml",
-    "uses": "peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697",
-    "nodeSHA256": "19dd8b407567aaa48091ecbc52a50a5886ec54eb97e59800d54798b78c3275f6",
-    "contextSHA256": "0362fd483f578afe54211c80be7ce1cdbb305d5cf25de46eec7a90f508eb7caa",
-    "rationale": "Exact reviewed registry notification action and payload.",
-    "state": "active"
   }
 ]

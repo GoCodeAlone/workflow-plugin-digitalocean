@@ -7,24 +7,28 @@ request checkout is stored separately and read only as policy input. Candidate
 actions, scripts, Go files, modules, and trust manifests are never executed.
 The job has only `contents: read`, uses GitHub-hosted runners, and receives no
 cloud credentials or OIDC authority.
-`pull_request`, `pull_request_target`, `workflow_call`, mixed-trigger, and other
-non-push-only public workflows reject repository and environment secrets other
-than the automatic `GITHUB_TOKEN`/`github.token`. Push-only workflows, including
-tag releases, may use an exact reviewed noncloud secret from the trusted
-allowlist. Known cloud credentials remain categorically forbidden. Job-level
-`secrets: inherit` and mapped inherited-secret values are rejected everywhere.
-Release publication uses the automatic repository-scoped GitHub token; the
-stable-tag registry notification separately uses its exact reviewed dispatch
-token and immutable action. That exception is contingent on an active
-repository tag ruleset with target `tag`, exact include `refs/tags/v*`, no
-excludes, creation/update/deletion rules, and exactly one always-on
-`OrganizationAdmin` bypass with no actor ID. The current implementation is
-`Protect release tags` (ID `18817055`), but the verifier trusts the behavior,
-not that mutable name or repository-local ID. This limits the reviewed noncloud
-token to organization-owner-controlled release tags. The release job also
-fetches the fixed `main` ref and rejects a tag commit that is not already
-contained in protected `main`; the registry notification depends on that job
-and cannot receive its token after an ancestry failure.
+Every public workflow, regardless of trigger or call graph, rejects repository
+and environment secrets other than the automatic `GITHUB_TOKEN`/`github.token`.
+Known cloud credentials remain categorically forbidden. Job-level
+`secrets: inherit`, mapped inherited-secret values, and dynamic secret selectors
+are rejected everywhere. Release publication uses only the automatic
+repository-scoped GitHub token.
+
+Release integrity separately requires an active repository tag ruleset with
+target `tag`, exact include `refs/tags/v*`, no excludes,
+creation/update/deletion rules, and exactly one always-on `OrganizationAdmin`
+bypass with no actor ID. The current implementation is `Protect release tags`
+(ID `18817055`), but the verifier trusts the behavior, not that mutable name or
+repository-local ID. The release job also fetches the fixed `main` ref and
+rejects a tag commit that is not already contained in protected `main`.
+
+Registry synchronization is owned by `workflow-registry`, whose
+`sync-registry-manifests.yml` already runs a full credentialed
+`wfctl plugin registry-sync` daily at 06:00 UTC and supports manual dispatch.
+Task1a creates no package release. After Task10 releases this plugin, Task11
+manually runs the DigitalOcean registry sync before the next release window, so
+removing the optional publisher-side dispatch creates no unsupported consumer
+window.
 
 Workflow authority changes use three pull requests. The presence manifest is
 the canonical inventory: `present` groups bind a workflow path to its complete

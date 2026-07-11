@@ -42,6 +42,16 @@ grep -Fq -- '.type == "deletion"' "${protection_verifier}"
 grep -Fq -- '.actor_type == "OrganizationAdmin"' "${protection_verifier}"
 grep -Fq -- 'git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main' "${repo_root}/.github/workflows/release.yml"
 grep -Fq -- 'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' "${repo_root}/.github/workflows/release.yml"
+if rg -n --pcre2 --max-depth 1 --glob '*.yml' --glob '*.yaml' \
+  'repo_dispatch_token|notify-workflow-registry|peter-evans/repository-dispatch|secrets(?:\.(?!GITHUB_TOKEN\b)|\[)' \
+  "${repo_root}/.github/workflows" || \
+  rg -n -- 'repo_dispatch_token|notify-workflow-registry|peter-evans/repository-dispatch' \
+    "${repo_root}/.github/public-workflow-secret-allowlist.json" \
+    "${repo_root}/.github/public-workflow-action-allowlist.json"; then
+  echo "public workflows retain named-secret or publisher-side registry authority" >&2
+  exit 1
+fi
+jq -e 'length == 0' "${repo_root}/.github/public-workflow-secret-allowlist.json" >/dev/null
 if rg -F -- 'verify-public-workflow-branch-protection.sh' "${governance_workflow}"; then
   echo "public policy workflow cannot inspect privileged repository governance" >&2
   exit 1
@@ -664,6 +674,35 @@ if [[ "${candidate_workflow_call_status}" -eq 0 ]] || ! grep -Fq -- \
 fi
 rm "${candidate_workflow_call}"
 
+for push_selector in branches tags; do
+  candidate_push_secret="${candidate_root}/.github/workflows/candidate-${push_selector}-secret.yml"
+  cat >"${candidate_push_secret}" <<YAML
+name: Candidate ${push_selector} secret
+on:
+  push:
+    ${push_selector}:
+      - main
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH_TOKEN: \${{ secrets.RELEASES_TOKEN }}
+    steps:
+      - run: echo publish
+YAML
+  set +e
+  candidate_push_output="$("${checker_binary}" --scan-root "${candidate_root}" 2>&1)"
+  candidate_push_status=$?
+  set -e
+  if [[ "${candidate_push_status}" -eq 0 ]] || ! grep -Fq -- \
+    "public workflow references forbidden repository secret RELEASES_TOKEN" <<<"${candidate_push_output}"; then
+    echo "${push_selector} push repository secret bypassed public workflow policy" >&2
+    printf '%s\n' "${candidate_push_output}" >&2
+    exit 1
+  fi
+  rm "${candidate_push_secret}"
+done
+
 assert_exact_mutation_rejected() {
   local label="$1"
   local workflow="$2"
@@ -765,10 +804,10 @@ assert_exact_mutation_rejected \
   's/pull_request:/pull_request_target:/; s/SAFE_JOB_MODE: strict/SAFE_JOB_MODE: strict\n      PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
   "public workflow references forbidden repository secret RELEASES_TOKEN"
 assert_exact_mutation_rejected \
-  "push repository secret" \
+  "tag push repository secret" \
   "${repo_root}/.github/workflows/release.yml" \
   's/REF_NAME: \${{ github.ref_name }}/REF_NAME: ${{ github.ref_name }}\n          PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
-  "secret RELEASES_TOKEN is not allowlisted"
+  "public workflow references forbidden repository secret RELEASES_TOKEN"
 assert_exact_mutation_rejected \
   "push cloud secret" \
   "${repo_root}/.github/workflows/release.yml" \
@@ -802,21 +841,6 @@ assert_exact_mutation_rejected \
   's/path: conformance-evidence.json/path: other-evidence.json/' \
   "uses unreviewed exact action actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 assert_exact_mutation_rejected \
-  "repository-dispatch repository" \
-  "${repo_root}/.github/workflows/release.yml" \
-  's|repository: GoCodeAlone/workflow-registry|repository: GoCodeAlone/workflow|' \
-  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
-assert_exact_mutation_rejected \
-  "repository-dispatch payload" \
-  "${repo_root}/.github/workflows/release.yml" \
-  's/"plugin": "digitalocean"/"plugin": "other"/' \
-  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
-assert_exact_mutation_rejected \
-  "repository-dispatch token" \
-  "${repo_root}/.github/workflows/release.yml" \
-  's/secrets.repo_dispatch_token/secrets.GITHUB_TOKEN/' \
-  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
-assert_exact_mutation_rejected \
   "GoReleaser args" \
   "${repo_root}/.github/workflows/release.yml" \
   's/args: release --clean/args: release --clean --skip=publish/' \
@@ -825,7 +849,7 @@ assert_exact_mutation_rejected \
   "GoReleaser environment" \
   "${repo_root}/.github/workflows/release.yml" \
   's/GITHUB_TOKEN: \${{ github.token }}/GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
-  "secret RELEASES_TOKEN is not allowlisted"
+  "public workflow references forbidden repository secret RELEASES_TOKEN"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 pass_presence="${tmp_dir}/pass-presence.json"
@@ -836,16 +860,7 @@ cat >"${pass_presence}" <<'JSON'
   {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state":"active","presence":"present"}
 ]
 JSON
-cat >"${pass_allowlist}" <<'JSON'
-[
-  {
-    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
-    "secret": "GITHUB_TOKEN",
-    "contextSHA256": "f006c139dc0278d382b21e64d016d890c6f5971d5b7648f6a7c0fd67f1988972",
-    "state": "active", "rationale": "GitHub-provided token publishes release assets to this repository."
-  }
-]
-JSON
+printf '[]\n' >"${pass_allowlist}"
 
 pass_commands="${tmp_dir}/pass-commands.json"
 cat >"${pass_commands}" <<'JSON'
@@ -1071,6 +1086,7 @@ for expected in \
   "self-hosted runner" \
   "id-token: write" \
   "known cloud secret DIGITALOCEAN_TOKEN" \
+  "public workflow references forbidden repository secret DEPLOY_AUTH" \
   "provider authority with secret DEPLOY_AUTH" \
   "executable provider CLI doctl" \
   "fixed provider API api.digitalocean.com" \
@@ -1079,7 +1095,7 @@ for expected in \
   "named live test" \
   "manual provider-authority job" \
   "scheduled provider-authority job" \
-  "secret UNREVIEWED_TOKEN is not allowlisted" \
+  "public workflow references forbidden repository secret UNREVIEWED_TOKEN" \
   "stale allowlist entry STALE_TOKEN"; do
   if ! grep -Fq -- "${expected}" <<<"${reject_output}"; then
     echo "missing expected policy diagnostic: ${expected}" >&2
@@ -1240,6 +1256,7 @@ fi
 for expected in \
   "uses unreviewed exact action digitalocean/action-doctl@v2" \
   "uses unreviewed exact reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
+  "public workflow references forbidden repository secret DEPLOY_AUTH" \
   "provider authority with secret DEPLOY_AUTH"; do
   if ! grep -Fq -- "${expected}" <<<"${uses_output}"; then
     echo "missing expected provider uses diagnostic: ${expected}" >&2
@@ -1654,8 +1671,9 @@ if [[ "${secret_syntax_status}" -eq 0 ]]; then
 fi
 for expected in \
   "workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml references known cloud secret DIGITALOCEAN_TOKEN" \
+  "public workflow references forbidden repository secret DEPLOY_AUTH" \
   "provider authority with secret DEPLOY_AUTH" \
-  "secret UNREVIEWED_TOKEN is not allowlisted"; do
+  "public workflow references forbidden repository secret UNREVIEWED_TOKEN"; do
   if ! grep -Fq -- "${expected}" <<<"${secret_syntax_output}"; then
     echo "missing expected secret syntax diagnostic: ${expected}" >&2
     printf '%s\n' "${secret_syntax_output}" >&2
