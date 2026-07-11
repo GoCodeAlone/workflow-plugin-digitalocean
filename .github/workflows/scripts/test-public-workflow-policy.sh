@@ -703,7 +703,12 @@ assert_exact_mutation_rejected \
   "push repository secret" \
   "${repo_root}/.github/workflows/release.yml" \
   's/REF_NAME: \${{ github.ref_name }}/REF_NAME: ${{ github.ref_name }}\n          PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
-  "public workflow references forbidden repository secret RELEASES_TOKEN"
+  "secret RELEASES_TOKEN is not allowlisted"
+assert_exact_mutation_rejected \
+  "push cloud secret" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/REF_NAME: \${{ github.ref_name }}/REF_NAME: ${{ github.ref_name }}\n          CLOUD_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}/' \
+  "references known cloud secret DIGITALOCEAN_TOKEN"
 assert_exact_mutation_rejected \
   "release tag shell interpolation" \
   "${repo_root}/.github/workflows/release.yml" \
@@ -732,6 +737,21 @@ assert_exact_mutation_rejected \
   's/path: conformance-evidence.json/path: other-evidence.json/' \
   "uses unreviewed exact action actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 assert_exact_mutation_rejected \
+  "repository-dispatch repository" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's|repository: GoCodeAlone/workflow-registry|repository: GoCodeAlone/workflow|' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
+  "repository-dispatch payload" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/"plugin": "digitalocean"/"plugin": "other"/' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
+  "repository-dispatch token" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/secrets.repo_dispatch_token/secrets.GITHUB_TOKEN/' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
   "GoReleaser args" \
   "${repo_root}/.github/workflows/release.yml" \
   's/args: release --clean/args: release --clean --skip=publish/' \
@@ -740,7 +760,7 @@ assert_exact_mutation_rejected \
   "GoReleaser environment" \
   "${repo_root}/.github/workflows/release.yml" \
   's/GITHUB_TOKEN: \${{ github.token }}/GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
-  "public workflow references forbidden repository secret RELEASES_TOKEN"
+  "secret RELEASES_TOKEN is not allowlisted"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 pass_presence="${tmp_dir}/pass-presence.json"

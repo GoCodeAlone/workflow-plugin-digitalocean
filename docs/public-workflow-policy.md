@@ -7,11 +7,15 @@ request checkout is stored separately and read only as policy input. Candidate
 actions, scripts, Go files, modules, and trust manifests are never executed.
 The job has only `contents: read`, uses GitHub-hosted runners, and receives no
 cloud credentials or OIDC authority.
-Every public workflow, including `push`, tag, `workflow_call`, `pull_request`,
-and `pull_request_target`, rejects repository and environment secrets other
-than the automatic `GITHUB_TOKEN`/`github.token`. Job-level `secrets: inherit`
-and mapped inherited-secret values are rejected as well. Release publication
-uses only the automatic repository-scoped GitHub token.
+`pull_request`, `pull_request_target`, `workflow_call`, mixed-trigger, and other
+non-push-only public workflows reject repository and environment secrets other
+than the automatic `GITHUB_TOKEN`/`github.token`. Push-only workflows, including
+tag releases, may use an exact reviewed noncloud secret from the trusted
+allowlist. Known cloud credentials remain categorically forbidden. Job-level
+`secrets: inherit` and mapped inherited-secret values are rejected everywhere.
+Release publication uses the automatic repository-scoped GitHub token; the
+stable-tag registry notification separately uses its exact reviewed dispatch
+token and immutable action.
 
 Workflow authority changes use three pull requests. The presence manifest is
 the canonical inventory: `present` groups bind a workflow path to its complete
