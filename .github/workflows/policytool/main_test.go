@@ -91,23 +91,72 @@ func TestExpressionIdentifiersIgnoresStringData(t *testing.T) {
 	}
 }
 
-func TestCommandAllowlistRequiresExactPrefix(t *testing.T) {
-	allowed := map[string]commandEntry{
-		commandKey(".github/workflows/ci.yml", "go", []string{"test"}): {
-			Path:       ".github/workflows/ci.yml",
-			Command:    "go",
-			ArgvPrefix: []string{"test"},
-			Rationale:  "Run the Go test suite without allowing go run.",
-		},
+func TestInvocationDigestCoversCompleteCall(t *testing.T) {
+	original := firstCall(t, parseShell(t, `GOWORK=off env MODE=ci go test -race ./...`))
+	originalDigest, err := invocationDigest(original)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := matchCommand(".github/workflows/ci.yml", "go", []string{"test", "./..."}, allowed); !ok {
-		t.Fatal("reviewed go test prefix did not match")
+	for _, mutation := range []string{
+		`GOWORK=off env MODE=ci go test -race ./... ./extra/...`,
+		`GOWORK=off env MODE=ci go test ./...`,
+		`GOWORK=off env MODE=prod go test -race ./...`,
+		`env MODE=ci go test -race ./...`,
+	} {
+		digest, err := invocationDigest(firstCall(t, parseShell(t, mutation)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest == originalDigest {
+			t.Errorf("mutation retained invocation digest: %s", mutation)
+		}
 	}
-	if _, ok := matchCommand(".github/workflows/ci.yml", "go", []string{"run", "./cmd/tool"}, allowed); ok {
-		t.Fatal("wrong go subcommand matched reviewed prefix")
+}
+
+func TestGithubExpressionSourceChangesInvocationDigest(t *testing.T) {
+	left, err := normalizeGithubExpressions(`gh release edit ${{ github.ref_name }} --draft=false`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := matchCommand(".github/workflows/release.yml", "go", []string{"test", "./..."}, allowed); ok {
-		t.Fatal("command allowlist leaked across workflow paths")
+	right, err := normalizeGithubExpressions(`gh release edit ${{ vars.RELEASE_TAG }} --draft=false`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftDigest, err := invocationDigest(firstCall(t, parseShell(t, left)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := invocationDigest(firstCall(t, parseShell(t, right)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest == rightDigest {
+		t.Fatal("different GitHub expressions produced the same invocation digest")
+	}
+}
+
+func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
+	entry := actionEntry{
+		Path:      ".github/workflows/ci.yml",
+		Uses:      "actions/checkout@v4",
+		Rationale: "Checkout this repository at the reviewed action tag.",
+	}
+	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses): entry}
+	if _, ok := matchAction(entry.Path, entry.Uses, allowed); !ok {
+		t.Fatal("exact reviewed action did not match")
+	}
+	for _, changed := range []string{
+		"actions/checkout@main",
+		"actions/checkout@v5",
+		"actions/checkout@0123456789012345678901234567890123456789",
+		"${{ vars.ACTION_REF }}",
+	} {
+		if _, ok := matchAction(entry.Path, changed, allowed); ok {
+			t.Errorf("changed action %q matched", changed)
+		}
+	}
+	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, allowed); ok {
+		t.Fatal("action allowlist leaked across workflow paths")
 	}
 }
 
