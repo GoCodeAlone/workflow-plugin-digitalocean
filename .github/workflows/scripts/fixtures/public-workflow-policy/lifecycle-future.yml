@@ -1,0 +1,10 @@
+name: Lifecycle future
+on: pull_request
+defaults:
+  run:
+    shell: bash
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo future

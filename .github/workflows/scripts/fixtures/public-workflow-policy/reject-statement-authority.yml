@@ -24,6 +24,7 @@ jobs:
       - run: SHELLOPTS=xtrace
       - run: LD_PRELOAD=./hook.so command
       - run: DYLD_INSERT_LIBRARIES=./hook.dylib command
+      - run: env 'BASH_FUNC_wrapper%%=() { :; }' go test ./...
       - name: Secret echo to environment command file
         run: echo "${{ secrets.RELEASES_TOKEN }}" >> "$GITHUB_ENV"
       - name: Secret printf to path command file

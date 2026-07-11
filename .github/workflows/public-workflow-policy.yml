@@ -6,6 +6,8 @@ name: Public Workflow Policy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -16,20 +18,21 @@ defaults:
 
 jobs:
   policy:
+    if: github.event_name != 'push' || github.event.before != '0000000000000000000000000000000000000000'
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted base policy
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           path: trusted
           persist-credentials: false
 
       - name: Check out candidate as data only
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event_name == 'push' && github.repository || github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
           path: candidate
           persist-credentials: false
 

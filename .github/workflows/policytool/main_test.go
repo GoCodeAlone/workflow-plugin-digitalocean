@@ -333,6 +333,7 @@ func TestExecutionAffectingEnvironmentNames(t *testing.T) {
 		"CC", "CXX", "AR", "LD", "GOROOT", "GOPATH", "GOENV", "GOFLAGS", "GOTOOLCHAIN",
 		"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBRARY_PATH", "CPATH", "RUSTC_WRAPPER", "JAVA_TOOL_OPTIONS",
 		"CFLAGS", "LDFLAGS", "GOEXPERIMENT", "GIT_EXEC_PATH", "CGO_LDFLAGS", "CARGO_HOME", "SHELL",
+		"BASH_FUNC_attack%%", "bash_func_attack%%",
 	} {
 		if !executionAffectingEnv(name) {
 			t.Errorf("%s was not rejected", name)
@@ -341,6 +342,37 @@ func TestExecutionAffectingEnvironmentNames(t *testing.T) {
 	for _, name := range []string{"GOPRIVATE", "GH_TOKEN", "GITHUB_TOKEN", "RELEASES_TOKEN", "WFCTL_CONFORMANCE_VERSION"} {
 		if executionAffectingEnv(name) {
 			t.Errorf("required safe environment %s was rejected", name)
+		}
+	}
+}
+
+func TestTrustGroupThreeStateLifecycle(t *testing.T) {
+	active := strings.Repeat("a", 64)
+	staged := strings.Repeat("b", 64)
+	transition := []trustGroup{{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: staged, State: "staged"}}
+	for name, phase := range map[string]struct {
+		groups  []trustGroup
+		context string
+	}{
+		"phase1": {transition, active},
+		"phase2": {transition, staged},
+		"phase3": {[]trustGroup{{Path: "wf.yml", ContextSHA256: staged, State: "active"}}, staged},
+	} {
+		selected, findings := selectTrustGroups(phase.groups, map[string]string{"wf.yml": phase.context})
+		if len(findings) != 0 || !selected["wf.yml\x00"+phase.context] {
+			t.Errorf("%s selection = %v, findings = %v", name, selected, findings)
+		}
+	}
+	for name, groups := range map[string][]trustGroup{
+		"unmatched":       {{Path: "wf.yml", ContextSHA256: active, State: "active"}},
+		"mixed":           {{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: active, State: "staged"}},
+		"multiple staged": {{Path: "wf.yml", ContextSHA256: active, State: "active"}, {Path: "wf.yml", ContextSHA256: staged, State: "staged"}, {Path: "wf.yml", ContextSHA256: strings.Repeat("c", 64), State: "staged"}},
+		"invalid state":   {{Path: "wf.yml", ContextSHA256: active, State: "pending"}},
+		"lone staged":     {{Path: "wf.yml", ContextSHA256: staged, State: "staged"}},
+	} {
+		_, findings := selectTrustGroups(groups, map[string]string{"wf.yml": staged})
+		if len(findings) == 0 {
+			t.Errorf("%s trust groups were accepted", name)
 		}
 	}
 }
@@ -367,6 +399,9 @@ func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
 		`env GOWORK="$MODE" go test ./...`,
 		`env "GOWORK=$MODE" go test ./...`,
 		`env "PATH=$MODE" go test ./...`,
+		`env 'BASH_FUNC_attack%%=() { :; }' go test ./...`,
+		`nice env 'BASH_FUNC_attack%%=() { :; }' bash -c attack`,
+		`nice env "BASH_FUNC_attack%${PERCENT}=() { :; }" bash -c attack`,
 	} {
 		findings := &findingSet{}
 		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)

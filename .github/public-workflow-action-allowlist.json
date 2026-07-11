@@ -4,118 +4,135 @@
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "2e0ab657507095c018435a0da34a76ffffd3ca15eb3ceff7c2b17e13ebbb9383",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/ci.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "50a4a8d5a662beda4b4b57507d7342495a175dd663e5c1e247961dcbb5d83bee",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/ci.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/ci.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/ci.yml",
     "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     "nodeSHA256": "0fe822ed8559961639e22a7249495326099fd0c0302ee96b5ecdf0e6434d6385",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/grpc-version-sync.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
     "contextSHA256": "76ae5e10669861daa9dca018cc21a03b7af709aa45698794d6f9d056b53bf850",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/grpc-version-sync.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
     "contextSHA256": "76ae5e10669861daa9dca018cc21a03b7af709aa45698794d6f9d056b53bf850",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/iac-host-conformance.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
     "contextSHA256": "7050841760118fabda90c31437dfad886dca4b0bedcabc07e96fb8d9d9636e2e",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/iac-host-conformance.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
     "contextSHA256": "7050841760118fabda90c31437dfad886dca4b0bedcabc07e96fb8d9d9636e2e",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "nodeSHA256": "34a911b7afb4fb57dafa484d72f36d1a85aac07f132c86f940402eb07269c279",
-    "contextSHA256": "e82cbb773d5edd0deb2bf6b7ff8ee47e16bb4abd117b30a94ac15cd6cdd5a08f",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "nodeSHA256": "68957f5c605710a62288f36960978b63956f371a8a08a7e1299e9b63d126657c",
+    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "nodeSHA256": "3ef9ff20d33dacbfd1dcefb57fd35967e633e265d982f4afe6affe7ce7edad06",
-    "contextSHA256": "e82cbb773d5edd0deb2bf6b7ff8ee47e16bb4abd117b30a94ac15cd6cdd5a08f",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "nodeSHA256": "f282c6c71fc53419253c53a8ae0a234c5bbbd327dd9c441379b366e5b23dcadb",
+    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "801b375a83ab60305e1b8951182cbc99e368f67047aa3b7cdd2b91aa2c776d85",
-    "contextSHA256": "e82cbb773d5edd0deb2bf6b7ff8ee47e16bb4abd117b30a94ac15cd6cdd5a08f",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "contextSHA256": "9cd856cab7352e1d1943909586382e0d88ba8c310283f85711d658a4c400041a",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/release.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "3e5cbc2bc14eefe54d00005483246362bda6b9987c3b1713d37e5c2da4e18dbf",
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/release.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "e791bd1b96e7e25083de0122264bb45e4fb5ac5bde0c346d99a1f813370923d4",
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/release.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/release.yml",
     "uses": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94",
     "nodeSHA256": "97b2e550b940b2a26091da4789afcefa1020873b5df9fcc064b41cc17b340485",
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   },
   {
     "path": ".github/workflows/release.yml",
     "uses": "peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697",
     "nodeSHA256": "19dd8b407567aaa48091ecbc52a50a5886ec54eb97e59800d54798b78c3275f6",
     "contextSHA256": "92e0ba78e56bf7f56890c009d40b9533ef641a26e885171b70c7aa93740dc6bb",
-    "rationale": "Exact reviewed immutable action node and inherited execution context."
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
   }
 ]

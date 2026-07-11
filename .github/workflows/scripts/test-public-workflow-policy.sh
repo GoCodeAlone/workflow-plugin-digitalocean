@@ -18,6 +18,17 @@ if [[ "$(cd "${policytool}" && GOWORK=off GOFLAGS=-mod=readonly go list -m -f '{
 fi
 (cd "${policytool}" && GOWORK=off GOFLAGS=-mod=readonly go test ./...)
 
+governance_workflow="${repo_root}/.github/workflows/public-workflow-policy.yml"
+protection_verifier="${repo_root}/.github/workflows/scripts/verify-public-workflow-branch-protection.sh"
+grep -Fq -- "github.event.before" "${governance_workflow}"
+grep -Fq -- "branches: [main]" "${governance_workflow}"
+grep -Fq -- 'required_check="Public Workflow Policy / policy"' "${protection_verifier}"
+grep -Fq -- 'required_approving_review_count >= 1' "${protection_verifier}"
+grep -Fq -- 'dismiss_stale_reviews' "${protection_verifier}"
+grep -Fq -- 'bypass_pull_request_allowances.users' "${protection_verifier}"
+grep -Fq -- 'conditions.ref_name.exclude' "${protection_verifier}"
+grep -Fq -- 'Workflow authority changes use three pull requests' "${repo_root}/docs/public-workflow-policy.md"
+
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 integrity_extra="${policytool}/extra_linux.go"
 integrity_vendor="${policytool}/vendor"
@@ -40,6 +51,47 @@ fixture_actions="${tmp_dir}/fixture-actions.json"
 printf '[]\n' >"${fixture_actions}"
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
+
+lifecycle_root="${tmp_dir}/lifecycle"
+mkdir -p "${lifecycle_root}/.github/workflows"
+lifecycle_workflow="${lifecycle_root}/.github/workflows/lifecycle.yml"
+lifecycle_transition="${tmp_dir}/lifecycle-transition.json"
+cat >"${lifecycle_transition}" <<'JSON'
+[
+  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"819b561be4b01d042acf9c152963504db679c1f35863be463a27d0b1f829fce2","contextSHA256":"dcf906587b32bfc1562c84913ccba51d6051dab4d30c32a6c426b2995d27f155","state":"active","rationale":"Current lifecycle context."},
+  {"path":".github/workflows/lifecycle.yml","command":"echo","statementSHA256":"fe696343d9c54236742da9a5f73af7180c94578dca254d9099440c71775da76a","contextSHA256":"2ad4749f601564e0b7845eb4d2f07fe4ec87dee2617af375bdddcc21f70e9e2d","state":"staged","rationale":"Future lifecycle context."}
+]
+JSON
+cp "${fixtures}/lifecycle-old.yml" "${lifecycle_workflow}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
+cp "${fixtures}/lifecycle-future.yml" "${lifecycle_workflow}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_transition}" --action-allowlist "${empty_allowlist}"
+lifecycle_cleanup="${tmp_dir}/lifecycle-cleanup.json"
+jq '[.[1] | .state="active"]' "${lifecycle_transition}" >"${lifecycle_cleanup}"
+"${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${lifecycle_cleanup}" --action-allowlist "${empty_allowlist}"
+assert_lifecycle_invalid() {
+  local manifest="$1"
+  local expected="$2"
+  set +e
+  local output
+  output="$("${checker_binary}" --scan-root "${lifecycle_root}" --allowlist "${empty_allowlist}" --executable-allowlist "${empty_allowlist}" --command-allowlist "${manifest}" --action-allowlist "${empty_allowlist}" 2>&1)"
+  local status=$?
+  set -e
+  if [[ "${status}" -eq 0 ]] || ! grep -Fq -- "${expected}" <<<"${output}"; then
+    echo "invalid lifecycle manifest was accepted: ${expected}" >&2
+    printf '%s\n' "${output}" >&2
+    exit 1
+  fi
+}
+lifecycle_invalid="${tmp_dir}/lifecycle-invalid.json"
+jq '.[0].state="pending" | [.[0]]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+assert_lifecycle_invalid "${lifecycle_invalid}" "invalid trust group"
+jq '.[0].contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" | [.[0]]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+assert_lifecycle_invalid "${lifecycle_invalid}" "no trust group matches workflow"
+jq '.[0] as $active | .[1] as $staged | [$active, $staged, ($staged | .contextSHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+assert_lifecycle_invalid "${lifecycle_invalid}" "multiple staged trust groups"
+jq '.[0] as $active | [$active, ($active | .state="staged")]' "${lifecycle_transition}" >"${lifecycle_invalid}"
+assert_lifecycle_invalid "${lifecycle_invalid}" "mixed trust group state"
 checker="${tmp_dir}/check-public-workflow-policy.sh"
 cat >"${checker}" <<EOF
 #!/usr/bin/env bash
@@ -378,12 +430,14 @@ cat >"${pass_allowlist}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "secret": "RELEASES_TOKEN",
-    "rationale": "Read-only access to private Go module and release metadata dependencies."
+    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "state": "active", "rationale": "Read-only access to private Go module and release metadata dependencies."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "secret": "GITHUB_TOKEN",
-    "rationale": "GitHub-provided token publishes release assets to this repository."
+    "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
+    "state": "active", "rationale": "GitHub-provided token publishes release assets to this repository."
   }
 ]
 JSON
@@ -396,51 +450,51 @@ cat >"${pass_commands}" <<'JSON'
     "command": "go",
     "statementSHA256": "5384574a39b2103666734bbe92565841174832d0b8865a6d5f521eb663438c51",
     "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
-    "rationale": "Run the exact credential-free integration test fixture."
+    "state": "active", "rationale": "Run the exact credential-free integration test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
     "statementSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
     "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
-    "rationale": "Run the exact credential-free default Go test fixture."
+    "state": "active", "rationale": "Run the exact credential-free default Go test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "gh",
     "statementSHA256": "0a111d913d8601e23bc6e43fa1b4b6a5fa65c44c342a26c23f10bf8fa119827a",
     "contextSHA256": "87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7",
-    "rationale": "Exercise the exact GitHub release upload fixture."
+    "state": "active", "rationale": "Exercise the exact GitHub release upload fixture."
   },
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"echo","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact rejection-guard echo statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"exit","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact rejection-guard exit statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"rg","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact rejection-guard search statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"$assignment","statementSHA256":"df3893e5269970fcf8bb076be5b5f849eec4a7237b311ab4129af31b78271a09","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact safe standalone assignment fixture."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"echo","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"exit","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard exit statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"rg","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact rejection-guard search statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"$assignment","statementSHA256":"df3893e5269970fcf8bb076be5b5f849eec4a7237b311ab4129af31b78271a09","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact safe standalone assignment fixture."},
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
     "command": "go",
     "statementSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
     "contextSHA256": "3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3",
-    "rationale": "Run the exact credential-free Go test fixture."
+    "state": "active", "rationale": "Run the exact credential-free Go test fixture."
   },
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"echo","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","rationale":"Exact expression-guard echo statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"exit","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","rationale":"Exact expression-guard exit statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"rg","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","rationale":"Exact expression-guard search statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"echo","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","rationale":"Exact negative-guard echo statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"exit","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","rationale":"Exact negative-guard exit statement."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"rg","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","rationale":"Exact negative-guard search statement."}
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"echo","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state": "active", "rationale":"Exact expression-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"exit","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state": "active", "rationale":"Exact expression-guard exit statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"rg","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","contextSHA256":"3d6477a56ad4fbd1112035e552bb7306716cf3462620c6a9fe96fd832cbd79e3","state": "active", "rationale":"Exact expression-guard search statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"echo","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state": "active", "rationale":"Exact negative-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"exit","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state": "active", "rationale":"Exact negative-guard exit statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"rg","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","contextSHA256":"f887c1b61a92298b060a9d7edd6ffc6335d1fece34111136ffdebbb855ec29b6","state": "active", "rationale":"Exact negative-guard search statement."}
 ]
 JSON
 
 pass_actions="${tmp_dir}/pass-actions.json"
 cat >"${pass_actions}" <<'JSON'
 [
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff","nodeSHA256":"4097668e631432c1244a4dd4d9557c50491bf42112c9ba85e62d3fcf637047d1","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","nodeSHA256":"0d8a6b42c70a0f3275850fe9d63cfb646c0a9e0d7f6ea1c8b45171a1076060b7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","nodeSHA256":"93dce32c457545dd0624d77c36ec255298b321308974a9cf046e67691e5dd745","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94","nodeSHA256":"e755472a8b992588d44f5bed60d0ebdf304a0854661bd6b598ca4f6bceafa4b9","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","nodeSHA256":"cab2cf5943a542ede48aea46c28a4b26d392cede1cd1685eed568c01fa4f0c39","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","rationale":"Exact immutable fixture action node."}
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff","nodeSHA256":"4097668e631432c1244a4dd4d9557c50491bf42112c9ba85e62d3fcf637047d1","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","nodeSHA256":"0d8a6b42c70a0f3275850fe9d63cfb646c0a9e0d7f6ea1c8b45171a1076060b7","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","nodeSHA256":"93dce32c457545dd0624d77c36ec255298b321308974a9cf046e67691e5dd745","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94","nodeSHA256":"e755472a8b992588d44f5bed60d0ebdf304a0854661bd6b598ca4f6bceafa4b9","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","nodeSHA256":"cab2cf5943a542ede48aea46c28a4b26d392cede1cd1685eed568c01fa4f0c39","contextSHA256":"87a2e5b24afe58a3cdd41dcd760364a8326873c2d7dc81379f68e8bc3d0d5ba7","state": "active", "rationale":"Exact immutable fixture action node."}
 ]
 JSON
 
@@ -504,7 +558,7 @@ cat >"${statement_secret_allowlist}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-statement-authority.yml",
     "secret": "RELEASES_TOKEN",
-    "rationale": "Mutation fixture proves exact statements reject secret output independently of secret-name review."
+    "state": "active", "rationale": "Mutation fixture proves exact statements reject secret output independently of secret-name review."
   }
 ]
 JSON
@@ -526,6 +580,7 @@ for expected in \
   "assigns forbidden execution environment variable SHELLOPTS" \
   "assigns forbidden execution environment variable LD_PRELOAD" \
   "assigns forbidden execution environment variable DYLD_INSERT_LIBRARIES" \
+  "assigns forbidden execution environment variable BASH_FUNC_wrapper%% through env" \
   "redirects to forbidden GitHub command file GITHUB_ENV" \
   "redirects to forbidden GitHub command file GITHUB_PATH" \
   "unreviewed exact statement containing echo" \
@@ -555,7 +610,10 @@ for expected in \
   "execution-affecting environment variable GIT_CONFIG_GLOBAL" \
   "execution-affecting environment variable HOME" \
   "execution-affecting environment variable IFS" \
-  "execution-affecting environment variable GOFLAGS"; do
+  "execution-affecting environment variable GOFLAGS" \
+  "execution-affecting environment variable BASH_FUNC_WORKFLOW%%" \
+  "execution-affecting environment variable BASH_FUNC_JOB%%" \
+  "execution-affecting environment variable BASH_FUNC_STEP%%"; do
   if ! grep -Fq -- "${expected}" <<<"${execution_context_output}"; then
     echo "missing execution context diagnostic: ${expected}" >&2
     printf '%s\n' "${execution_context_output}" >&2
@@ -568,18 +626,21 @@ cat >"${reject_allowlist}" <<'JSON'
 [
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject.yml",
+    "contextSHA256": "e604ecf5a5ac14b51f40aa220e0aa14aeef76f9ddf297b6b69002d155a1f1715",
     "secret": "DIGITALOCEAN_TOKEN",
-    "rationale": "A rationale must never make a known cloud credential acceptable."
+    "state": "active", "rationale": "A rationale must never make a known cloud credential acceptable."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject.yml",
+    "contextSHA256": "e604ecf5a5ac14b51f40aa220e0aa14aeef76f9ddf297b6b69002d155a1f1715",
     "secret": "DEPLOY_AUTH",
-    "rationale": "An alias must never hide provider authority from the policy."
+    "state": "active", "rationale": "An alias must never hide provider authority from the policy."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject.yml",
+    "contextSHA256": "e604ecf5a5ac14b51f40aa220e0aa14aeef76f9ddf297b6b69002d155a1f1715",
     "secret": "STALE_TOKEN",
-    "rationale": "This deliberately stale exception proves fail-closed validation."
+    "state": "active", "rationale": "This deliberately stale exception proves fail-closed validation."
   }
 ]
 JSON
@@ -623,9 +684,9 @@ executable_escape_rel="${executable_escape#"${repo_root}/"}"
 invalid_executables="${tmp_dir}/invalid-executables.json"
 cat >"${invalid_executables}" <<EOF
 [
-  {"path":"scripts/workflow-iac-host-conformance.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Hash mismatch and stale-entry mutation fixture."},
-  {"path":"../escape.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Traversal mutation fixture."},
-  {"path":"${executable_escape_rel}","sha256":"0000000000000000000000000000000000000000000000000000000000000000","rationale":"Symlink escape mutation fixture."}
+  {"path":"scripts/workflow-iac-host-conformance.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Hash mismatch and stale-entry mutation fixture."},
+  {"path":"../escape.sh","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Traversal mutation fixture."},
+  {"path":"${executable_escape_rel}","sha256":"0000000000000000000000000000000000000000000000000000000000000000","state": "active", "rationale":"Symlink escape mutation fixture."}
 ]
 EOF
 set +e
@@ -748,7 +809,7 @@ cat >"${uses_allowlist}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-provider-uses.yml",
     "secret": "DEPLOY_AUTH",
-    "rationale": "An opaque alias must not hide authority granted to a provider action."
+    "state": "active", "rationale": "An opaque alias must not hide authority granted to a provider action."
   }
 ]
 JSON
@@ -913,7 +974,7 @@ cat >"${unsafe_commands}" <<'JSON'
     "command": "go",
     "statementSHA256": "0000000000000000000000000000000000000000000000000000000000000000",
     "contextSHA256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "rationale": "Mutation: prove an allowlisted command with the wrong subcommand remains rejected."
+    "state": "active", "rationale": "Mutation: prove an allowlisted command with the wrong subcommand remains rejected."
   }
 ]
 JSON
@@ -993,35 +1054,35 @@ cat >"${invalid_commands}" <<'JSON'
     "command": "go",
     "statementSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
     "contextSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "rationale": "Absolute paths must not grant command authority."
+    "state": "active", "rationale": "Absolute paths must not grant command authority."
   },
   {
     "path": "../traversal.yml",
     "command": "go",
     "statementSHA256": "2222222222222222222222222222222222222222222222222222222222222222",
     "contextSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "rationale": "Traversal must not grant command authority."
+    "state": "active", "rationale": "Traversal must not grant command authority."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "terraform",
     "statementSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
     "contextSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "rationale": "Known provider commands are forbidden even with a rationale."
+    "state": "active", "rationale": "Known provider commands are forbidden even with a rationale."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
     "statementSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "contextSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "rationale": "Deliberately stale command capability mutation."
+    "state": "active", "rationale": "Deliberately stale command capability mutation."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
     "statementSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "contextSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "rationale": "Deliberate duplicate command capability mutation."
+    "state": "active", "rationale": "Deliberate duplicate command capability mutation."
   }
 ]
 JSON
@@ -1041,7 +1102,7 @@ for expected in \
   "command allowlist path ../traversal.yml escapes the repository" \
   "provider-capable command terraform is categorically unallowlistable" \
   "duplicate command allowlist entry go sha256:4444444444444444444444444444444444444444444444444444444444444444" \
-  "stale command allowlist entry go sha256:4444444444444444444444444444444444444444444444444444444444444444"; do
+  "no trust group matches workflow"; do
   if ! grep -Fq -- "${expected}" <<<"${invalid_commands_output}"; then
     echo "missing invalid command allowlist diagnostic: ${expected}" >&2
     printf '%s\n' "${invalid_commands_output}" >&2
@@ -1052,14 +1113,14 @@ done
 invalid_actions="${tmp_dir}/invalid-actions.json"
 cat >"${invalid_actions}" <<'JSON'
 [
-  {"path":"/tmp/absolute.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"1111111111111111111111111111111111111111111111111111111111111111","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Absolute paths must not grant action authority."},
-  {"path":"../traversal.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"2222222222222222222222222222222222222222222222222222222222222222","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Traversal must not grant action authority."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"digitalocean/action-doctl@0123456789012345678901234567890123456789","nodeSHA256":"3333333333333333333333333333333333333333333333333333333333333333","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Provider actions remain categorically forbidden."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"${{ vars.ACTION_REF }}","nodeSHA256":"4444444444444444444444444444444444444444444444444444444444444444","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Dynamic action references remain forbidden."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","nodeSHA256":"6666666666666666666666666666666666666666666666666666666666666666","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Mutable action tags remain forbidden in trust policy."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@main","nodeSHA256":"7777777777777777777777777777777777777777777777777777777777777777","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Mutable action branches remain forbidden in trust policy."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Deliberately stale exact action mutation."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rationale":"Deliberate duplicate exact action mutation."}
+  {"path":"/tmp/absolute.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"1111111111111111111111111111111111111111111111111111111111111111","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Absolute paths must not grant action authority."},
+  {"path":"../traversal.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"2222222222222222222222222222222222222222222222222222222222222222","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Traversal must not grant action authority."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"digitalocean/action-doctl@0123456789012345678901234567890123456789","nodeSHA256":"3333333333333333333333333333333333333333333333333333333333333333","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Provider actions remain categorically forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"${{ vars.ACTION_REF }}","nodeSHA256":"4444444444444444444444444444444444444444444444444444444444444444","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Dynamic action references remain forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","nodeSHA256":"6666666666666666666666666666666666666666666666666666666666666666","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Mutable action tags remain forbidden in trust policy."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@main","nodeSHA256":"7777777777777777777777777777777777777777777777777777777777777777","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Mutable action branches remain forbidden in trust policy."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Deliberately stale exact action mutation."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","contextSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state": "active", "rationale":"Deliberate duplicate exact action mutation."}
 ]
 JSON
 set +e
@@ -1084,7 +1145,7 @@ for expected in \
   "provider action digitalocean/action-doctl@0123456789012345678901234567890123456789 is categorically unallowlistable" \
   "invalid action allowlist entry" \
   "duplicate action allowlist entry actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" \
-  "stale action allowlist entry actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"; do
+  "no trust group matches workflow"; do
   if ! grep -Fq -- "${expected}" <<<"${invalid_actions_output}"; then
     echo "missing invalid action allowlist diagnostic: ${expected}" >&2
     printf '%s\n' "${invalid_actions_output}" >&2
@@ -1098,12 +1159,12 @@ cat >"${invalid_paths_allowlist}" <<'JSON'
   {
     "path": "/tmp/absolute-workflow.yml",
     "secret": "PACKAGE_TOKEN",
-    "rationale": "Absolute paths must never be accepted as workflow policy exceptions."
+    "state": "active", "rationale": "Absolute paths must never be accepted as workflow policy exceptions."
   },
   {
     "path": "../traversal-workflow.yml",
     "secret": "RELEASES_TOKEN",
-    "rationale": "Parent traversal must never escape exact repository-relative matching."
+    "state": "active", "rationale": "Parent traversal must never escape exact repository-relative matching."
   }
 ]
 JSON
@@ -1158,12 +1219,12 @@ cat >"${secret_syntax_allowlist}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml",
     "secret": "DEPLOY_AUTH",
-    "rationale": "A global opaque alias must remain visible to provider-authority analysis."
+    "state": "active", "rationale": "A global opaque alias must remain visible to provider-authority analysis."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml",
     "secret": "DIGITALOCEAN_TOKEN",
-    "rationale": "Known provider credentials remain forbidden regardless of syntax or rationale."
+    "state": "active", "rationale": "Known provider credentials remain forbidden regardless of syntax or rationale."
   }
 ]
 JSON

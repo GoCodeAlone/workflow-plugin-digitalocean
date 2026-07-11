@@ -10,6 +10,7 @@ defaults:
 
 env:
   CC: provider-compiler
+  "BASH_FUNC_workflow%%": "() { :; }"
 
 jobs:
   context:
@@ -19,6 +20,7 @@ jobs:
         working-directory: ./job-subdir
     env:
       GIT_CONFIG_GLOBAL: ./provider.gitconfig
+      "BASH_FUNC_job%%": "() { :; }"
     steps:
       - name: Redirect approved local script
         working-directory: /tmp/provider
@@ -28,4 +30,5 @@ jobs:
           HOME: /tmp/provider-home
           IFS: ':'
           GOFLAGS: -mod=mod
+          "BASH_FUNC_step%%": "() { :; }"
         run: echo blocked
