@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# GitHub expression literals below are mutation data, never shell expansion.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -20,16 +22,26 @@ tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 integrity_extra="${policytool}/extra_linux.go"
 integrity_vendor="${policytool}/vendor"
 integrity_symlink="${policytool}/extra-link.go"
-trap 'rm -rf "${tmp_dir}" "${integrity_extra}" "${integrity_vendor}" "${integrity_symlink}"' EXIT
+mutated_workflow=""
+mutation_backup="${tmp_dir}/workflow-backup.yml"
+cleanup() {
+  if [[ -n "${mutated_workflow}" && -f "${mutation_backup}" ]]; then
+    cp "${mutation_backup}" "${mutated_workflow}"
+  fi
+  rm -rf "${tmp_dir}" "${integrity_extra}" "${integrity_vendor}" "${integrity_symlink}"
+}
+trap cleanup EXIT
 export TMPDIR="${tmp_dir}"
 fixture_executables="${tmp_dir}/fixture-executables.json"
 printf '[]\n' >"${fixture_executables}"
 fixture_commands="${tmp_dir}/fixture-commands.json"
 printf '[]\n' >"${fixture_commands}"
+fixture_actions="${tmp_dir}/fixture-actions.json"
+printf '[]\n' >"${fixture_actions}"
 checker="${tmp_dir}/check-public-workflow-policy.sh"
 cat >"${checker}" <<EOF
 #!/usr/bin/env bash
-exec "${checker_binary}" --executable-allowlist "${fixture_executables}" --command-allowlist "${fixture_commands}" "\$@"
+exec "${checker_binary}" --executable-allowlist "${fixture_executables}" --command-allowlist "${fixture_commands}" --action-allowlist "${fixture_actions}" "\$@"
 EOF
 chmod +x "${checker}"
 
@@ -81,15 +93,18 @@ fi
 trailing_secret="${tmp_dir}/trailing-secret.json"
 trailing_executable="${tmp_dir}/trailing-executable.json"
 trailing_command="${tmp_dir}/trailing-command.json"
+trailing_action="${tmp_dir}/trailing-action.json"
 printf '[] {}\n' >"${trailing_secret}"
 printf '[] garbage\n' >"${trailing_executable}"
 printf '[] {}\n' >"${trailing_command}"
-for trust_input in secret executable command; do
+printf '[] garbage\n' >"${trailing_action}"
+for trust_input in secret executable command action; do
   args=()
   case "${trust_input}" in
     secret) args=(--allowlist "${trailing_secret}") ;;
     executable) args=(--executable-allowlist "${trailing_executable}") ;;
     command) args=(--command-allowlist "${trailing_command}") ;;
+    action) args=(--action-allowlist "${trailing_action}") ;;
   esac
   set +e
   trailing_output="$("${checker_binary}" "${args[@]}" 2>&1)"
@@ -100,6 +115,71 @@ for trust_input in secret executable command; do
     printf '%s\n' "${trailing_output}" >&2
     exit 1
   fi
+done
+
+assert_exact_mutation_rejected() {
+  local label="$1"
+  local workflow="$2"
+  local sed_expression="$3"
+  local expected="$4"
+  mutated_workflow="${workflow}"
+  cp "${workflow}" "${mutation_backup}"
+  sed -i.bak -e "${sed_expression}" "${workflow}"
+  rm -f "${workflow}.bak"
+  set +e
+  local output
+  output="$("${checker_binary}" 2>&1)"
+  local status=$?
+  set -e
+  cp "${mutation_backup}" "${workflow}"
+  mutated_workflow=""
+  if [[ "${status}" -eq 0 ]] || ! grep -Fq -- "${expected}" <<<"${output}"; then
+    echo "exact workflow mutation was accepted: ${label}" >&2
+    printf '%s\n' "${output}" >&2
+    exit 1
+  fi
+}
+
+assert_exact_mutation_rejected \
+  "git config key/value" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's|insteadOf "https://github.com/"|insteadOf "https://github.example.invalid/"|' \
+  "unreviewed exact invocation of git"
+assert_exact_mutation_rejected \
+  "wfctl trailing target" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's/--strict-contracts/--strict-contracts ./g' \
+  "unreviewed exact invocation of wfctl"
+assert_exact_mutation_rejected \
+  "GitHub release arguments" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/--draft=false/--draft=true/' \
+  "unreviewed exact invocation of gh"
+assert_exact_mutation_rejected \
+  "sed target" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's/\$tmp_dir\/plugin.json/\$tmp_dir\/plugin.contracts.json/g' \
+  "unreviewed exact invocation of sed"
+assert_exact_mutation_rejected \
+  "dynamic trailing expression" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's|GOWORK=off go vet ./...|GOWORK=off go vet ./... "${{ vars.EXTRA_TARGET }}"|' \
+  "unreviewed exact invocation of go"
+
+for action_mutation in \
+  '${{ vars.ACTION_REF }}' \
+  'actions/checkout@main' \
+  'actions/checkout@v5' \
+  'actions/checkout@0123456789012345678901234567890123456789'; do
+  expected="uses unreviewed exact action ${action_mutation}"
+  if [[ "${action_mutation}" == '${{ vars.ACTION_REF }}' ]]; then
+    expected="uses forbidden dynamic action ${action_mutation}"
+  fi
+  assert_exact_mutation_rejected \
+    "action reference ${action_mutation}" \
+    "${repo_root}/.github/workflows/ci.yml" \
+    "s/actions\\/checkout@v4/${action_mutation//\//\\/}/g" \
+    "${expected}"
 done
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
@@ -124,27 +204,46 @@ cat >"${pass_commands}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
-    "argvPrefix": ["test"],
-    "rationale": "Run credential-free Go tests without granting go run."
+    "invocationSHA256": "5384574a39b2103666734bbe92565841174832d0b8865a6d5f521eb663438c51",
+    "rationale": "Run the exact credential-free integration test fixture."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
+    "command": "go",
+    "invocationSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+    "rationale": "Run the exact credential-free default Go test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "gh",
-    "argvPrefix": ["release", "upload"],
-    "rationale": "Exercise the exact GitHub release operation accepted by the fixture."
+    "invocationSHA256": "0a111d913d8601e23bc6e43fa1b4b6a5fa65c44c342a26c23f10bf8fa119827a",
+    "rationale": "Exercise the exact GitHub release upload fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
     "command": "go",
-    "argvPrefix": ["test"],
-    "rationale": "Run credential-free Go tests without granting go run."
+    "invocationSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+    "rationale": "Run the exact credential-free Go test fixture."
   }
+]
+JSON
+
+pass_actions="${tmp_dir}/pass-actions.json"
+cat >"${pass_actions}" <<'JSON'
+[
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@v4","rationale":"Exact fixture action reference."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@v5","rationale":"Exact fixture action reference."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@v4","rationale":"Exact fixture action reference."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@v1","rationale":"Exact fixture action reference."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@v7","rationale":"Exact fixture action reference."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@v4","rationale":"Exact fixture action reference."}
 ]
 JSON
 
 "${checker}" \
   --allowlist "${pass_allowlist}" \
   --command-allowlist "${pass_commands}" \
+  --action-allowlist "${pass_actions}" \
   "${fixtures}/pass.yml" \
   "${fixtures}/pass-negative-guard.yml" \
   "${fixtures}/pass-expression-and-deny-guard.yml"
@@ -301,7 +400,7 @@ for expected in \
   "environment value contains provider API api.digitalocean.com" \
   "environment value contains provider SDK marker" \
   "dynamic command execution" \
-  "executes unreviewed command eval"; do
+  "executes unreviewed exact invocation of eval"; do
   if ! grep -Fq -- "${expected}" <<<"${env_indirection_output}"; then
     echo "missing expected environment indirection diagnostic: ${expected}" >&2
     printf '%s\n' "${env_indirection_output}" >&2
@@ -352,8 +451,8 @@ if [[ "${uses_status}" -eq 0 ]]; then
   exit 1
 fi
 for expected in \
-  "unreviewed action digitalocean/action-doctl@v2" \
-  "unrecognized reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
+  "uses unreviewed exact action digitalocean/action-doctl@v2" \
+  "uses unreviewed exact reusable workflow digitalocean/platform/.github/workflows/live-deploy.yml@main" \
   "provider authority with secret DEPLOY_AUTH"; do
   if ! grep -Fq -- "${expected}" <<<"${uses_output}"; then
     echo "missing expected provider uses diagnostic: ${expected}" >&2
@@ -374,11 +473,15 @@ if [[ "${unreviewed_uses_status}" -eq 0 ]]; then
   exit 1
 fi
 for expected in \
-  "unreviewed action octocat/unknown-action@v1" \
-  "local action ./.github/actions/not-reviewed is forbidden" \
-  "Docker action docker://alpine:3.20 is forbidden" \
-  "unreviewed action digitalocean/experimental-deploy@v1" \
-  "unrecognized reusable workflow acme/platform/.github/workflows/deploy.yml@main"; do
+  "uses unreviewed exact action octocat/unknown-action@v1" \
+  "uses unreviewed exact action ./.github/actions/not-reviewed" \
+  "uses unreviewed exact action docker://alpine:3.20" \
+  "uses unreviewed exact action digitalocean/experimental-deploy@v1" \
+  'uses forbidden dynamic action ${{ vars.ACTION_REF }}' \
+  "uses unreviewed exact action actions/checkout@v5" \
+  "uses unreviewed exact action actions/setup-go@main" \
+  "uses unreviewed exact action actions/upload-artifact@0123456789012345678901234567890123456789" \
+  "uses unreviewed exact reusable workflow acme/platform/.github/workflows/deploy.yml@main"; do
   if ! grep -Fq -- "${expected}" <<<"${unreviewed_uses_output}"; then
     echo "missing expected unreviewed uses diagnostic: ${expected}" >&2
     printf '%s\n' "${unreviewed_uses_output}" >&2
@@ -495,7 +598,7 @@ cat >"${unsafe_commands}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-unsafe-programs.yml",
     "command": "go",
-    "argvPrefix": ["test"],
+    "invocationSHA256": "0000000000000000000000000000000000000000000000000000000000000000",
     "rationale": "Mutation: prove an allowlisted command with the wrong subcommand remains rejected."
   }
 ]
@@ -517,7 +620,7 @@ for expected in \
   'workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-shell-inheritance.yml uses forbidden dynamic shell ${{ vars.DEFAULT_SHELL }}' \
   "job job-python uses forbidden custom shell python" \
   "job job-pwsh uses forbidden custom shell pwsh" \
-  "job job-pwsh executes unreviewed command invoke-restmethod" \
+  "job job-pwsh executes unreviewed exact invocation of invoke-restmethod" \
   "job job-custom uses forbidden custom shell fish" \
   "job step-override uses forbidden custom shell powershell"; do
   if ! grep -Fq -- "${expected}" <<<"${shell_inheritance_output}"; then
@@ -537,29 +640,29 @@ if [[ "${unsafe_program_status}" -eq 0 ]]; then
   exit 1
 fi
 for expected in \
-  "job curl-endpoint executes unreviewed command curl" \
-  "job wget-endpoint executes unreviewed command wget" \
-  "job http-client executes unreviewed command http" \
-  "job python-code executes unreviewed command python" \
-  "job node-code executes unreviewed command node" \
-  "job dynamic-interpreter-script executes unreviewed command python" \
-  "job powershell-endpoint executes unreviewed command pwsh" \
-  "job go-run executes unreviewed command go with argv [\"run\"" \
-  "job npx-exec executes unreviewed command npx" \
-  "job npm-exec executes unreviewed command npm" \
-  "job docker-run executes unreviewed command docker" \
-  "job docker-login executes unreviewed command docker" \
-  "job docker-push executes unreviewed command docker" \
-  "job terraform-plan executes unreviewed command terraform" \
-  "job tofu-plan executes unreviewed command tofu" \
-  "job pulumi-preview executes unreviewed command pulumi" \
-  "job kubectl-get executes unreviewed command kubectl" \
-  "job helm-list executes unreviewed command helm" \
-  "job ansible-playbook executes unreviewed command ansible" \
-  "job rclone-list executes unreviewed command rclone" \
-  "job s3cmd-list executes unreviewed command s3cmd" \
-  "job mc-list executes unreviewed command mc" \
-  "job unknown-executable executes unreviewed command mystery-tool" \
+  "job curl-endpoint executes categorically forbidden command curl" \
+  "job wget-endpoint executes categorically forbidden command wget" \
+  "job http-client executes categorically forbidden command http" \
+  "job python-code executes categorically forbidden command python" \
+  "job node-code executes categorically forbidden command node" \
+  "job dynamic-interpreter-script executes categorically forbidden command python" \
+  "job powershell-endpoint executes categorically forbidden command pwsh" \
+  "job go-run executes categorically forbidden command go with argv [\"run\"" \
+  "job npx-exec executes categorically forbidden command npx" \
+  "job npm-exec executes categorically forbidden command npm" \
+  "job docker-run executes categorically forbidden command docker" \
+  "job docker-login executes categorically forbidden command docker" \
+  "job docker-push executes categorically forbidden command docker" \
+  "job terraform-plan executes categorically forbidden command terraform" \
+  "job tofu-plan executes categorically forbidden command tofu" \
+  "job pulumi-preview executes categorically forbidden command pulumi" \
+  "job kubectl-get executes categorically forbidden command kubectl" \
+  "job helm-list executes categorically forbidden command helm" \
+  "job ansible-playbook executes categorically forbidden command ansible" \
+  "job rclone-list executes categorically forbidden command rclone" \
+  "job s3cmd-list executes categorically forbidden command s3cmd" \
+  "job mc-list executes categorically forbidden command mc" \
+  "job unknown-executable executes unreviewed exact invocation of mystery-tool" \
   "job sudo-wrapper uses forbidden dynamic command execution"; do
   if ! grep -Fq -- "${expected}" <<<"${unsafe_program_output}"; then
     echo "missing unsafe program diagnostic: ${expected}" >&2
@@ -574,31 +677,31 @@ cat >"${invalid_commands}" <<'JSON'
   {
     "path": "/tmp/absolute.yml",
     "command": "go",
-    "argvPrefix": ["test"],
+    "invocationSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
     "rationale": "Absolute paths must not grant command authority."
   },
   {
     "path": "../traversal.yml",
     "command": "go",
-    "argvPrefix": ["test"],
+    "invocationSHA256": "2222222222222222222222222222222222222222222222222222222222222222",
     "rationale": "Traversal must not grant command authority."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "terraform",
-    "argvPrefix": ["plan"],
+    "invocationSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
     "rationale": "Known provider commands are forbidden even with a rationale."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
-    "argvPrefix": ["test"],
+    "invocationSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "rationale": "Deliberately stale command capability mutation."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
-    "argvPrefix": ["test"],
+    "invocationSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "rationale": "Deliberate duplicate command capability mutation."
   }
 ]
@@ -618,11 +721,47 @@ for expected in \
   "command allowlist path /tmp/absolute.yml must be repository-relative" \
   "command allowlist path ../traversal.yml escapes the repository" \
   "provider-capable command terraform is categorically unallowlistable" \
-  "duplicate command allowlist entry go [\"test\"]" \
-  "stale command allowlist entry go [\"test\"]"; do
+  "duplicate command allowlist entry go sha256:4444444444444444444444444444444444444444444444444444444444444444" \
+  "stale command allowlist entry go sha256:4444444444444444444444444444444444444444444444444444444444444444"; do
   if ! grep -Fq -- "${expected}" <<<"${invalid_commands_output}"; then
     echo "missing invalid command allowlist diagnostic: ${expected}" >&2
     printf '%s\n' "${invalid_commands_output}" >&2
+    exit 1
+  fi
+done
+
+invalid_actions="${tmp_dir}/invalid-actions.json"
+cat >"${invalid_actions}" <<'JSON'
+[
+  {"path":"/tmp/absolute.yml","uses":"actions/checkout@v4","rationale":"Absolute paths must not grant action authority."},
+  {"path":"../traversal.yml","uses":"actions/checkout@v4","rationale":"Traversal must not grant action authority."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"digitalocean/action-doctl@v2","rationale":"Provider actions remain categorically forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"${{ vars.ACTION_REF }}","rationale":"Dynamic action references remain forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","rationale":"Deliberately stale exact action mutation."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","rationale":"Deliberate duplicate exact action mutation."}
+]
+JSON
+set +e
+invalid_actions_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  --action-allowlist "${invalid_actions}" \
+  "${fixtures}/pass-negative-guard.yml" 2>&1)"
+invalid_actions_status=$?
+set -e
+if [[ "${invalid_actions_status}" -eq 0 ]]; then
+  echo "expected invalid action allowlist entries to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "action allowlist path /tmp/absolute.yml must be repository-relative" \
+  "action allowlist path ../traversal.yml escapes the repository" \
+  "provider action digitalocean/action-doctl@v2 is categorically unallowlistable" \
+  "invalid action allowlist entry" \
+  "duplicate action allowlist entry actions/checkout@v4" \
+  "stale action allowlist entry actions/checkout@v4"; do
+  if ! grep -Fq -- "${expected}" <<<"${invalid_actions_output}"; then
+    echo "missing invalid action allowlist diagnostic: ${expected}" >&2
+    printf '%s\n' "${invalid_actions_output}" >&2
     exit 1
   fi
 done

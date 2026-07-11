@@ -1,0 +1,15 @@
+[
+  {"path":".github/workflows/ci.yml","uses":"actions/checkout@v4","rationale":"Check out this repository using the exact reviewed action tag."},
+  {"path":".github/workflows/ci.yml","uses":"actions/setup-go@v5","rationale":"Install Go using the exact reviewed action tag."},
+  {"path":".github/workflows/ci.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","rationale":"Install wfctl using the exact reviewed action commit."},
+  {"path":".github/workflows/ci.yml","uses":"actions/upload-artifact@v4","rationale":"Upload conformance evidence using the exact reviewed action tag."},
+  {"path":".github/workflows/grpc-version-sync.yml","uses":"actions/checkout@v4","rationale":"Check out this repository using the exact reviewed action tag."},
+  {"path":".github/workflows/grpc-version-sync.yml","uses":"actions/setup-go@v5","rationale":"Install Go using the exact reviewed action tag."},
+  {"path":".github/workflows/iac-host-conformance.yml","uses":"actions/checkout@v4","rationale":"Check out this repository using the exact reviewed action tag."},
+  {"path":".github/workflows/iac-host-conformance.yml","uses":"actions/setup-go@v5","rationale":"Install Go using the exact reviewed action tag."},
+  {"path":".github/workflows/release.yml","uses":"actions/checkout@v4","rationale":"Check out this repository using the exact reviewed action tag."},
+  {"path":".github/workflows/release.yml","uses":"actions/setup-go@v5","rationale":"Install Go using the exact reviewed action tag."},
+  {"path":".github/workflows/release.yml","uses":"GoCodeAlone/setup-wfctl@v1","rationale":"Install wfctl using the exact currently reviewed release action tag."},
+  {"path":".github/workflows/release.yml","uses":"goreleaser/goreleaser-action@v7","rationale":"Build release artifacts using the exact reviewed action tag."},
+  {"path":".github/workflows/release.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","rationale":"Notify the registry using the exact reviewed action commit."}
+]
