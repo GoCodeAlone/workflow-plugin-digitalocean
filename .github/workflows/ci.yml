@@ -7,8 +7,7 @@ on:
 env:
   GOPRIVATE: github.com/GoCodeAlone/*
   WFCTL_VALIDATE_VERSION: v0.51.2
-  WFCTL_CONFORMANCE_REF: 8e4247812e6df34e1d95f93ba732b2af745c3187
-  WFCTL_CONFORMANCE_VERSION: v0.51.3-0.20260511092920-8e4247812e6d
+  WFCTL_CONFORMANCE_VERSION: v0.85.4
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,6 +27,12 @@ jobs:
           fi
       - run: go test -race ./...
       - run: go vet ./...
+      - name: Validate conformance workflow ownership
+        run: |
+          ./.github/workflows/scripts/test-conformance-workflows.sh
+          ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
+          ./.github/workflows/scripts/test-conformance-safety-helpers.sh
+          ./.github/workflows/scripts/test-conformance-scrub-safety.sh
 
   wfctl-strict-contracts:
     runs-on: ubuntu-latest
@@ -71,6 +76,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
+        with:
+          version: ${{ env.WFCTL_CONFORMANCE_VERSION }}
       - name: Configure Git for private repos
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -78,13 +86,9 @@ jobs:
           if [ -n "${RELEASES_TOKEN}" ]; then
             git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-      - name: Build conformance inputs
-        run: |
-          mkdir -p .conformance/bin
-          GOBIN="${PWD}/.conformance/bin" GOWORK=off go install "github.com/GoCodeAlone/workflow/cmd/wfctl@${WFCTL_CONFORMANCE_REF}"
       - name: Run typed IaC conformance
         run: |
-          .conformance/bin/wfctl \
+          wfctl \
             plugin conformance \
             --mode typed-iac \
             --build-package ./cmd/plugin \

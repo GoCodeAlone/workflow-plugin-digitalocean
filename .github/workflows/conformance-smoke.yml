@@ -1,0 +1,140 @@
+name: DigitalOcean Conformance Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'internal/**'
+      - 'cmd/plugin/**'
+      - 'plugin.json'
+      - 'plugin.contracts.json'
+      - 'go.mod'
+      - 'go.sum'
+      - 'examples/minimal/**'
+      - '.github/conformance/**'
+      - '.github/workflows/conformance-*.yml'
+      - '.github/workflows/scripts/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/**'
+      - 'cmd/plugin/**'
+      - 'plugin.json'
+      - 'plugin.contracts.json'
+      - 'go.mod'
+      - 'go.sum'
+      - 'examples/minimal/**'
+      - '.github/conformance/**'
+      - '.github/workflows/conformance-*.yml'
+      - '.github/workflows/scripts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GOPRIVATE: github.com/GoCodeAlone/*
+  WFCTL_VERSION: v0.85.4
+
+concurrency:
+  group: digitalocean-conformance-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'live' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  credential-free:
+    name: Credential-free provider conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out provider plugin
+        uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check workflow ownership structure
+        run: ./.github/workflows/scripts/test-conformance-workflows.sh
+      - name: Run provider conformance without cloud credentials
+        run: GOWORK=off go test -tags=conformance ./internal/... -run '^TestConformance$' -count=1
+
+  budget-check:
+    name: Budget kill-switch
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push'
+          && github.ref == 'refs/heads/main'
+          && github.repository == 'GoCodeAlone/workflow-plugin-digitalocean')
+    uses: ./.github/workflows/conformance-budget-check.yml
+    secrets:
+      DO_CONFORMANCE_API_TOKEN: ${{ secrets.DO_CONFORMANCE_API_TOKEN }}
+
+  live-smoke:
+    name: Live create and conformance
+    needs: [budget-check]
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push'
+          && github.ref == 'refs/heads/main'
+          && github.repository == 'GoCodeAlone/workflow-plugin-digitalocean')
+    runs-on: [self-hosted, linux]
+    env:
+      DO_CONFORMANCE_API_TOKEN: ${{ secrets.DO_CONFORMANCE_API_TOKEN }}
+      DIGITALOCEAN_TOKEN: ${{ secrets.DO_CONFORMANCE_API_TOKEN }}
+      DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_CONFORMANCE_API_TOKEN }}
+      CONFORMANCE_TAG: wf-do-conformance-${{ github.run_id }}-${{ github.run_attempt }}
+      CONFORMANCE_RESOURCE_NAME: wf-do-conformance-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out provider plugin
+        uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
+        with:
+          version: ${{ env.WFCTL_VERSION }}
+      - name: Fail before mutation when the token is missing
+        run: |
+          set -euo pipefail
+          test -n "${DO_CONFORMANCE_API_TOKEN:-}" || {
+            echo "::error::DO_CONFORMANCE_API_TOKEN is required for trusted live conformance"
+            exit 1
+          }
+      - name: Build accepted plugin loader layout
+        run: |
+          set -euo pipefail
+          PLUGIN_ROOT=".conformance/plugins"
+          PLUGIN_NAME="workflow-plugin-digitalocean"
+          PLUGIN_DIR="${PLUGIN_ROOT}/${PLUGIN_NAME}"
+          mkdir -p "${PLUGIN_DIR}"
+          GOWORK=off go build -o "${PLUGIN_DIR}/${PLUGIN_NAME}" ./cmd/plugin
+          cp plugin.json "${PLUGIN_DIR}/plugin.json"
+          cp plugin.contracts.json "${PLUGIN_DIR}/plugin.contracts.json"
+          wfctl plugin list --plugin-dir "${PLUGIN_ROOT}"
+      - name: Create tagged smoke Droplet through wfctl
+        run: |
+          set -euo pipefail
+          PLUGIN_ROOT=".conformance/plugins"
+          wfctl infra apply \
+            --auto-approve \
+            --config .github/conformance/cleanup.yaml \
+            --plugin-dir "${PLUGIN_ROOT}"
+      - name: Run the plugin conformance entrypoint
+        run: |
+          CONFORMANCE_LIVE_CLOUD=1 \
+            GOWORK=off go test -tags=conformance -short ./internal/... \
+              -run '^TestConformance$' -count=1 -v
+      - name: Force-delete tagged resources
+        if: always()
+        run: |
+          set -euo pipefail
+          PLUGIN_ROOT=".conformance/plugins"
+          if [ ! -x "${PLUGIN_ROOT}/workflow-plugin-digitalocean/workflow-plugin-digitalocean" ]; then
+            echo "::error::plugin binary unavailable; run the scheduled scrubber for tag ${CONFORMANCE_TAG}"
+            exit 1
+          fi
+          wfctl infra cleanup \
+            --config .github/conformance/cleanup.yaml \
+            --plugin-dir "${PLUGIN_ROOT}" \
+            --tag "${CONFORMANCE_TAG}" \
+            --fix
