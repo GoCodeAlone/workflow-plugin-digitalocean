@@ -217,3 +217,85 @@ func TestDecodeJSONRequiresExactlyOneValue(t *testing.T) {
 		}
 	}
 }
+
+func TestYAMLStructureRejectsAliasesAndDuplicateKeys(t *testing.T) {
+	for name, source := range map[string]string{
+		"alias":     "run: &shared echo safe\nother: *shared\n",
+		"duplicate": "run: echo first\nrun: echo second\n",
+		"nested":    "job:\n  env: &env\n    VALUE: safe\n  other: *env\n",
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatalf("%s parse: %v", name, err)
+		}
+		findings := &findingSet{}
+		validateYAMLStructure("fixture", &doc, findings)
+		if len(findings.items) == 0 {
+			t.Errorf("%s structure was accepted", name)
+		}
+	}
+}
+
+func TestActionNodeDigestCoversCompleteStep(t *testing.T) {
+	parseStep := func(source string) *yaml.Node {
+		t.Helper()
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Content[0]
+	}
+	original := parseStep("name: Upload\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n")
+	originalDigest := actionNodeDigest(original)
+	for _, mutation := range []string{
+		"name: Upload\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: other.json\n",
+		"name: Changed\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n",
+		"name: Upload\nif: always()\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n",
+	} {
+		if actionNodeDigest(parseStep(mutation)) == originalDigest {
+			t.Errorf("action step mutation retained digest: %q", mutation)
+		}
+	}
+}
+
+func TestStatementDigestCoversRedirectsAndAssignments(t *testing.T) {
+	original := parseShell(t, `MODE=ci go test ./...`)
+	originalDigest, err := statementDigest(original.Stmts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []string{
+		`MODE=prod go test ./...`,
+		`MODE=ci go test ./... > results.txt`,
+		`MODE=ci go test ./... 2>&1`,
+	} {
+		file := parseShell(t, mutation)
+		digest, err := statementDigest(file.Stmts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest == originalDigest {
+			t.Errorf("statement mutation retained digest: %s", mutation)
+		}
+	}
+}
+
+func TestDangerousAssignmentsAndEnvironmentRedirects(t *testing.T) {
+	for _, source := range []string{
+		`PATH=/tmp/bin`,
+		`BASH_ENV=./bootstrap`,
+		`ENV=./profile`,
+		`SHELLOPTS=xtrace`,
+		`LD_PRELOAD=./hook.so command`,
+		`DYLD_INSERT_LIBRARIES=./hook.dylib command`,
+		`echo value >> "$GITHUB_ENV"`,
+		`printf '%s\n' value >> "$GITHUB_PATH"`,
+	} {
+		file := parseShell(t, source)
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", file.Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("dangerous statement was accepted: %s", source)
+		}
+	}
+}
