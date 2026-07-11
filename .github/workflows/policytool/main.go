@@ -530,6 +530,33 @@ func validatePullRequestSecrets(prefix string, pullRequest bool, secrets map[str
 	}
 }
 
+func credentialFreePullRequestAuthority(root *yaml.Node) bool {
+	return triggerPresent(root, "pull_request") || triggerPresent(root, "pull_request_target")
+}
+
+func validateInheritedSecrets(prefix string, secrets *yaml.Node, findings *findingSet) {
+	if secrets == nil {
+		return
+	}
+	if secrets.Kind == yaml.ScalarNode {
+		if strings.TrimSpace(secrets.Value) == "inherit" {
+			findings.add("%s inherits all job secrets", prefix)
+		} else {
+			findings.add("%s uses unsupported job secrets scalar", prefix)
+		}
+		return
+	}
+	if secrets.Kind != yaml.MappingNode {
+		findings.add("%s uses unsupported job secrets shape", prefix)
+		return
+	}
+	for index := 0; index+1 < len(secrets.Content); index += 2 {
+		if value := secrets.Content[index+1]; value.Kind == yaml.ScalarNode && strings.TrimSpace(value.Value) == "inherit" {
+			findings.add("%s maps inherited secret %s", prefix, secrets.Content[index].Value)
+		}
+	}
+}
+
 func validateCredentialSelectors(prefix string, node *yaml.Node, findings *findingSet) {
 	values := []string{}
 	scalars(node, &values)
@@ -1691,7 +1718,7 @@ func main() {
 		validateSecretReferences(rel, "workflow "+rel, globalSecrets, allowed, referenced, findings)
 		manual := triggerPresent(root, "workflow_dispatch")
 		scheduled := triggerPresent(root, "schedule")
-		pullRequest := triggerPresent(root, "pull_request")
+		pullRequest := credentialFreePullRequestAuthority(root)
 		jobs := mappingValue(root, "jobs")
 		if jobs == nil || jobs.Kind != yaml.MappingNode {
 			findings.add("workflow %s must declare jobs", rel)
@@ -1719,6 +1746,7 @@ func main() {
 				jobSecrets[secret] = true
 			}
 			localSecrets := secretReferences(job)
+			validateInheritedSecrets(prefix, mappingValue(job, "secrets"), findings)
 			validateCredentialSelectors(prefix, job, findings)
 			validateSecretReferences(rel, prefix, localSecrets, allowed, referenced, findings)
 			for secret := range localSecrets {

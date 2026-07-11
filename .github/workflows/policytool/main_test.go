@@ -421,6 +421,47 @@ func TestPullRequestWorkflowsRejectRepositorySecrets(t *testing.T) {
 	}
 }
 
+func TestCredentialFreePullRequestAuthorityIncludesTarget(t *testing.T) {
+	for trigger, want := range map[string]bool{
+		"pull_request":        true,
+		"pull_request_target": true,
+		"push":                false,
+	} {
+		var doc yaml.Node
+		source := "on:\n  " + trigger + ":\njobs: {}\n"
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if got := credentialFreePullRequestAuthority(doc.Content[0]); got != want {
+			t.Errorf("%s credential-free authority = %v, want %v", trigger, got, want)
+		}
+	}
+}
+
+func TestReusableWorkflowSecretShapesFailClosed(t *testing.T) {
+	for name, test := range map[string]struct {
+		source      string
+		wantFinding bool
+	}{
+		"inherit scalar":  {"secrets: inherit\n", true},
+		"inherit mapping": {"secrets:\n  token: inherit\n", true},
+		"dynamic mapping": {"secrets:\n  token: ${{ secrets[vars.SECRET_NAME] }}\n", true},
+		"automatic token": {"secrets:\n  token: ${{ github.token }}\n", false},
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(test.source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		job := doc.Content[0]
+		findings := &findingSet{}
+		validateInheritedSecrets("fixture "+name, mappingValue(job, "secrets"), findings)
+		validateCredentialSelectors("fixture "+name, job, findings)
+		if got := len(findings.items) > 0; got != test.wantFinding {
+			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
+		}
+	}
+}
+
 func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
 	for _, source := range []string{
 		`GOWORK=off go test ./...`,

@@ -554,6 +554,35 @@ if [[ "${candidate_arithmetic_status}" -eq 0 ]] || ! grep -Fq -- \
 fi
 rm "${candidate_root}/.github/workflows/candidate-arithmetic.yml"
 
+for inherited_shape in scalar mapping; do
+  candidate_inherit="${candidate_root}/.github/workflows/candidate-inherit.yml"
+  if [[ "${inherited_shape}" == scalar ]]; then
+    inherited_yaml='    secrets: inherit'
+    inherited_expected='inherits all job secrets'
+  else
+    inherited_yaml=$'    secrets:\n      token: inherit'
+    inherited_expected='maps inherited secret token'
+  fi
+  cat >"${candidate_inherit}" <<YAML
+name: Candidate inherited secrets
+on: pull_request_target
+jobs:
+  inherited:
+    uses: acme/platform/.github/workflows/reuse.yml@0123456789012345678901234567890123456789
+${inherited_yaml}
+YAML
+  set +e
+  candidate_inherit_output="$("${checker_binary}" --scan-root "${candidate_root}" 2>&1)"
+  candidate_inherit_status=$?
+  set -e
+  if [[ "${candidate_inherit_status}" -eq 0 ]] || ! grep -Fq -- "${inherited_expected}" <<<"${candidate_inherit_output}"; then
+    echo "candidate ${inherited_shape} inherited-secret shape bypassed policy" >&2
+    printf '%s\n' "${candidate_inherit_output}" >&2
+    exit 1
+  fi
+  rm "${candidate_inherit}"
+done
+
 assert_exact_mutation_rejected() {
   local label="$1"
   local workflow="$2"
@@ -638,6 +667,11 @@ assert_exact_mutation_rejected \
   "pull request repository secret" \
   "${repo_root}/.github/workflows/ci.yml" \
   's/SAFE_JOB_MODE: strict/SAFE_JOB_MODE: strict\n      PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
+  "pull_request workflow references forbidden repository secret RELEASES_TOKEN"
+assert_exact_mutation_rejected \
+  "pull request target repository secret" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's/pull_request:/pull_request_target:/; s/SAFE_JOB_MODE: strict/SAFE_JOB_MODE: strict\n      PRIVATE_TOKEN: ${{ secrets.RELEASES_TOKEN }}/' \
   "pull_request workflow references forbidden repository secret RELEASES_TOKEN"
 assert_exact_mutation_rejected \
   "release tag shell interpolation" \

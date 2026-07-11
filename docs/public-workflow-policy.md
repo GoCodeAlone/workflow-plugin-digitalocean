@@ -7,6 +7,9 @@ request checkout is stored separately and read only as policy input. Candidate
 actions, scripts, Go files, modules, and trust manifests are never executed.
 The job has only `contents: read`, uses GitHub-hosted runners, and receives no
 cloud credentials or OIDC authority.
+Both `pull_request` and `pull_request_target` workflows reject repository
+secrets other than the automatic `GITHUB_TOKEN`. Job-level `secrets: inherit`
+and mapped inherited-secret values are rejected in every public workflow.
 
 Workflow authority changes use three pull requests. The presence manifest is
 the canonical inventory: `present` groups bind a workflow path to its complete
