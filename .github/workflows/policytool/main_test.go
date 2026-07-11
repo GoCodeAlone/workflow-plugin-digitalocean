@@ -156,7 +156,7 @@ func TestDecodeJSONRequiresExactlyOneValue(t *testing.T) {
 		t.Fatalf("valid JSON failed: %v", err)
 	}
 	for name, content := range map[string]string{
-		"trailing-object": `[] {}`,
+		"trailing-object":  `[] {}`,
 		"trailing-garbage": `[] garbage`,
 	} {
 		path := filepath.Join(tmp, name+".json")

@@ -4,6 +4,21 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 policytool="${repo_root}/.github/workflows/policytool"
 
+while IFS= read -r policytool_path; do
+  relative_path="${policytool_path#"${policytool}/"}"
+  case "${relative_path}" in
+    main.go|main_test.go|go.mod|go.sum) ;;
+    *)
+      echo "unexpected policytool path: ${relative_path}" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! -f "${policytool_path}" || -L "${policytool_path}" ]]; then
+    echo "policytool path must be a regular non-symlink file: ${relative_path}" >&2
+    exit 1
+  fi
+done < <(find "${policytool}" -mindepth 1 -print | LC_ALL=C sort)
+
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -26,10 +41,10 @@ verify_policytool_file() {
   fi
 }
 
-verify_policytool_file main.go 1c2689e49e877181f06ca596df6601b23bdc5b94042387976a49732762152f32
-verify_policytool_file main_test.go a90bb896a957a6afd9d4e6f6dfac3f14caadbec8706fe906942e24c4c86532da
+verify_policytool_file main.go 0feeee0ad2940731117d9b4bb5475835b09bea8ee2c5e2228ff1bc3863f2f62b
+verify_policytool_file main_test.go d9405209106753a9a46418983a82365e2e1750e1e27349d82faa7244122cc314
 verify_policytool_file go.mod ddbfb09771aa824f859940c0a937f2eeb900cf0786b3cbf4a3ea741a0302b46e
 verify_policytool_file go.sum 790ef858e5aeed12269a69e764ac69c02c3877678b0e7d9384ad3728b6e09f6c
 
 cd "${policytool}"
-exec env GOWORK=off go run . --repo "${repo_root}" "$@"
+exec env GOWORK=off GOFLAGS=-mod=mod go run ./main.go --repo "${repo_root}" "$@"

@@ -17,16 +17,90 @@ fi
 (cd "${policytool}" && GOWORK=off go test ./...)
 
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
-trap 'rm -rf "${tmp_dir}"' EXIT
+integrity_extra="${policytool}/extra_linux.go"
+integrity_vendor="${policytool}/vendor"
+integrity_symlink="${policytool}/extra-link.go"
+trap 'rm -rf "${tmp_dir}" "${integrity_extra}" "${integrity_vendor}" "${integrity_symlink}"' EXIT
 export TMPDIR="${tmp_dir}"
 fixture_executables="${tmp_dir}/fixture-executables.json"
 printf '[]\n' >"${fixture_executables}"
+fixture_commands="${tmp_dir}/fixture-commands.json"
+printf '[]\n' >"${fixture_commands}"
 checker="${tmp_dir}/check-public-workflow-policy.sh"
 cat >"${checker}" <<EOF
 #!/usr/bin/env bash
-exec "${checker_binary}" --executable-allowlist "${fixture_executables}" "\$@"
+exec "${checker_binary}" --executable-allowlist "${fixture_executables}" --command-allowlist "${fixture_commands}" "\$@"
 EOF
 chmod +x "${checker}"
+
+printf 'package policytool\n' >"${integrity_extra}"
+set +e
+extra_go_output="$("${checker_binary}" 2>&1)"
+extra_go_status=$?
+set -e
+rm -f "${integrity_extra}"
+if [[ "${extra_go_status}" -eq 0 ]] || ! grep -Fq -- \
+  "unexpected policytool path: extra_linux.go" <<<"${extra_go_output}"; then
+  echo "extra Go source bypassed policytool integrity" >&2
+  printf '%s\n' "${extra_go_output}" >&2
+  exit 1
+fi
+
+mkdir -p "${integrity_vendor}/mvdan.cc/sh/v3/syntax"
+printf 'package syntax\n' >"${integrity_vendor}/mvdan.cc/sh/v3/syntax/override.go"
+set +e
+vendor_output="$("${checker_binary}" 2>&1)"
+vendor_status=$?
+set -e
+rm -rf "${integrity_vendor}"
+if [[ "${vendor_status}" -eq 0 ]] || ! grep -Fq -- \
+  "unexpected policytool path: vendor" <<<"${vendor_output}"; then
+  echo "vendor override bypassed policytool integrity" >&2
+  printf '%s\n' "${vendor_output}" >&2
+  exit 1
+fi
+
+ln -s main.go "${integrity_symlink}"
+set +e
+symlink_output="$("${checker_binary}" 2>&1)"
+symlink_status=$?
+set -e
+rm -f "${integrity_symlink}"
+if [[ "${symlink_status}" -eq 0 ]] || ! grep -Fq -- \
+  "unexpected policytool path: extra-link.go" <<<"${symlink_output}"; then
+  echo "policytool symlink bypassed integrity" >&2
+  printf '%s\n' "${symlink_output}" >&2
+  exit 1
+fi
+
+if ! grep -Fq -- 'exec env GOWORK=off GOFLAGS=-mod=mod go run ./main.go' "${checker_binary}"; then
+  echo "policytool wrapper does not execute the fixed source file" >&2
+  exit 1
+fi
+
+trailing_secret="${tmp_dir}/trailing-secret.json"
+trailing_executable="${tmp_dir}/trailing-executable.json"
+trailing_command="${tmp_dir}/trailing-command.json"
+printf '[] {}\n' >"${trailing_secret}"
+printf '[] garbage\n' >"${trailing_executable}"
+printf '[] {}\n' >"${trailing_command}"
+for trust_input in secret executable command; do
+  args=()
+  case "${trust_input}" in
+    secret) args=(--allowlist "${trailing_secret}") ;;
+    executable) args=(--executable-allowlist "${trailing_executable}") ;;
+    command) args=(--command-allowlist "${trailing_command}") ;;
+  esac
+  set +e
+  trailing_output="$("${checker_binary}" "${args[@]}" 2>&1)"
+  trailing_status=$?
+  set -e
+  if [[ "${trailing_status}" -eq 0 ]] || ! grep -Fq -- "unexpected trailing JSON" <<<"${trailing_output}"; then
+    echo "${trust_input} allowlist accepted trailing JSON" >&2
+    printf '%s\n' "${trailing_output}" >&2
+    exit 1
+  fi
+done
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 cat >"${pass_allowlist}" <<'JSON'
@@ -44,8 +118,33 @@ cat >"${pass_allowlist}" <<'JSON'
 ]
 JSON
 
+pass_commands="${tmp_dir}/pass-commands.json"
+cat >"${pass_commands}" <<'JSON'
+[
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Run credential-free Go tests without granting go run."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
+    "command": "gh",
+    "argvPrefix": ["release", "upload"],
+    "rationale": "Exercise the exact GitHub release operation accepted by the fixture."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Run credential-free Go tests without granting go run."
+  }
+]
+JSON
+
 "${checker}" \
   --allowlist "${pass_allowlist}" \
+  --command-allowlist "${pass_commands}" \
   "${fixtures}/pass.yml" \
   "${fixtures}/pass-negative-guard.yml" \
   "${fixtures}/pass-expression-and-deny-guard.yml"
@@ -202,8 +301,7 @@ for expected in \
   "environment value contains provider API api.digitalocean.com" \
   "environment value contains provider SDK marker" \
   "dynamic command execution" \
-  "forbidden eval" \
-  "forbidden shell -c"; do
+  "executes unreviewed command eval"; do
   if ! grep -Fq -- "${expected}" <<<"${env_indirection_output}"; then
     echo "missing expected environment indirection diagnostic: ${expected}" >&2
     printf '%s\n' "${env_indirection_output}" >&2
@@ -325,7 +423,6 @@ for job in \
   assignment-prefix \
   command-wrapper \
   exec-wrapper \
-  sudo-wrapper \
   env-wrapper \
   subshell \
   group \
@@ -336,7 +433,7 @@ for job in \
     exit 1
   fi
 done
-for job in dynamic-path wrapped-dynamic-command; do
+for job in dynamic-path wrapped-dynamic-command sudo-wrapper; do
   if ! grep -Fq -- "job ${job} uses forbidden dynamic command execution" <<<"${command_analysis_output}"; then
     echo "missing dynamic command diagnostic for ${job}" >&2
     printf '%s\n' "${command_analysis_output}" >&2
@@ -392,8 +489,20 @@ missing_shell_output="$("${checker}" \
   --allowlist "${empty_allowlist}" \
   "${fixtures}/reject-missing-shell.yml" 2>&1)"
 missing_shell_status=$?
+unsafe_commands="${tmp_dir}/unsafe-commands.json"
+cat >"${unsafe_commands}" <<'JSON'
+[
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-unsafe-programs.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Mutation: prove an allowlisted command with the wrong subcommand remains rejected."
+  }
+]
+JSON
 unsafe_program_output="$("${checker}" \
   --allowlist "${empty_allowlist}" \
+  --command-allowlist "${unsafe_commands}" \
   "${fixtures}/reject-unsafe-programs.yml" 2>&1)"
 unsafe_program_status=$?
 set -e
@@ -408,7 +517,7 @@ for expected in \
   'workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-shell-inheritance.yml uses forbidden dynamic shell ${{ vars.DEFAULT_SHELL }}' \
   "job job-python uses forbidden custom shell python" \
   "job job-pwsh uses forbidden custom shell pwsh" \
-  "job job-pwsh executes forbidden network client invoke-restmethod" \
+  "job job-pwsh executes unreviewed command invoke-restmethod" \
   "job job-custom uses forbidden custom shell fish" \
   "job step-override uses forbidden custom shell powershell"; do
   if ! grep -Fq -- "${expected}" <<<"${shell_inheritance_output}"; then
@@ -428,22 +537,92 @@ if [[ "${unsafe_program_status}" -eq 0 ]]; then
   exit 1
 fi
 for expected in \
-  "job curl-endpoint executes forbidden network client curl" \
-  "job wget-endpoint executes forbidden network client wget" \
-  "job http-client executes forbidden network client http" \
-  "job python-code executes forbidden interpreter python" \
-  "job node-code executes forbidden interpreter node" \
-  "job dynamic-interpreter-script executes forbidden interpreter python" \
-  "job powershell-endpoint executes forbidden interpreter pwsh" \
-  "job go-run executes forbidden go run" \
-  "job npx-exec executes forbidden package executor npx" \
-  "job npm-exec executes forbidden package executor npm exec" \
-  "job docker-run executes forbidden container command docker run" \
-  "job docker-login executes forbidden container command docker login" \
-  "job docker-push executes forbidden container command docker push"; do
+  "job curl-endpoint executes unreviewed command curl" \
+  "job wget-endpoint executes unreviewed command wget" \
+  "job http-client executes unreviewed command http" \
+  "job python-code executes unreviewed command python" \
+  "job node-code executes unreviewed command node" \
+  "job dynamic-interpreter-script executes unreviewed command python" \
+  "job powershell-endpoint executes unreviewed command pwsh" \
+  "job go-run executes unreviewed command go with argv [\"run\"" \
+  "job npx-exec executes unreviewed command npx" \
+  "job npm-exec executes unreviewed command npm" \
+  "job docker-run executes unreviewed command docker" \
+  "job docker-login executes unreviewed command docker" \
+  "job docker-push executes unreviewed command docker" \
+  "job terraform-plan executes unreviewed command terraform" \
+  "job tofu-plan executes unreviewed command tofu" \
+  "job pulumi-preview executes unreviewed command pulumi" \
+  "job kubectl-get executes unreviewed command kubectl" \
+  "job helm-list executes unreviewed command helm" \
+  "job ansible-playbook executes unreviewed command ansible" \
+  "job rclone-list executes unreviewed command rclone" \
+  "job s3cmd-list executes unreviewed command s3cmd" \
+  "job mc-list executes unreviewed command mc" \
+  "job unknown-executable executes unreviewed command mystery-tool" \
+  "job sudo-wrapper uses forbidden dynamic command execution"; do
   if ! grep -Fq -- "${expected}" <<<"${unsafe_program_output}"; then
     echo "missing unsafe program diagnostic: ${expected}" >&2
     printf '%s\n' "${unsafe_program_output}" >&2
+    exit 1
+  fi
+done
+
+invalid_commands="${tmp_dir}/invalid-commands.json"
+cat >"${invalid_commands}" <<'JSON'
+[
+  {
+    "path": "/tmp/absolute.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Absolute paths must not grant command authority."
+  },
+  {
+    "path": "../traversal.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Traversal must not grant command authority."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
+    "command": "terraform",
+    "argvPrefix": ["plan"],
+    "rationale": "Known provider commands are forbidden even with a rationale."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Deliberately stale command capability mutation."
+  },
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Deliberate duplicate command capability mutation."
+  }
+]
+JSON
+set +e
+invalid_commands_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  --command-allowlist "${invalid_commands}" \
+  "${fixtures}/pass-negative-guard.yml" 2>&1)"
+invalid_commands_status=$?
+set -e
+if [[ "${invalid_commands_status}" -eq 0 ]]; then
+  echo "expected invalid command allowlist entries to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "command allowlist path /tmp/absolute.yml must be repository-relative" \
+  "command allowlist path ../traversal.yml escapes the repository" \
+  "provider-capable command terraform is categorically unallowlistable" \
+  "duplicate command allowlist entry go [\"test\"]" \
+  "stale command allowlist entry go [\"test\"]"; do
+  if ! grep -Fq -- "${expected}" <<<"${invalid_commands_output}"; then
+    echo "missing invalid command allowlist diagnostic: ${expected}" >&2
+    printf '%s\n' "${invalid_commands_output}" >&2
     exit 1
   fi
 done
@@ -587,7 +766,13 @@ if [[ "${global_status}" -eq 0 ]]; then
 fi
 for expected in \
   "id-token: write" \
-  "known cloud credential variable AWS_ACCESS_KEY_ID"; do
+  "known cloud credential variable AWS_ACCESS_KEY_ID" \
+  "known cloud secret SPACES_ACCESS_KEY_ID" \
+  "known cloud secret SPACES_SECRET_ACCESS_KEY" \
+  "known cloud secret DIGITALOCEAN_SPACES_ACCESS_KEY_ID" \
+  "known cloud secret DIGITALOCEAN_SPACES_SECRET_ACCESS_KEY" \
+  "known cloud secret DO_SPACES_ACCESS_KEY_ID" \
+  "known cloud secret DO_SPACES_SECRET_ACCESS_KEY"; do
   if ! grep -Fq -- "${expected}" <<<"${global_output}"; then
     echo "missing expected global policy diagnostic: ${expected}" >&2
     printf '%s\n' "${global_output}" >&2

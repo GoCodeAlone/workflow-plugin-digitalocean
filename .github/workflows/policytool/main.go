@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,6 +26,16 @@ type executableEntry struct {
 	Path      string `json:"path"`
 	SHA256    string `json:"sha256"`
 	Rationale string `json:"rationale"`
+}
+
+// commandEntry is a reviewed capability granted to one exact public workflow.
+// ArgvPrefix is mandatory: it narrows multi-capability tools (for example go,
+// gh, and wfctl) to the operation needed by that workflow.
+type commandEntry struct {
+	Path       string   `json:"path"`
+	Command    string   `json:"command"`
+	ArgvPrefix []string `json:"argvPrefix"`
+	Rationale  string   `json:"rationale"`
 }
 
 type findingSet struct {
@@ -462,6 +473,17 @@ func unreviewedUsesDiagnostic(reference string, jobLevel bool) string {
 
 func knownCloudSecret(name string) bool {
 	name = strings.ToUpper(name)
+	spacesCredentials := map[string]bool{
+		"SPACES_ACCESS_KEY_ID":                  true,
+		"SPACES_SECRET_ACCESS_KEY":              true,
+		"DIGITALOCEAN_SPACES_ACCESS_KEY_ID":     true,
+		"DIGITALOCEAN_SPACES_SECRET_ACCESS_KEY": true,
+		"DO_SPACES_ACCESS_KEY_ID":               true,
+		"DO_SPACES_SECRET_ACCESS_KEY":           true,
+	}
+	if spacesCredentials[name] {
+		return true
+	}
 	markers := []string{"DIGITALOCEAN", "AWS", "AZURE", "GCP", "GOOGLE_CLOUD", "CLOUDFLARE"}
 	for _, marker := range markers {
 		if strings.Contains(name, marker) {
@@ -472,6 +494,66 @@ func knownCloudSecret(name string) bool {
 		return true
 	}
 	return strings.Contains(name, "KUBE") && regexp.MustCompile(`(CONFIG|TOKEN|SECRET|CREDENTIAL)`).MatchString(name)
+}
+
+func decodeJSONFile(filePath string, target any) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return fmt.Errorf("unexpected trailing JSON data: %w", err)
+	}
+	return nil
+}
+
+func commandKey(workflowPath, command string, prefix []string) string {
+	return workflowPath + "\x00" + command + "\x00" + strings.Join(prefix, "\x00")
+}
+
+func matchCommand(workflowPath, command string, argv []string, allowed map[string]commandEntry) (string, bool) {
+	for key, entry := range allowed {
+		if entry.Path != workflowPath || entry.Command != command || len(argv) < len(entry.ArgvPrefix) {
+			continue
+		}
+		matched := true
+		for index := range entry.ArgvPrefix {
+			if argv[index] != entry.ArgvPrefix[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+func knownProviderCommand(command string, prefix []string) bool {
+	forbidden := map[string]bool{
+		"ansible": true, "aws": true, "az": true, "curl": true,
+		"doctl": true, "docker": true, "gcloud": true, "helm": true,
+		"http": true, "https": true, "kubectl": true, "mc": true,
+		"node": true, "npm": true, "npx": true, "perl": true,
+		"php": true, "powershell": true, "pulumi": true, "pwsh": true,
+		"python": true, "python3": true, "rclone": true, "ruby": true,
+		"s3cmd": true, "terraform": true, "tofu": true, "wget": true,
+	}
+	if forbidden[strings.ToLower(command)] {
+		return true
+	}
+	return strings.EqualFold(command, "go") && len(prefix) > 0 && prefix[0] == "run"
 }
 
 func pathEscapes(rel string) bool {
@@ -563,7 +645,10 @@ func resolvedProgram(call *syntax.CallExpr) (*syntax.Word, []*syntax.Word, bool)
 			return args[index], nil, false
 		}
 		base := path.Base(value)
-		if base != "command" && base != "exec" && base != "sudo" && base != "env" {
+		if base == "sudo" {
+			return args[index], nil, false
+		}
+		if base != "command" && base != "exec" && base != "env" {
 			return args[index], args[index+1:], true
 		}
 		index++
@@ -579,52 +664,40 @@ func resolvedProgram(call *syntax.CallExpr) (*syntax.Word, []*syntax.Word, bool)
 	return nil, nil, true
 }
 
-func resolvedCommand(call *syntax.CallExpr) (*syntax.Word, []*syntax.Word, bool) {
-	args := call.Args
+func resolvedWorkflowCommand(call *syntax.CallExpr) (*syntax.Word, []*syntax.Word, bool) {
+	program, args, resolved := resolvedProgram(call)
+	if !resolved || program == nil {
+		return program, args, resolved
+	}
+	value, literal := literalWord(program)
+	if !literal {
+		return program, nil, false
+	}
+	base := path.Base(value)
+	if base != "bash" && base != "sh" && base != "source" && base != "." {
+		return program, args, true
+	}
 	index := 0
 	for index < len(args) {
-		value, literal := literalWord(args[index])
-		if !literal || strings.Contains(value, "__GITHUB_EXPRESSION_") {
+		argument, ok := literalWord(args[index])
+		if !ok {
 			return args[index], nil, false
 		}
-		base := path.Base(value)
-		switch base {
-		case "command", "exec", "sudo", "env":
+		if argument == "--" {
 			index++
-			var ok bool
-			index, ok = skipWrapperOptions(args, index, base)
-			if !ok {
-				if index < len(args) {
-					return args[index], nil, false
-				}
-				return nil, nil, false
-			}
-			continue
-		case "bash", "sh", "source", ".":
-			index++
-			for index < len(args) {
-				argument, ok := literalWord(args[index])
-				if !ok {
-					return args[index], nil, false
-				}
-				if argument == "--" {
-					index++
-					break
-				}
-				if !strings.HasPrefix(argument, "-") || argument == "-" {
-					break
-				}
-				index++
-			}
-			if index >= len(args) {
-				return nil, nil, true
-			}
-			return args[index], args[index+1:], true
-		default:
-			return args[index], args[index+1:], true
+			break
 		}
+		if !strings.HasPrefix(argument, "-") || argument == "-" {
+			break
+		}
+		// Shell options such as -c can execute arbitrary text and are never
+		// treated as a local-script invocation.
+		return args[index], nil, false
 	}
-	return nil, nil, true
+	if index >= len(args) {
+		return nil, nil, false
+	}
+	return args[index], args[index+1:], true
 }
 
 func directCall(stmt *syntax.Stmt) (*syntax.CallExpr, bool) {
@@ -723,7 +796,7 @@ type shellAnalysis struct {
 	namedLive         bool
 }
 
-func inspectShell(prefix, source string, file *syntax.File, pureGuard bool, repoRoot string, executables map[string]executableEntry, executableReferenced map[string]bool, findings *findingSet) shellAnalysis {
+func inspectShell(prefix, workflowPath, source string, file *syntax.File, pureGuard bool, repoRoot string, executables map[string]executableEntry, executableReferenced map[string]bool, commands map[string]commandEntry, commandReferenced map[string]bool, findings *findingSet) shellAnalysis {
 	analysis := shellAnalysis{
 		hasIntegrationTag: integrationRE.MatchString(source),
 		hasProviderSDK:    providerSDKRE.MatchString(source),
@@ -744,73 +817,13 @@ func inspectShell(prefix, source string, file *syntax.File, pureGuard bool, repo
 		if !ok || len(call.Args) == 0 {
 			return true
 		}
-		programWord, programArgs, programResolved := resolvedProgram(call)
-		program, programLiteral := literalWord(programWord)
-		if programResolved && programLiteral {
-			base := strings.ToLower(path.Base(program))
-			if base == "eval" {
-				findings.add("%s uses forbidden eval", prefix)
-			}
-			if base == "bash" || base == "sh" {
-				for _, argument := range programArgs {
-					value, literal := literalWord(argument)
-					if literal && value == "-c" {
-						findings.add("%s uses forbidden shell -c", prefix)
-						break
-					}
-				}
-			}
-			if map[string]bool{"curl": true, "wget": true, "http": true, "https": true}[base] || strings.HasPrefix(base, "invoke-") {
-				analysis.providerAuthority = true
-				findings.add("%s executes forbidden network client %s", prefix, base)
-			}
-			if map[string]bool{"python": true, "python3": true, "node": true, "ruby": true, "perl": true, "php": true, "pwsh": true, "powershell": true}[base] {
-				findings.add("%s executes forbidden interpreter %s", prefix, base)
-			}
-			if base == "go" {
-				for _, argument := range programArgs {
-					subcommand, ok := literalWord(argument)
-					if ok && subcommand == "run" {
-						findings.add("%s executes forbidden go run", prefix)
-						break
-					}
-				}
-			}
-			if base == "npx" {
-				findings.add("%s executes forbidden package executor npx", prefix)
-			}
-			if base == "npm" {
-				diagnostic := "npm"
-				if len(programArgs) > 0 {
-					if subcommand, ok := literalWord(programArgs[0]); ok {
-						diagnostic += " " + subcommand
-					}
-				}
-				findings.add("%s executes forbidden package executor %s", prefix, diagnostic)
-			}
-			if base == "docker" {
-				diagnostic := "docker"
-				if len(programArgs) > 0 {
-					if subcommand, ok := literalWord(programArgs[0]); ok {
-						diagnostic += " " + subcommand
-					}
-				}
-				findings.add("%s executes forbidden container command %s", prefix, diagnostic)
-			}
-		}
-		commandWord, _, resolved := resolvedCommand(call)
-		if commandWord == nil {
-			if !resolved {
-				findings.add("%s uses forbidden dynamic command execution", prefix)
-			}
-			return true
-		}
+		commandWord, commandWords, resolved := resolvedWorkflowCommand(call)
 		command, literal := literalWord(commandWord)
-		if !resolved || !literal || strings.Contains(command, "__GITHUB_EXPRESSION_") {
+		if commandWord == nil || !resolved || !literal || strings.Contains(command, "__GITHUB_EXPRESSION_") {
 			findings.add("%s uses forbidden dynamic command execution", prefix)
 			return true
 		}
-		base := path.Base(command)
+		base := strings.ToLower(path.Base(command))
 		if map[string]bool{"doctl": true, "gcloud": true, "az": true, "aws": true}[base] {
 			analysis.providerAuthority = true
 			findings.add("%s executes forbidden provider authority: executable provider CLI %s", prefix, base)
@@ -836,6 +849,34 @@ func inspectShell(prefix, source string, file *syntax.File, pureGuard bool, repo
 			} else {
 				executableReferenced[scriptRel] = true
 			}
+			return true
+		}
+		builtins := map[string]bool{
+			"[": true, "echo": true, "exit": true, "false": true,
+			"printf": true, "set": true, "test": true, "true": true,
+		}
+		if builtins[base] {
+			return true
+		}
+		if pureGuard && map[string]bool{"rg": true, "grep": true, "egrep": true, "fgrep": true}[base] {
+			// pureRejectionGuard proved this search can only reject content and
+			// cannot pass its pattern or matches to an execution path.
+			return true
+		}
+		argv := make([]string, 0, len(commandWords))
+		for _, word := range commandWords {
+			value, ok := literalWord(word)
+			if !ok || strings.Contains(value, "__GITHUB_EXPRESSION_") {
+				// Dynamic arguments are allowed only after a literal reviewed prefix.
+				argv = append(argv, "__DYNAMIC_ARGUMENT__")
+				continue
+			}
+			argv = append(argv, value)
+		}
+		if key, ok := matchCommand(workflowPath, base, argv, commands); !ok {
+			findings.add("%s executes unreviewed command %s with argv %q", prefix, base, argv)
+		} else {
+			commandReferenced[key] = true
 		}
 		return true
 	})
@@ -869,7 +910,7 @@ func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, err
 }
 
 func main() {
-	var repoArg, allowPath, executablePath string
+	var repoArg, allowPath, executablePath, commandPath string
 	workflowArgs := []string{}
 	args := os.Args[1:]
 	for len(args) > 0 {
@@ -895,6 +936,13 @@ func main() {
 			}
 			executablePath = args[1]
 			args = args[2:]
+		case "--command-allowlist":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "--command-allowlist requires a path")
+				os.Exit(2)
+			}
+			commandPath = args[1]
+			args = args[2:]
 		case "--":
 			workflowArgs = append(workflowArgs, args[1:]...)
 			args = nil
@@ -908,7 +956,7 @@ func main() {
 		}
 	}
 	if repoArg == "" {
-		fmt.Fprintln(os.Stderr, "usage: policytool --repo ROOT [--allowlist FILE] [--executable-allowlist FILE] [WORKFLOW...]")
+		fmt.Fprintln(os.Stderr, "usage: policytool --repo ROOT [--allowlist FILE] [--executable-allowlist FILE] [--command-allowlist FILE] [WORKFLOW...]")
 		os.Exit(2)
 	}
 	repoRoot, err := filepath.Abs(repoArg)
@@ -927,6 +975,9 @@ func main() {
 	if executablePath == "" {
 		executablePath = filepath.Join(repoRoot, ".github", "public-workflow-executable-allowlist.json")
 	}
+	if commandPath == "" {
+		commandPath = filepath.Join(repoRoot, ".github", "public-workflow-command-allowlist.json")
+	}
 	if len(workflowArgs) == 0 {
 		for _, pattern := range []string{"*.yml", "*.yaml"} {
 			matches, globErr := filepath.Glob(filepath.Join(repoRoot, ".github", "workflows", pattern))
@@ -942,32 +993,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	allowFile, err := os.Open(allowPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read allowlist: %v\n", err)
-		os.Exit(1)
-	}
-	defer allowFile.Close()
 	var allowlist []allowEntry
-	decoder := json.NewDecoder(allowFile)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&allowlist); err != nil {
-		fmt.Fprintf(os.Stderr, "parse allowlist: %v\n", err)
+	if err := decodeJSONFile(allowPath, &allowlist); err != nil {
+		fmt.Fprintf(os.Stderr, "read allowlist: %v\n", err)
 		os.Exit(1)
 	}
 
 	findings := &findingSet{}
-	executableFile, err := os.Open(executablePath)
-	if err != nil {
+	var executableList []executableEntry
+	if err := decodeJSONFile(executablePath, &executableList); err != nil {
 		fmt.Fprintf(os.Stderr, "read executable allowlist: %v\n", err)
 		os.Exit(1)
 	}
-	defer executableFile.Close()
-	var executableList []executableEntry
-	executableDecoder := json.NewDecoder(executableFile)
-	executableDecoder.DisallowUnknownFields()
-	if err := executableDecoder.Decode(&executableList); err != nil {
-		fmt.Fprintf(os.Stderr, "parse executable allowlist: %v\n", err)
+	var commandList []commandEntry
+	if err := decodeJSONFile(commandPath, &commandList); err != nil {
+		fmt.Fprintf(os.Stderr, "read command allowlist: %v\n", err)
 		os.Exit(1)
 	}
 	executables := make(map[string]executableEntry)
@@ -982,6 +1022,10 @@ func main() {
 		entry.Path = path.Clean(slashPath)
 		if strings.TrimSpace(entry.Rationale) == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(entry.SHA256) {
 			findings.add("invalid executable allowlist entry %s", entry.Path)
+			continue
+		}
+		if _, exists := executables[entry.Path]; exists {
+			findings.add("duplicate executable allowlist entry %s", entry.Path)
 			continue
 		}
 		abs := filepath.Join(repoRoot, filepath.FromSlash(entry.Path))
@@ -1000,6 +1044,48 @@ func main() {
 			findings.add("executable hash mismatch for %s", entry.Path)
 		}
 		executables[entry.Path] = entry
+	}
+	commands := make(map[string]commandEntry)
+	commandReferenced := make(map[string]bool)
+	for _, entry := range commandList {
+		rawPath := strings.TrimSpace(entry.Path)
+		slashPath := strings.ReplaceAll(rawPath, "\\", "/")
+		if filepath.IsAbs(rawPath) || path.IsAbs(slashPath) || filepath.VolumeName(rawPath) != "" {
+			findings.add("command allowlist path %s must be repository-relative", rawPath)
+			continue
+		}
+		entry.Path = path.Clean(slashPath)
+		if entry.Path == ".." || strings.HasPrefix(entry.Path, "../") {
+			findings.add("command allowlist path %s escapes the repository", rawPath)
+			continue
+		}
+		entry.Command = strings.ToLower(strings.TrimSpace(entry.Command))
+		if entry.Path == "." || !strings.HasPrefix(entry.Path, ".github/workflows/") ||
+			entry.Command == "" || entry.Command != path.Base(entry.Command) || len(entry.ArgvPrefix) == 0 ||
+			strings.TrimSpace(entry.Rationale) == "" {
+			findings.add("invalid command allowlist entry for %s: exact workflow path, command, argvPrefix, and rationale are required", entry.Path)
+			continue
+		}
+		invalidPrefix := false
+		for _, argument := range entry.ArgvPrefix {
+			if argument == "" || strings.Contains(argument, "__GITHUB_EXPRESSION_") {
+				invalidPrefix = true
+			}
+		}
+		if invalidPrefix {
+			findings.add("invalid command allowlist argvPrefix for %s in %s", entry.Command, entry.Path)
+			continue
+		}
+		if knownProviderCommand(entry.Command, entry.ArgvPrefix) {
+			findings.add("provider-capable command %s is categorically unallowlistable in %s", entry.Command, entry.Path)
+			continue
+		}
+		key := commandKey(entry.Path, entry.Command, entry.ArgvPrefix)
+		if _, exists := commands[key]; exists {
+			findings.add("duplicate command allowlist entry %s %q in %s", entry.Command, entry.ArgvPrefix, entry.Path)
+			continue
+		}
+		commands[key] = entry
 	}
 	allowed := make(map[string]allowEntry)
 	for _, entry := range allowlist {
@@ -1153,7 +1239,7 @@ func main() {
 					if len(denyPatterns) > 0 && !pureGuard {
 						findings.add("%s uses provider deny pattern outside a pure rejection guard", prefix)
 					}
-					analysis := inspectShell(prefix, normalized, file, pureGuard, repoRoot, executables, executableReferenced, findings)
+					analysis := inspectShell(prefix, rel, normalized, file, pureGuard, repoRoot, executables, executableReferenced, commands, commandReferenced, findings)
 					providerAuthority = providerAuthority || analysis.providerAuthority
 					hasIntegrationTag = hasIntegrationTag || analysis.hasIntegrationTag
 					hasProviderSDK = hasProviderSDK || analysis.hasProviderSDK
@@ -1193,6 +1279,11 @@ func main() {
 	for key := range executables {
 		if !executableReferenced[key] {
 			findings.add("stale executable allowlist entry %s", key)
+		}
+	}
+	for key, entry := range commands {
+		if !commandReferenced[key] {
+			findings.add("stale command allowlist entry %s %q in %s", entry.Command, entry.ArgvPrefix, entry.Path)
 		}
 	}
 

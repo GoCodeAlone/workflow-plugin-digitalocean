@@ -1,0 +1,182 @@
+[
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "git",
+    "argvPrefix": ["config"],
+    "rationale": "Configure read-only GitHub module authentication for private dependencies."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "go",
+    "argvPrefix": ["test"],
+    "rationale": "Run plugin tests; this deliberately does not grant go run."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "go",
+    "argvPrefix": ["vet"],
+    "rationale": "Run the Go static analyzer over plugin packages."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "wfctl",
+    "argvPrefix": ["plugin", "validate"],
+    "rationale": "Validate the checked-in and release-rewritten plugin descriptors."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "wfctl",
+    "argvPrefix": ["plugin", "conformance"],
+    "rationale": "Run credential-free typed-IaC conformance against the local plugin build."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "mktemp",
+    "argvPrefix": ["-d"],
+    "rationale": "Create an isolated directory for rewritten descriptor validation."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "cp",
+    "argvPrefix": ["plugin.json"],
+    "rationale": "Copy the plugin descriptor into the isolated validation directory."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "cp",
+    "argvPrefix": ["plugin.contracts.json"],
+    "rationale": "Copy the contract descriptor into the isolated validation directory."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "sed",
+    "argvPrefix": ["-i.bak"],
+    "rationale": "Rewrite copied descriptor versions in the isolated validation directory."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "rm",
+    "argvPrefix": ["-f"],
+    "rationale": "Remove sed backup files from the isolated validation directory."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "rm",
+    "argvPrefix": ["-rf"],
+    "rationale": "Remove the isolated descriptor validation directory."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "git",
+    "argvPrefix": ["config"],
+    "rationale": "Configure read-only GitHub module authentication for version comparison."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "go",
+    "argvPrefix": ["list", "-m"],
+    "rationale": "Read resolved module versions without executing Go source."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "gh",
+    "argvPrefix": ["release", "download"],
+    "rationale": "Download the Workflow release's published gRPC version manifest."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "cat",
+    "argvPrefix": ["workflow-grpc-versions.txt"],
+    "rationale": "Display the downloaded non-secret version manifest for diagnostics."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "grep",
+    "argvPrefix": ["^grpc=", "workflow-grpc-versions.txt"],
+    "rationale": "Select the gRPC module version from the downloaded manifest."
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "cut",
+    "argvPrefix": ["-d=", "-f2"],
+    "rationale": "Extract the value from the selected gRPC version record."
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "git",
+    "argvPrefix": ["config"],
+    "rationale": "Configure and later remove read-only GitHub module authentication."
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "jq",
+    "argvPrefix": ["-r", ".minEngineVersion // empty", "plugin.json"],
+    "rationale": "Read the declared minimum engine version from the plugin descriptor."
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "gh",
+    "argvPrefix": ["release", "view"],
+    "rationale": "Read public Workflow release metadata to choose the conformance engine."
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "sort",
+    "argvPrefix": ["-V"],
+    "rationale": "Compare public semantic version strings locally."
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "head",
+    "argvPrefix": ["-n1"],
+    "rationale": "Select the oldest version from the local sorted pair."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "git",
+    "argvPrefix": ["config"],
+    "rationale": "Configure GitHub module authentication needed to build release artifacts."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "wfctl",
+    "argvPrefix": ["plugin", "validate-contract"],
+    "rationale": "Validate the release plugin contract before and after artifact creation."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "wfctl",
+    "argvPrefix": ["plugin", "verify-capabilities"],
+    "rationale": "Verify the built plugin binary reports its declared capabilities."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "uname",
+    "argvPrefix": ["-m"],
+    "rationale": "Select the release artifact matching the GitHub-hosted runner architecture."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "sed",
+    "argvPrefix": ["s/x86_64/amd64/;s/aarch64/arm64/"],
+    "rationale": "Normalize the local runner architecture to Go artifact naming."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "jq",
+    "argvPrefix": ["-r", "--arg", "arch"],
+    "rationale": "Select the built binary for the local runner architecture."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "jq",
+    "argvPrefix": [".[] | {name, type, goos, goarch, path}", "dist/artifacts.json"],
+    "rationale": "Display non-secret artifact metadata when architecture selection fails."
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "gh",
+    "argvPrefix": ["release", "edit"],
+    "rationale": "Publish the GitHub release after artifact verification succeeds."
+  }
+]

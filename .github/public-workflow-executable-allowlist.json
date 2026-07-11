@@ -1,12 +1,12 @@
 [
   {
     "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
-    "sha256": "ca0a886dcc35458d81ce8d940df0efb8a671c9dea997d71f08d6360846cb19eb",
+    "sha256": "b44cc6a45209b1457ecbd0aa4d8da21b1dd8211ed262af1b8b3c19205e08316b",
     "rationale": "Enforces the credential-free public workflow boundary before other CI proof."
   },
   {
     "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
-    "sha256": "a451d649fc331a892fda693c0bdf53f7b52610f4fd1b9b4553c983ee197e2589",
+    "sha256": "97c60b75b8f0601ef9bf8f66b03c5244c4938142aeb8aa7b816aeb011b85063e",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
   },
   {
