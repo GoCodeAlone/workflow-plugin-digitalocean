@@ -403,38 +403,38 @@ func TestTrustGroupThreeStateLifecycle(t *testing.T) {
 	}
 }
 
-func TestPullRequestWorkflowsRejectRepositorySecrets(t *testing.T) {
+func TestPublicWorkflowsRejectRepositorySecrets(t *testing.T) {
 	for name, test := range map[string]struct {
-		pullRequest bool
 		secrets     map[string]bool
 		wantFinding bool
 	}{
-		"repository secret": {true, map[string]bool{"RELEASES_TOKEN": true}, true},
-		"automatic token":   {true, map[string]bool{"GITHUB_TOKEN": true}, false},
-		"release workflow":  {false, map[string]bool{"RELEASES_TOKEN": true}, false},
+		"repository secret": {map[string]bool{"RELEASES_TOKEN": true}, true},
+		"automatic token":   {map[string]bool{"GITHUB_TOKEN": true}, false},
+		"push secret":       {map[string]bool{"DEPLOY_TOKEN": true}, true},
 	} {
 		findings := &findingSet{}
-		validatePullRequestSecrets("fixture "+name, test.pullRequest, test.secrets, findings)
+		validatePublicWorkflowSecrets("fixture "+name, test.secrets, findings)
 		if got := len(findings.items) > 0; got != test.wantFinding {
 			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
 		}
 	}
 }
 
-func TestCredentialFreePullRequestAuthorityIncludesTarget(t *testing.T) {
-	for trigger, want := range map[string]bool{
-		"pull_request":        true,
-		"pull_request_target": true,
-		"push":                false,
-	} {
-		var doc yaml.Node
-		source := "on:\n  " + trigger + ":\njobs: {}\n"
-		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
-			t.Fatal(err)
-		}
-		if got := credentialFreePullRequestAuthority(doc.Content[0]); got != want {
-			t.Errorf("%s credential-free authority = %v, want %v", trigger, got, want)
-		}
+func TestWorkflowCallEnvironmentRejectsAllowlistedSecret(t *testing.T) {
+	const workflowPath = ".github/workflows/reusable.yml"
+	var doc yaml.Node
+	source := "on: workflow_call\njobs:\n  deploy:\n    environment: production\n    uses: acme/platform/.github/workflows/deploy.yml@0123456789012345678901234567890123456789\n    secrets:\n      token: ${{ secrets.RELEASES_TOKEN }}\n"
+	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+		t.Fatal(err)
+	}
+	job := mappingValue(mappingValue(doc.Content[0], "jobs"), "deploy")
+	secrets := secretReferences(job)
+	allowed := map[string]allowEntry{workflowPath + "\x00RELEASES_TOKEN": {Path: workflowPath, Secret: "RELEASES_TOKEN"}}
+	findings := &findingSet{}
+	validateSecretReferences(workflowPath, "fixture workflow_call", secrets, allowed, map[string]bool{}, findings)
+	validatePublicWorkflowSecrets("fixture workflow_call", secrets, findings)
+	if len(findings.items) == 0 {
+		t.Fatal("workflow_call environment accepted an allowlisted repository secret")
 	}
 }
 

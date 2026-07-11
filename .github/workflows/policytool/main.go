@@ -519,19 +519,12 @@ func validateSecretReferences(rel, prefix string, secrets map[string]bool, allow
 	}
 }
 
-func validatePullRequestSecrets(prefix string, pullRequest bool, secrets map[string]bool, findings *findingSet) {
-	if !pullRequest {
-		return
-	}
+func validatePublicWorkflowSecrets(prefix string, secrets map[string]bool, findings *findingSet) {
 	for secret := range secrets {
 		if secret != "GITHUB_TOKEN" {
-			findings.add("%s pull_request workflow references forbidden repository secret %s", prefix, secret)
+			findings.add("%s public workflow references forbidden repository secret %s", prefix, secret)
 		}
 	}
-}
-
-func credentialFreePullRequestAuthority(root *yaml.Node) bool {
-	return triggerPresent(root, "pull_request") || triggerPresent(root, "pull_request_target")
 }
 
 func validateInheritedSecrets(prefix string, secrets *yaml.Node, findings *findingSet) {
@@ -1718,7 +1711,6 @@ func main() {
 		validateSecretReferences(rel, "workflow "+rel, globalSecrets, allowed, referenced, findings)
 		manual := triggerPresent(root, "workflow_dispatch")
 		scheduled := triggerPresent(root, "schedule")
-		pullRequest := credentialFreePullRequestAuthority(root)
 		jobs := mappingValue(root, "jobs")
 		if jobs == nil || jobs.Kind != yaml.MappingNode {
 			findings.add("workflow %s must declare jobs", rel)
@@ -1752,7 +1744,7 @@ func main() {
 			for secret := range localSecrets {
 				jobSecrets[secret] = true
 			}
-			validatePullRequestSecrets(prefix, pullRequest, jobSecrets, findings)
+			validatePublicWorkflowSecrets(prefix, jobSecrets, findings)
 
 			providerAuthority := false
 			hasIntegrationTag := false
