@@ -12,11 +12,11 @@ if GOWORK=off go list -m all | grep -Eq '^mvdan\.cc/sh/v3 '; then
   echo "policy parser dependency leaked into the plugin module graph" >&2
   exit 1
 fi
-if [[ "$(cd "${policytool}" && GOWORK=off go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" != "v3.13.1" ]]; then
+if [[ "$(cd "${policytool}" && GOWORK=off GOFLAGS=-mod=readonly go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" != "v3.13.1" ]]; then
   echo "policy tool must pin mvdan.cc/sh/v3 v3.13.1" >&2
   exit 1
 fi
-(cd "${policytool}" && GOWORK=off go test ./...)
+(cd "${policytool}" && GOWORK=off GOFLAGS=-mod=readonly go test ./...)
 
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
 integrity_extra="${policytool}/extra_linux.go"
@@ -38,6 +38,8 @@ fixture_commands="${tmp_dir}/fixture-commands.json"
 printf '[]\n' >"${fixture_commands}"
 fixture_actions="${tmp_dir}/fixture-actions.json"
 printf '[]\n' >"${fixture_actions}"
+empty_allowlist="${tmp_dir}/empty-allowlist.json"
+printf '[]\n' >"${empty_allowlist}"
 checker="${tmp_dir}/check-public-workflow-policy.sh"
 cat >"${checker}" <<EOF
 #!/usr/bin/env bash
@@ -85,8 +87,31 @@ if [[ "${symlink_status}" -eq 0 ]] || ! grep -Fq -- \
   exit 1
 fi
 
-if ! grep -Fq -- 'exec env GOWORK=off GOFLAGS=-mod=mod go run ./main.go' "${checker_binary}"; then
+if ! grep -Fq -- 'exec env GOWORK=off GOFLAGS=-mod=readonly go run ./main.go' "${checker_binary}"; then
   echo "policytool wrapper does not execute the fixed source file" >&2
+  exit 1
+fi
+if ! grep -Fq -- 'env GOWORK=off GOFLAGS=-mod=readonly go mod download' "${checker_binary}"; then
+  echo "policytool wrapper does not prepare dependencies read-only" >&2
+  exit 1
+fi
+if grep -Fq -- '-mod=mod' "${checker_binary}"; then
+  echo "policytool wrapper permits module mutation" >&2
+  exit 1
+fi
+policytool_hashes_before="$(git hash-object \
+  "${policytool}/main.go" \
+  "${policytool}/main_test.go" \
+  "${policytool}/go.mod" \
+  "${policytool}/go.sum" | tr '\n' ' ')"
+"${checker_binary}"
+policytool_hashes_after="$(git hash-object \
+  "${policytool}/main.go" \
+  "${policytool}/main_test.go" \
+  "${policytool}/go.mod" \
+  "${policytool}/go.sum" | tr '\n' ' ')"
+if [[ "${policytool_hashes_before}" != "${policytool_hashes_after}" ]]; then
+  echo "read-only policytool preparation changed trusted files" >&2
   exit 1
 fi
 
@@ -144,32 +169,32 @@ assert_exact_mutation_rejected \
   "git config key/value" \
   "${repo_root}/.github/workflows/ci.yml" \
   's|insteadOf "https://github.com/"|insteadOf "https://github.example.invalid/"|' \
-  "unreviewed exact invocation of git"
+  "unreviewed exact statement containing git"
 assert_exact_mutation_rejected \
   "wfctl trailing target" \
   "${repo_root}/.github/workflows/ci.yml" \
   's/--strict-contracts/--strict-contracts ./g' \
-  "unreviewed exact invocation of wfctl"
+  "unreviewed exact statement containing wfctl"
 assert_exact_mutation_rejected \
   "GitHub release arguments" \
   "${repo_root}/.github/workflows/release.yml" \
   's/--draft=false/--draft=true/' \
-  "unreviewed exact invocation of gh"
+  "unreviewed exact statement containing gh"
 assert_exact_mutation_rejected \
   "sed target" \
   "${repo_root}/.github/workflows/ci.yml" \
   's/\$tmp_dir\/plugin.json/\$tmp_dir\/plugin.contracts.json/g' \
-  "unreviewed exact invocation of sed"
+  "unreviewed exact statement containing sed"
 assert_exact_mutation_rejected \
   "dynamic trailing expression" \
   "${repo_root}/.github/workflows/ci.yml" \
   's|GOWORK=off go vet ./...|GOWORK=off go vet ./... "${{ vars.EXTRA_TARGET }}"|' \
-  "unreviewed exact invocation of go"
+  "unreviewed exact statement containing go"
 
 for action_mutation in \
   '${{ vars.ACTION_REF }}' \
   'actions/checkout@main' \
-  'actions/checkout@v5' \
+  'actions/checkout@v4' \
   'actions/checkout@0123456789012345678901234567890123456789'; do
   expected="uses unreviewed exact action ${action_mutation}"
   if [[ "${action_mutation}" == '${{ vars.ACTION_REF }}' ]]; then
@@ -178,9 +203,40 @@ for action_mutation in \
   assert_exact_mutation_rejected \
     "action reference ${action_mutation}" \
     "${repo_root}/.github/workflows/ci.yml" \
-    "s/actions\\/checkout@v4/${action_mutation//\//\\/}/g" \
+    "s/actions\\/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5/${action_mutation//\//\\/}/g" \
     "${expected}"
 done
+
+assert_exact_mutation_rejected \
+  "upload-artifact path" \
+  "${repo_root}/.github/workflows/ci.yml" \
+  's/path: conformance-evidence.json/path: other-evidence.json/' \
+  "uses unreviewed exact action actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+assert_exact_mutation_rejected \
+  "repository-dispatch repository" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's|repository: GoCodeAlone/workflow-registry|repository: GoCodeAlone/workflow|' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
+  "repository-dispatch payload" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/"plugin": "digitalocean"/"plugin": "other"/' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
+  "repository-dispatch token" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/secrets.repo_dispatch_token/secrets.GITHUB_TOKEN/' \
+  "uses unreviewed exact action peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697"
+assert_exact_mutation_rejected \
+  "GoReleaser args" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/args: release --clean/args: release --clean --skip=publish/' \
+  "uses unreviewed exact action goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"
+assert_exact_mutation_rejected \
+  "GoReleaser environment" \
+  "${repo_root}/.github/workflows/release.yml" \
+  's/GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}/GITHUB_TOKEN: \${{ secrets.RELEASES_TOKEN }}/' \
+  "uses unreviewed exact action goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"
 
 pass_allowlist="${tmp_dir}/pass-allowlist.json"
 cat >"${pass_allowlist}" <<'JSON'
@@ -204,39 +260,45 @@ cat >"${pass_commands}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
-    "invocationSHA256": "5384574a39b2103666734bbe92565841174832d0b8865a6d5f521eb663438c51",
+    "statementSHA256": "5384574a39b2103666734bbe92565841174832d0b8865a6d5f521eb663438c51",
     "rationale": "Run the exact credential-free integration test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "go",
-    "invocationSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+    "statementSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
     "rationale": "Run the exact credential-free default Go test fixture."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
     "command": "gh",
-    "invocationSHA256": "0a111d913d8601e23bc6e43fa1b4b6a5fa65c44c342a26c23f10bf8fa119827a",
+    "statementSHA256": "0a111d913d8601e23bc6e43fa1b4b6a5fa65c44c342a26c23f10bf8fa119827a",
     "rationale": "Exercise the exact GitHub release upload fixture."
   },
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"echo","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","rationale":"Exact rejection-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","command":"rg","statementSHA256":"552ab348c73a453fe78c6df7a1b2cf0c8381dc11a20908a96a643105c8abfdc7","rationale":"Exact rejection-guard search statement."},
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
     "command": "go",
-    "invocationSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+    "statementSHA256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
     "rationale": "Run the exact credential-free Go test fixture."
-  }
+  },
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"echo","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","rationale":"Exact expression-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml","command":"rg","statementSHA256":"0d3a22321340ce7d2928c4f9b228a94c4ae2e00f5cd9482b48ed0d7b0f2aceab","rationale":"Exact expression-guard search statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"echo","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","rationale":"Exact negative-guard echo statement."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","command":"rg","statementSHA256":"16e6dfba0f3777c91b890a6aa03e083595250d63a6cc015886c4092caab0b07a","rationale":"Exact negative-guard search statement."}
 ]
 JSON
 
 pass_actions="${tmp_dir}/pass-actions.json"
 cat >"${pass_actions}" <<'JSON'
 [
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@v4","rationale":"Exact fixture action reference."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@v5","rationale":"Exact fixture action reference."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@v4","rationale":"Exact fixture action reference."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@v1","rationale":"Exact fixture action reference."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@v7","rationale":"Exact fixture action reference."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@v4","rationale":"Exact fixture action reference."}
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03","rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff","nodeSHA256":"4097668e631432c1244a4dd4d9557c50491bf42112c9ba85e62d3fcf637047d1","rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","nodeSHA256":"0d8a6b42c70a0f3275850fe9d63cfb646c0a9e0d7f6ea1c8b45171a1076060b7","rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956","nodeSHA256":"93dce32c457545dd0624d77c36ec255298b321308974a9cf046e67691e5dd745","rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94","nodeSHA256":"e755472a8b992588d44f5bed60d0ebdf304a0854661bd6b598ca4f6bceafa4b9","rationale":"Exact immutable fixture action node."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml","uses":"peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697","nodeSHA256":"cab2cf5943a542ede48aea46c28a4b26d392cede1cd1685eed568c01fa4f0c39","rationale":"Exact immutable fixture action node."}
 ]
 JSON
 
@@ -247,6 +309,69 @@ JSON
   "${fixtures}/pass.yml" \
   "${fixtures}/pass-negative-guard.yml" \
   "${fixtures}/pass-expression-and-deny-guard.yml"
+
+set +e
+yaml_structure_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-yaml-structure.yml" 2>&1)"
+yaml_structure_status=$?
+set -e
+if [[ "${yaml_structure_status}" -eq 0 ]]; then
+  echo "expected YAML aliases and duplicate keys to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "contains forbidden YAML alias" \
+  "contains duplicate mapping key runs-on" \
+  "contains duplicate mapping key run" \
+  "contains duplicate mapping key uses" \
+  "contains duplicate mapping key VALUE"; do
+  if ! grep -Fq -- "${expected}" <<<"${yaml_structure_output}"; then
+    echo "missing YAML structure diagnostic: ${expected}" >&2
+    printf '%s\n' "${yaml_structure_output}" >&2
+    exit 1
+  fi
+done
+
+statement_secret_allowlist="${tmp_dir}/statement-secret-allowlist.json"
+cat >"${statement_secret_allowlist}" <<'JSON'
+[
+  {
+    "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-statement-authority.yml",
+    "secret": "RELEASES_TOKEN",
+    "rationale": "Mutation fixture proves exact statements reject secret output independently of secret-name review."
+  }
+]
+JSON
+set +e
+statement_output="$("${checker}" \
+  --allowlist "${statement_secret_allowlist}" \
+  "${fixtures}/reject-statement-authority.yml" 2>&1)"
+statement_status=$?
+set -e
+if [[ "${statement_status}" -eq 0 ]]; then
+  echo "expected statement authority mutations to fail policy" >&2
+  exit 1
+fi
+for expected in \
+  "unreviewed exact statement containing go" \
+  "assigns forbidden execution environment variable PATH" \
+  "assigns forbidden execution environment variable BASH_ENV" \
+  "assigns forbidden execution environment variable ENV" \
+  "assigns forbidden execution environment variable SHELLOPTS" \
+  "assigns forbidden execution environment variable LD_PRELOAD" \
+  "assigns forbidden execution environment variable DYLD_INSERT_LIBRARIES" \
+  "redirects to forbidden GitHub command file GITHUB_ENV" \
+  "redirects to forbidden GitHub command file GITHUB_PATH" \
+  "unreviewed exact statement containing echo" \
+  "unreviewed exact statement containing printf" \
+  "uses forbidden dynamic command execution"; do
+  if ! grep -Fq -- "${expected}" <<<"${statement_output}"; then
+    echo "missing statement authority diagnostic: ${expected}" >&2
+    printf '%s\n' "${statement_output}" >&2
+    exit 1
+  fi
+done
 
 reject_allowlist="${tmp_dir}/reject-allowlist.json"
 cat >"${reject_allowlist}" <<'JSON'
@@ -302,8 +427,6 @@ for expected in \
   fi
 done
 
-empty_allowlist="${tmp_dir}/empty-allowlist.json"
-printf '[]\n' >"${empty_allowlist}"
 executable_escape="${tmp_dir}/executable-escape.sh"
 ln -s /dev/null "${executable_escape}"
 executable_escape_rel="${executable_escape#"${repo_root}/"}"
@@ -400,7 +523,7 @@ for expected in \
   "environment value contains provider API api.digitalocean.com" \
   "environment value contains provider SDK marker" \
   "dynamic command execution" \
-  "executes unreviewed exact invocation of eval"; do
+  "executes unreviewed exact statement containing eval"; do
   if ! grep -Fq -- "${expected}" <<<"${env_indirection_output}"; then
     echo "missing expected environment indirection diagnostic: ${expected}" >&2
     printf '%s\n' "${env_indirection_output}" >&2
@@ -598,7 +721,7 @@ cat >"${unsafe_commands}" <<'JSON'
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-unsafe-programs.yml",
     "command": "go",
-    "invocationSHA256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "statementSHA256": "0000000000000000000000000000000000000000000000000000000000000000",
     "rationale": "Mutation: prove an allowlisted command with the wrong subcommand remains rejected."
   }
 ]
@@ -620,7 +743,7 @@ for expected in \
   'workflow .github/workflows/scripts/fixtures/public-workflow-policy/reject-shell-inheritance.yml uses forbidden dynamic shell ${{ vars.DEFAULT_SHELL }}' \
   "job job-python uses forbidden custom shell python" \
   "job job-pwsh uses forbidden custom shell pwsh" \
-  "job job-pwsh executes unreviewed exact invocation of invoke-restmethod" \
+  "job job-pwsh executes unreviewed exact statement containing invoke-restmethod" \
   "job job-custom uses forbidden custom shell fish" \
   "job step-override uses forbidden custom shell powershell"; do
   if ! grep -Fq -- "${expected}" <<<"${shell_inheritance_output}"; then
@@ -662,7 +785,7 @@ for expected in \
   "job rclone-list executes categorically forbidden command rclone" \
   "job s3cmd-list executes categorically forbidden command s3cmd" \
   "job mc-list executes categorically forbidden command mc" \
-  "job unknown-executable executes unreviewed exact invocation of mystery-tool" \
+  "job unknown-executable executes unreviewed exact statement containing mystery-tool" \
   "job sudo-wrapper uses forbidden dynamic command execution"; do
   if ! grep -Fq -- "${expected}" <<<"${unsafe_program_output}"; then
     echo "missing unsafe program diagnostic: ${expected}" >&2
@@ -677,31 +800,31 @@ cat >"${invalid_commands}" <<'JSON'
   {
     "path": "/tmp/absolute.yml",
     "command": "go",
-    "invocationSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "statementSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
     "rationale": "Absolute paths must not grant command authority."
   },
   {
     "path": "../traversal.yml",
     "command": "go",
-    "invocationSHA256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "statementSHA256": "2222222222222222222222222222222222222222222222222222222222222222",
     "rationale": "Traversal must not grant command authority."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "terraform",
-    "invocationSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "statementSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
     "rationale": "Known provider commands are forbidden even with a rationale."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
-    "invocationSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "statementSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "rationale": "Deliberately stale command capability mutation."
   },
   {
     "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
     "command": "go",
-    "invocationSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "statementSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
     "rationale": "Deliberate duplicate command capability mutation."
   }
 ]
@@ -733,12 +856,14 @@ done
 invalid_actions="${tmp_dir}/invalid-actions.json"
 cat >"${invalid_actions}" <<'JSON'
 [
-  {"path":"/tmp/absolute.yml","uses":"actions/checkout@v4","rationale":"Absolute paths must not grant action authority."},
-  {"path":"../traversal.yml","uses":"actions/checkout@v4","rationale":"Traversal must not grant action authority."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"digitalocean/action-doctl@v2","rationale":"Provider actions remain categorically forbidden."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"${{ vars.ACTION_REF }}","rationale":"Dynamic action references remain forbidden."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","rationale":"Deliberately stale exact action mutation."},
-  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","rationale":"Deliberate duplicate exact action mutation."}
+  {"path":"/tmp/absolute.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"1111111111111111111111111111111111111111111111111111111111111111","rationale":"Absolute paths must not grant action authority."},
+  {"path":"../traversal.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"2222222222222222222222222222222222222222222222222222222222222222","rationale":"Traversal must not grant action authority."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"digitalocean/action-doctl@0123456789012345678901234567890123456789","nodeSHA256":"3333333333333333333333333333333333333333333333333333333333333333","rationale":"Provider actions remain categorically forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"${{ vars.ACTION_REF }}","nodeSHA256":"4444444444444444444444444444444444444444444444444444444444444444","rationale":"Dynamic action references remain forbidden."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@v4","nodeSHA256":"6666666666666666666666666666666666666666666666666666666666666666","rationale":"Mutable action tags remain forbidden in trust policy."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@main","nodeSHA256":"7777777777777777777777777777777777777777777777777777777777777777","rationale":"Mutable action branches remain forbidden in trust policy."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","rationale":"Deliberately stale exact action mutation."},
+  {"path":".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml","uses":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","nodeSHA256":"5555555555555555555555555555555555555555555555555555555555555555","rationale":"Deliberate duplicate exact action mutation."}
 ]
 JSON
 set +e
@@ -752,13 +877,18 @@ if [[ "${invalid_actions_status}" -eq 0 ]]; then
   echo "expected invalid action allowlist entries to fail policy" >&2
   exit 1
 fi
+if [[ "$(grep -Fc -- "invalid action allowlist entry" <<<"${invalid_actions_output}")" -lt 3 ]]; then
+  echo "dynamic, tag, and branch action allowlist entries were not all rejected" >&2
+  printf '%s\n' "${invalid_actions_output}" >&2
+  exit 1
+fi
 for expected in \
   "action allowlist path /tmp/absolute.yml must be repository-relative" \
   "action allowlist path ../traversal.yml escapes the repository" \
-  "provider action digitalocean/action-doctl@v2 is categorically unallowlistable" \
+  "provider action digitalocean/action-doctl@0123456789012345678901234567890123456789 is categorically unallowlistable" \
   "invalid action allowlist entry" \
-  "duplicate action allowlist entry actions/checkout@v4" \
-  "stale action allowlist entry actions/checkout@v4"; do
+  "duplicate action allowlist entry actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" \
+  "stale action allowlist entry actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"; do
   if ! grep -Fq -- "${expected}" <<<"${invalid_actions_output}"; then
     echo "missing invalid action allowlist diagnostic: ${expected}" >&2
     printf '%s\n' "${invalid_actions_output}" >&2

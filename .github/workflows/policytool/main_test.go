@@ -91,9 +91,9 @@ func TestExpressionIdentifiersIgnoresStringData(t *testing.T) {
 	}
 }
 
-func TestInvocationDigestCoversCompleteCall(t *testing.T) {
-	original := firstCall(t, parseShell(t, `GOWORK=off env MODE=ci go test -race ./...`))
-	originalDigest, err := invocationDigest(original)
+func TestStatementDigestCoversCompleteCall(t *testing.T) {
+	original := parseShell(t, `GOWORK=off env MODE=ci go test -race ./...`)
+	originalDigest, err := statementDigest(original.Stmts[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,8 @@ func TestInvocationDigestCoversCompleteCall(t *testing.T) {
 		`GOWORK=off env MODE=prod go test -race ./...`,
 		`env MODE=ci go test -race ./...`,
 	} {
-		digest, err := invocationDigest(firstCall(t, parseShell(t, mutation)))
+		file := parseShell(t, mutation)
+		digest, err := statementDigest(file.Stmts[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,11 +123,13 @@ func TestGithubExpressionSourceChangesInvocationDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leftDigest, err := invocationDigest(firstCall(t, parseShell(t, left)))
+	leftFile := parseShell(t, left)
+	leftDigest, err := statementDigest(leftFile.Stmts[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	rightDigest, err := invocationDigest(firstCall(t, parseShell(t, right)))
+	rightFile := parseShell(t, right)
+	rightDigest, err := statementDigest(rightFile.Stmts[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +140,13 @@ func TestGithubExpressionSourceChangesInvocationDigest(t *testing.T) {
 
 func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
 	entry := actionEntry{
-		Path:      ".github/workflows/ci.yml",
-		Uses:      "actions/checkout@v4",
-		Rationale: "Checkout this repository at the reviewed action tag.",
+		Path:       ".github/workflows/ci.yml",
+		Uses:       "actions/checkout@ffffffffffffffffffffffffffffffffffffffff",
+		NodeSHA256: strings.Repeat("a", 64),
+		Rationale:  "Checkout this repository at the reviewed action commit.",
 	}
-	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses): entry}
-	if _, ok := matchAction(entry.Path, entry.Uses, allowed); !ok {
+	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses, entry.NodeSHA256): entry}
+	if _, ok := matchAction(entry.Path, entry.Uses, entry.NodeSHA256, allowed); !ok {
 		t.Fatal("exact reviewed action did not match")
 	}
 	for _, changed := range []string{
@@ -151,11 +155,11 @@ func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
 		"actions/checkout@0123456789012345678901234567890123456789",
 		"${{ vars.ACTION_REF }}",
 	} {
-		if _, ok := matchAction(entry.Path, changed, allowed); ok {
+		if _, ok := matchAction(entry.Path, changed, entry.NodeSHA256, allowed); ok {
 			t.Errorf("changed action %q matched", changed)
 		}
 	}
-	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, allowed); ok {
+	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, entry.NodeSHA256, allowed); ok {
 		t.Fatal("action allowlist leaked across workflow paths")
 	}
 }
@@ -288,7 +292,9 @@ func TestDangerousAssignmentsAndEnvironmentRedirects(t *testing.T) {
 		`SHELLOPTS=xtrace`,
 		`LD_PRELOAD=./hook.so command`,
 		`DYLD_INSERT_LIBRARIES=./hook.dylib command`,
+		`command exec env PATH=/tmp/bin go test ./...`,
 		`echo value >> "$GITHUB_ENV"`,
+		`echo value >> "${GITHUB_ENV:?missing}"`,
 		`printf '%s\n' value >> "$GITHUB_PATH"`,
 	} {
 		file := parseShell(t, source)
