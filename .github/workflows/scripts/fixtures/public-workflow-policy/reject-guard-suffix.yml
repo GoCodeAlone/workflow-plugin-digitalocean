@@ -12,4 +12,4 @@ jobs:
   command-substitution:
     runs-on: ubuntu-latest
     steps:
-      - run: if rg "$(doctl compute droplet list)" internal/; then
+      - run: if rg "$(doctl compute droplet list)" internal/; then exit 1; fi

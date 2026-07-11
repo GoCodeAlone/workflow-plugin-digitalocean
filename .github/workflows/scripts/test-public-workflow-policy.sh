@@ -35,7 +35,8 @@ JSON
 "${checker}" \
   --allowlist "${pass_allowlist}" \
   "${fixtures}/pass.yml" \
-  "${fixtures}/pass-negative-guard.yml"
+  "${fixtures}/pass-negative-guard.yml" \
+  "${fixtures}/pass-expression-and-deny-guard.yml"
 
 reject_allowlist="${tmp_dir}/reject-allowlist.json"
 cat >"${reject_allowlist}" <<'JSON'
@@ -294,6 +295,79 @@ fi
 if ! grep -Fq -- "job command-substitution executes forbidden provider authority: executable provider CLI doctl" <<<"${guard_suffix_output}"; then
   echo "command substitution inside a negative guard bypassed provider CLI detection" >&2
   printf '%s\n' "${guard_suffix_output}" >&2
+  exit 1
+fi
+
+set +e
+command_analysis_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-command-analysis.yml" 2>&1)"
+command_analysis_status=$?
+set -e
+
+if [[ "${command_analysis_status}" -eq 0 ]]; then
+  echo "expected shell command analysis bypasses to fail policy" >&2
+  exit 1
+fi
+for job in \
+  assignment-prefix \
+  command-wrapper \
+  exec-wrapper \
+  sudo-wrapper \
+  env-wrapper \
+  subshell \
+  group \
+  command-substitution; do
+  if ! grep -Fq -- "job ${job} invokes unallowlisted executable script ./scripts/live.sh" <<<"${command_analysis_output}"; then
+    echo "missing AST command diagnostic for ${job}" >&2
+    printf '%s\n' "${command_analysis_output}" >&2
+    exit 1
+  fi
+done
+for job in dynamic-path wrapped-dynamic-command; do
+  if ! grep -Fq -- "job ${job} uses forbidden dynamic command execution" <<<"${command_analysis_output}"; then
+    echo "missing dynamic command diagnostic for ${job}" >&2
+    printf '%s\n' "${command_analysis_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+shell_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-shell.yml" 2>&1)"
+shell_status=$?
+set -e
+
+if [[ "${shell_status}" -eq 0 ]]; then
+  echo "expected custom shells and shell parse failures to fail policy" >&2
+  exit 1
+fi
+# The GitHub expression below is an intentionally literal expected diagnostic.
+# shellcheck disable=SC2016
+for expected in \
+  "job custom-shell uses forbidden custom shell python" \
+  'job dynamic-shell uses forbidden dynamic shell ${{ vars.SHELL }}' \
+  "job invalid-shell-program shell parse failed"; do
+  if ! grep -Fq -- "${expected}" <<<"${shell_output}"; then
+    echo "missing shell policy diagnostic: ${expected}" >&2
+    printf '%s\n' "${shell_output}" >&2
+    exit 1
+  fi
+done
+
+set +e
+deny_execution_output="$("${checker}" \
+  --allowlist "${empty_allowlist}" \
+  "${fixtures}/reject-deny-pattern-execution.yml" 2>&1)"
+deny_execution_status=$?
+set -e
+
+if [[ "${deny_execution_status}" -eq 0 ]] || ! grep -Fq -- \
+  "job execute-deny-value uses provider deny pattern outside a pure rejection guard" \
+  <<<"${deny_execution_output}"; then
+  echo "provider deny pattern escaped its parser-proven guard" >&2
+  printf '%s\n' "${deny_execution_output}" >&2
   exit 1
 fi
 

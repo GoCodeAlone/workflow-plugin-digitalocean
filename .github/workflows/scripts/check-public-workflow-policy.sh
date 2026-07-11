@@ -63,6 +63,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type allowEntry struct {
@@ -152,30 +153,6 @@ func triggerPresent(root *yaml.Node, name string) bool {
 	return false
 }
 
-func lineIsNegativeGuard(line string) bool {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "#") {
-		return true
-	}
-	guardTool := regexp.MustCompile(`(^|[;&|![:space:]])(rg|grep|egrep|fgrep)([[:space:]]|$)`).MatchString(line)
-	if !guardTool || !strings.HasPrefix(line, "if ") {
-		return false
-	}
-	then := strings.LastIndex(line, "; then")
-	if then < 0 || strings.TrimSpace(line[then+len("; then"):]) != "" {
-		return false
-	}
-	condition := strings.TrimSpace(strings.TrimPrefix(line[:then], "if "))
-	if strings.Contains(condition, "$(") || strings.Contains(condition, "`") || strings.Contains(condition, "&&") || strings.Contains(condition, "||") || strings.Contains(condition, ";") {
-		return false
-	}
-	fields := strings.Fields(condition)
-	if len(fields) == 0 {
-		return false
-	}
-	return fields[0] == "rg" || fields[0] == "grep" || fields[0] == "egrep" || fields[0] == "fgrep"
-}
-
 var (
 	secretRefRE    = regexp.MustCompile(`(?i)secrets(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[[[:space:]]*['"]([A-Za-z_][A-Za-z0-9_]*)['"][[:space:]]*\])`)
 	providerCLIRE  = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(doctl|gcloud|az|aws)([^A-Za-z0-9_.-]|$)`)
@@ -191,37 +168,131 @@ var (
 	varsRefRE      = regexp.MustCompile(`(?i)vars(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[[[:space:]]*['"]([A-Za-z_][A-Za-z0-9_]*)['"][[:space:]]*\])`)
 	varsIndexRE    = regexp.MustCompile(`(?i)vars\[[^]\r\n]+\]`)
 	literalVarsIndexRE = regexp.MustCompile(`(?i)^vars\[[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*\]$`)
-	dynamicCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)["']?\$(\{)?[A-Za-z_][A-Za-z0-9_]*`)
-	evalCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)eval([[:space:]]|$)`)
-	shellCCommandRE = regexp.MustCompile(`(^|[;&|][[:space:]]*)(bash|sh)[[:space:]]+-c([[:space:]]|$)`)
+	envAssignmentRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 )
 
-func validateEnvValues(prefix string, node *yaml.Node, findings *findingSet) {
-	if node == nil {
-		return
+func githubExpressions(value string) ([]string, bool) {
+	expressions := []string{}
+	for {
+		start := strings.Index(value, "${{")
+		if start < 0 {
+			return expressions, true
+		}
+		value = value[start+3:]
+		end := strings.Index(value, "}}")
+		if end < 0 {
+			return expressions, false
+		}
+		expressions = append(expressions, strings.TrimSpace(value[:end]))
+		value = value[end+2:]
 	}
-	if node.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			if node.Content[i].Value == "env" && node.Content[i+1].Kind == yaml.MappingNode {
-				env := node.Content[i+1]
-				for j := 0; j+1 < len(env.Content); j += 2 {
-					value := env.Content[j+1].Value
-					if match := providerCLIRE.FindStringSubmatch(value); match != nil {
-						findings.add("%s environment value contains provider CLI %s", prefix, match[2])
+}
+
+func normalizeGithubExpressions(value string) (string, error) {
+	var out strings.Builder
+	index := 0
+	for {
+		start := strings.Index(value, "${{")
+		if start < 0 {
+			out.WriteString(value)
+			return out.String(), nil
+		}
+		out.WriteString(value[:start])
+		value = value[start+3:]
+		end := strings.Index(value, "}}")
+		if end < 0 {
+			return "", fmt.Errorf("unterminated GitHub expression")
+		}
+		fmt.Fprintf(&out, "__GITHUB_EXPRESSION_%d__", index)
+		index++
+		value = value[end+2:]
+	}
+}
+
+func expressionIdentifiers(value string) string {
+	masked := []byte(value)
+	for index := 0; index < len(masked); {
+		quote := masked[index]
+		if quote != '\'' && quote != '"' {
+			index++
+			continue
+		}
+		previous := index - 1
+		for previous >= 0 && (masked[previous] == ' ' || masked[previous] == '\t') {
+			previous--
+		}
+		// Preserve a quoted bracket selector so exact `secrets['NAME']` and
+		// `vars['NAME']` selectors remain statically reviewable. Other string
+		// contents are data, not expression identifiers.
+		preserve := false
+		if previous >= 0 && masked[previous] == '[' {
+			selectorPrefix := strings.TrimSpace(string(masked[:previous]))
+			preserve = regexp.MustCompile(`(?i)(secrets|vars)$`).MatchString(selectorPrefix)
+		}
+		index++
+		for index < len(masked) {
+			if masked[index] == quote {
+				if index+1 < len(masked) && masked[index+1] == quote {
+					if !preserve {
+						masked[index] = ' '
+						masked[index+1] = ' '
 					}
-					if match := providerAPIRE.FindStringSubmatch(value); match != nil {
-						findings.add("%s environment value contains provider API %s", prefix, match[1])
-					}
-					if providerSDKRE.MatchString(value) {
-						findings.add("%s environment value contains provider SDK marker", prefix)
-					}
+					index += 2
+					continue
 				}
+				index++
+				break
 			}
+			if !preserve {
+				masked[index] = ' '
+			}
+			index++
 		}
 	}
-	for _, child := range node.Content {
-		validateEnvValues(prefix, child, findings)
+	return string(masked)
+}
+
+func providerMarker(value string) bool {
+	return providerCLIRE.MatchString(value) || providerAPIRE.MatchString(value) || providerSDKRE.MatchString(value)
+
+}
+
+func envValues(prefix string, env *yaml.Node, allowDenyPattern bool, findings *findingSet) map[string]string {
+	patterns := make(map[string]string)
+	if env == nil {
+		return patterns
 	}
+	if env.Kind != yaml.MappingNode {
+		findings.add("%s uses unsupported environment shape", prefix)
+		return patterns
+	}
+	for i := 0; i+1 < len(env.Content); i += 2 {
+		name := env.Content[i].Value
+		valueNode := env.Content[i+1]
+		if valueNode.Kind != yaml.ScalarNode {
+			findings.add("%s environment variable %s uses unsupported value shape", prefix, name)
+			continue
+		}
+		value := valueNode.Value
+		if strings.HasSuffix(name, "_DENY_PATTERN") && providerMarker(value) {
+			if allowDenyPattern {
+				patterns[name] = value
+			} else {
+				findings.add("%s provider deny pattern %s must be step-local", prefix, name)
+			}
+			continue
+		}
+		if match := providerCLIRE.FindStringSubmatch(value); match != nil {
+			findings.add("%s environment value contains provider CLI %s", prefix, match[2])
+		}
+		if match := providerAPIRE.FindStringSubmatch(value); match != nil {
+			findings.add("%s environment value contains provider API %s", prefix, match[1])
+		}
+		if providerSDKRE.MatchString(value) {
+			findings.add("%s environment value contains provider SDK marker", prefix)
+		}
+	}
+	return patterns
 }
 
 func secretReferences(node *yaml.Node) map[string]bool {
@@ -229,12 +300,16 @@ func secretReferences(node *yaml.Node) map[string]bool {
 	scalars(node, &values)
 	secrets := make(map[string]bool)
 	for _, value := range values {
-		for _, match := range secretRefRE.FindAllStringSubmatch(value, -1) {
-			name := match[1]
-			if name == "" {
-				name = match[2]
+		expressions, _ := githubExpressions(value)
+		for _, expression := range expressions {
+			expression = expressionIdentifiers(expression)
+			for _, match := range secretRefRE.FindAllStringSubmatch(expression, -1) {
+				name := match[1]
+				if name == "" {
+					name = match[2]
+				}
+				secrets[strings.ToUpper(name)] = true
 			}
-			secrets[strings.ToUpper(name)] = true
 		}
 	}
 	return secrets
@@ -256,30 +331,40 @@ func validateCredentialSelectors(prefix string, node *yaml.Node, findings *findi
 	values := []string{}
 	scalars(node, &values)
 	for _, value := range values {
-		if wholeSecretsRE.MatchString(value) {
-			findings.add("%s uses forbidden whole secrets context", prefix)
+		expressions, complete := githubExpressions(value)
+		if !complete {
+			findings.add("%s contains an unterminated GitHub expression", prefix)
 		}
-		for _, selector := range secretWildcardRE.FindAllString(value, -1) {
-			findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
-		}
-		for _, selector := range secretIndexRE.FindAllString(value, -1) {
-			if !literalSecretIndexRE.MatchString(selector) {
+		for _, expression := range expressions {
+			originalExpression := expression
+			expression = expressionIdentifiers(originalExpression)
+			if wholeSecretsRE.MatchString(expression) {
+				findings.add("%s uses forbidden whole secrets context", prefix)
+			}
+			for _, selector := range secretWildcardRE.FindAllString(expression, -1) {
 				findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
 			}
-		}
-		for _, match := range varsRefRE.FindAllStringSubmatch(value, -1) {
-			name := match[1]
-			if name == "" {
-				name = match[2]
+			for _, bounds := range secretIndexRE.FindAllStringIndex(expression, -1) {
+				selector := originalExpression[bounds[0]:bounds[1]]
+				if !literalSecretIndexRE.MatchString(selector) {
+					findings.add("%s uses forbidden dynamic secret selector %s", prefix, selector)
+				}
 			}
-			name = strings.ToUpper(name)
-			if knownCloudSecret(name) {
-				findings.add("%s references known cloud credential variable reference %s", prefix, name)
+			for _, match := range varsRefRE.FindAllStringSubmatch(expression, -1) {
+				name := match[1]
+				if name == "" {
+					name = match[2]
+				}
+				name = strings.ToUpper(name)
+				if knownCloudSecret(name) {
+					findings.add("%s references known cloud credential variable reference %s", prefix, name)
+				}
 			}
-		}
-		for _, selector := range varsIndexRE.FindAllString(value, -1) {
-			if !literalVarsIndexRE.MatchString(selector) {
-				findings.add("%s uses forbidden dynamic variable selector %s", prefix, selector)
+			for _, bounds := range varsIndexRE.FindAllStringIndex(expression, -1) {
+				selector := originalExpression[bounds[0]:bounds[1]]
+				if !literalVarsIndexRE.MatchString(selector) {
+					findings.add("%s uses forbidden dynamic variable selector %s", prefix, selector)
+				}
 			}
 		}
 	}
@@ -425,23 +510,308 @@ func pathEscapes(rel string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
 }
 
-func scriptCommands(line string) []string {
-	segments := regexp.MustCompile(`[;&]+|[[:space:]]+\|[[:space:]]+|\|\|`).Split(line, -1)
-	result := []string{}
-	for _, segment := range segments {
-		fields := strings.Fields(strings.TrimSpace(segment))
-		if len(fields) == 0 { continue }
-		i := 0
-		if fields[i] == "if" || fields[i] == "then" || fields[i] == "sudo" || fields[i] == "env" { i++ }
-		if i >= len(fields) { continue }
-		if fields[i] == "bash" || fields[i] == "sh" || fields[i] == "source" || fields[i] == "." { i++ }
-		if i >= len(fields) { continue }
-		candidate := strings.Trim(fields[i], `"'`)
-		if strings.HasPrefix(candidate, "./") || strings.HasPrefix(candidate, "../") || filepath.IsAbs(candidate) {
-			result = append(result, candidate)
+func literalParts(parts []syntax.WordPart, out *strings.Builder) bool {
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			out.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			out.WriteString(part.Value)
+		case *syntax.DblQuoted:
+			if !literalParts(part.Parts, out) {
+				return false
+			}
+		default:
+			return false
 		}
 	}
-	return result
+	return true
+}
+
+func literalWord(word *syntax.Word) (string, bool) {
+	if word == nil {
+		return "", false
+	}
+	var out strings.Builder
+	if !literalParts(word.Parts, &out) {
+		return "", false
+	}
+	return out.String(), true
+}
+
+func exactParameterParts(parts []syntax.WordPart) (string, bool) {
+	if len(parts) != 1 {
+		return "", false
+	}
+	switch part := parts[0].(type) {
+	case *syntax.ParamExp:
+		if part.Param == nil || part.Excl || part.Length || part.Width || part.IsSet || part.Index != nil || part.Slice != nil || part.Repl != nil || part.Exp != nil || part.Names != 0 || len(part.Modifiers) != 0 {
+			return "", false
+		}
+		return part.Param.Value, true
+	case *syntax.DblQuoted:
+		return exactParameterParts(part.Parts)
+	default:
+		return "", false
+	}
+}
+
+func exactParameterWord(word *syntax.Word) (string, bool) {
+	if word == nil {
+		return "", false
+	}
+	return exactParameterParts(word.Parts)
+}
+
+func skipWrapperOptions(args []*syntax.Word, index int, wrapper string) (int, bool) {
+	for index < len(args) {
+		value, literal := literalWord(args[index])
+		if !literal {
+			return index, false
+		}
+		if value == "--" {
+			return index + 1, true
+		}
+		if wrapper == "env" && envAssignmentRE.MatchString(value) {
+			index++
+			continue
+		}
+		if !strings.HasPrefix(value, "-") || value == "-" {
+			return index, true
+		}
+		// Options with separate values are deliberately rejected instead of
+		// guessing where the wrapped command begins.
+		if wrapper == "sudo" && map[string]bool{"-u": true, "--user": true, "-g": true, "--group": true, "-h": true, "--host": true, "-p": true, "--prompt": true, "-C": true, "--close-from": true}[value] {
+			return index, false
+		}
+		index++
+	}
+	return index, true
+}
+
+func resolvedCommand(call *syntax.CallExpr) (*syntax.Word, []*syntax.Word, bool) {
+	args := call.Args
+	index := 0
+	for index < len(args) {
+		value, literal := literalWord(args[index])
+		if !literal || strings.Contains(value, "__GITHUB_EXPRESSION_") {
+			return args[index], nil, false
+		}
+		base := path.Base(value)
+		switch base {
+		case "command", "exec", "sudo", "env":
+			index++
+			var ok bool
+			index, ok = skipWrapperOptions(args, index, base)
+			if !ok {
+				if index < len(args) {
+					return args[index], nil, false
+				}
+				return nil, nil, false
+			}
+			continue
+		case "bash", "sh", "source", ".":
+			index++
+			for index < len(args) {
+				argument, ok := literalWord(args[index])
+				if !ok {
+					return args[index], nil, false
+				}
+				if argument == "--" {
+					index++
+					break
+				}
+				if !strings.HasPrefix(argument, "-") || argument == "-" {
+					break
+				}
+				index++
+			}
+			if index >= len(args) {
+				return nil, nil, true
+			}
+			return args[index], args[index+1:], true
+		default:
+			return args[index], args[index+1:], true
+		}
+	}
+	return nil, nil, true
+}
+
+func directCall(stmt *syntax.Stmt) (*syntax.CallExpr, bool) {
+	if stmt == nil || stmt.Negated || stmt.Background || len(stmt.Redirs) != 0 {
+		return nil, false
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	return call, ok && len(call.Assigns) == 0
+}
+
+func pureRejectionGuard(file *syntax.File, requiredPatterns map[string]string) bool {
+	if file == nil || len(file.Stmts) != 1 {
+		return false
+	}
+	clause, ok := file.Stmts[0].Cmd.(*syntax.IfClause)
+	if !ok || clause.Else != nil || len(clause.Cond) != 1 || len(clause.Then) == 0 {
+		return false
+	}
+	condition, ok := directCall(clause.Cond[0])
+	if !ok || len(condition.Args) < 3 {
+		return false
+	}
+	tool, literal := literalWord(condition.Args[0])
+	if !literal || !map[string]bool{"rg": true, "grep": true, "egrep": true, "fgrep": true}[path.Base(tool)] {
+		return false
+	}
+	patternIndex := 1
+	for patternIndex < len(condition.Args) {
+		value, ok := literalWord(condition.Args[patternIndex])
+		if !ok || !strings.HasPrefix(value, "-") || value == "-" {
+			break
+		}
+		patternIndex++
+	}
+	if patternIndex >= len(condition.Args)-1 {
+		return false
+	}
+	if len(requiredPatterns) > 0 {
+		name, ok := exactParameterWord(condition.Args[patternIndex])
+		if !ok {
+			return false
+		}
+		if _, ok := requiredPatterns[name]; !ok || len(requiredPatterns) != 1 {
+			return false
+		}
+	} else if _, ok := literalWord(condition.Args[patternIndex]); !ok {
+		return false
+	}
+	for _, argument := range condition.Args[patternIndex+1:] {
+		if _, ok := literalWord(argument); !ok {
+			return false
+		}
+	}
+	failed := false
+	for _, stmt := range clause.Then {
+		call, ok := directCall(stmt)
+		if !ok || len(call.Args) == 0 {
+			return false
+		}
+		command, ok := literalWord(call.Args[0])
+		if !ok {
+			return false
+		}
+		switch path.Base(command) {
+		case "echo", "printf":
+			for _, argument := range call.Args[1:] {
+				if _, ok := literalWord(argument); !ok {
+					return false
+				}
+			}
+		case "false":
+			if len(call.Args) != 1 {
+				return false
+			}
+			failed = true
+		case "exit":
+			if len(call.Args) != 2 {
+				return false
+			}
+			code, ok := literalWord(call.Args[1])
+			if !ok || code == "0" {
+				return false
+			}
+			failed = true
+		default:
+			return false
+		}
+	}
+	return failed
+}
+
+type shellAnalysis struct {
+	providerAuthority bool
+	hasIntegrationTag bool
+	hasProviderSDK bool
+	namedLive bool
+}
+
+func inspectShell(prefix, source string, file *syntax.File, pureGuard bool, repoRoot string, executables map[string]executableEntry, executableReferenced map[string]bool, findings *findingSet) shellAnalysis {
+	analysis := shellAnalysis{
+		hasIntegrationTag: integrationRE.MatchString(source),
+		hasProviderSDK: providerSDKRE.MatchString(source),
+		namedLive: namedLiveRE.MatchString(source),
+	}
+	if analysis.namedLive {
+		analysis.providerAuthority = true
+		findings.add("%s invokes forbidden named live test", prefix)
+	}
+	if !pureGuard {
+		if match := providerAPIRE.FindStringSubmatch(source); match != nil {
+			analysis.providerAuthority = true
+			findings.add("%s executes forbidden fixed provider API %s", prefix, match[1])
+		}
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		call, ok := node.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		first, firstLiteral := literalWord(call.Args[0])
+		if firstLiteral {
+			base := path.Base(first)
+			if base == "eval" {
+				findings.add("%s uses forbidden eval", prefix)
+			}
+			if base == "bash" || base == "sh" {
+				for _, argument := range call.Args[1:] {
+					value, literal := literalWord(argument)
+					if literal && value == "-c" {
+						findings.add("%s uses forbidden shell -c", prefix)
+						break
+					}
+				}
+			}
+		}
+		commandWord, _, resolved := resolvedCommand(call)
+		if commandWord == nil {
+			if !resolved {
+				findings.add("%s uses forbidden dynamic command execution", prefix)
+			}
+			return true
+		}
+		command, literal := literalWord(commandWord)
+		if !resolved || !literal || strings.Contains(command, "__GITHUB_EXPRESSION_") {
+			findings.add("%s uses forbidden dynamic command execution", prefix)
+			return true
+		}
+		base := path.Base(command)
+		if map[string]bool{"doctl": true, "gcloud": true, "az": true, "aws": true}[base] {
+			analysis.providerAuthority = true
+			findings.add("%s executes forbidden provider authority: executable provider CLI %s", prefix, base)
+		}
+		if strings.HasPrefix(command, "./") || strings.HasPrefix(command, "../") || filepath.IsAbs(command) {
+			candidate := command
+			if !filepath.IsAbs(candidate) {
+				candidate = filepath.Join(repoRoot, candidate)
+			}
+			abs, err := filepath.Abs(candidate)
+			if err != nil {
+				findings.add("%s cannot resolve workflow executable path %s", prefix, command)
+				return true
+			}
+			lexicalRel, err := filepath.Rel(repoRoot, abs)
+			if err != nil || pathEscapes(lexicalRel) {
+				findings.add("%s workflow executable path %s is outside repository", prefix, command)
+				return true
+			}
+			scriptRel := filepath.ToSlash(lexicalRel)
+			if _, ok := executables[scriptRel]; !ok {
+				findings.add("%s invokes unallowlisted executable script %s", prefix, command)
+			} else {
+				executableReferenced[scriptRel] = true
+			}
+		}
+		return true
+	})
+	return analysis
 }
 
 func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, error) {
@@ -580,7 +950,7 @@ func main() {
 		}
 		root := doc.Content[0]
 		checkPermissions("workflow "+rel, mappingValue(root, "permissions"), findings)
-		validateEnvValues("workflow "+rel, root, findings)
+		envValues("workflow "+rel, mappingValue(root, "env"), false, findings)
 		credentialVariables := make(map[string]bool)
 		knownCredentialVariables(root, credentialVariables)
 		for name := range credentialVariables {
@@ -612,7 +982,7 @@ func main() {
 			checkRunnerSelector(prefix, mappingValue(job, "runs-on"), findings)
 
 			checkPermissions(prefix, mappingValue(job, "permissions"), findings)
-			validateEnvValues(prefix, job, findings)
+			envValues(prefix, mappingValue(job, "env"), false, findings)
 
 			jobSecrets := make(map[string]bool)
 			for secret := range globalSecrets {
@@ -644,61 +1014,42 @@ func main() {
 							findings.add("%s %s", prefix, diagnostic)
 						}
 					}
+					denyPatterns := envValues(prefix, mappingValue(step, "env"), true, findings)
 					run := mappingValue(step, "run")
 					if run == nil || run.Kind != yaml.ScalarNode {
+						if len(denyPatterns) > 0 {
+							findings.add("%s uses provider deny pattern outside a pure rejection guard", prefix)
+						}
 						continue
 					}
-					for _, line := range strings.Split(run.Value, "\n") {
-						trimmed := strings.TrimSpace(line)
-						for _, command := range scriptCommands(trimmed) {
-							candidate := command
-							if !filepath.IsAbs(candidate) { candidate = filepath.Join(repoRoot, candidate) }
-							abs, _ := filepath.Abs(candidate)
-							lexicalRel, _ := filepath.Rel(repoRoot, abs)
-							if pathEscapes(lexicalRel) {
-								findings.add("%s workflow executable path %s is outside repository", prefix, command)
-								continue
-							}
-							scriptRel := filepath.ToSlash(lexicalRel)
-							if _, ok := executables[scriptRel]; !ok {
-								findings.add("%s invokes unallowlisted executable script %s", prefix, command)
-							} else {
-								executableReferenced[scriptRel] = true
-							}
-						}
-						if dynamicCommandRE.MatchString(trimmed) {
-							findings.add("%s uses forbidden dynamic command execution", prefix)
-						}
-						if evalCommandRE.MatchString(trimmed) {
-							findings.add("%s uses forbidden eval", prefix)
-						}
-						if shellCCommandRE.MatchString(trimmed) {
-							findings.add("%s uses forbidden shell -c", prefix)
-						}
-						if trimmed == "" || strings.HasPrefix(trimmed, "#") || lineIsNegativeGuard(trimmed) {
-							continue
-						}
-						if match := providerCLIRE.FindStringSubmatch(trimmed); match != nil {
-							providerAuthority = true
-							findings.add("%s executes forbidden provider authority: executable provider CLI %s", prefix, match[2])
-						}
-						if match := providerAPIRE.FindStringSubmatch(trimmed); match != nil {
-							providerAuthority = true
-							findings.add("%s executes forbidden fixed provider API %s", prefix, match[1])
-						}
-						if providerSDKRE.MatchString(trimmed) {
-							hasProviderSDK = true
-						}
-						if integrationRE.MatchString(trimmed) {
-							hasIntegrationTag = true
-						}
-						if namedLiveRE.MatchString(trimmed) {
-							namedLive = true
-							providerAuthority = true
-							findings.add("%s invokes forbidden named live test", prefix)
+					shell := mappingValue(step, "shell")
+					if shell != nil {
+						if shell.Kind != yaml.ScalarNode || strings.Contains(shell.Value, "${{") {
+							findings.add("%s uses forbidden dynamic shell %s", prefix, shell.Value)
+						} else if strings.TrimSpace(shell.Value) != "bash" {
+							findings.add("%s uses forbidden custom shell %s", prefix, shell.Value)
 						}
 					}
-				}
+					normalized, err := normalizeGithubExpressions(run.Value)
+					if err != nil {
+						findings.add("%s shell parse failed: %v", prefix, err)
+						continue
+					}
+					file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(normalized), rel+":"+jobName)
+					if err != nil {
+						findings.add("%s shell parse failed: %v", prefix, err)
+						continue
+					}
+					pureGuard := pureRejectionGuard(file, denyPatterns)
+					if len(denyPatterns) > 0 && !pureGuard {
+						findings.add("%s uses provider deny pattern outside a pure rejection guard", prefix)
+					}
+					analysis := inspectShell(prefix, normalized, file, pureGuard, repoRoot, executables, executableReferenced, findings)
+					providerAuthority = providerAuthority || analysis.providerAuthority
+					hasIntegrationTag = hasIntegrationTag || analysis.hasIntegrationTag
+					hasProviderSDK = hasProviderSDK || analysis.hasProviderSDK
+					namedLive = namedLive || analysis.namedLive
+					}
 			}
 			for secret := range jobSecrets {
 				if knownCloudSecret(secret) {
