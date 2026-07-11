@@ -109,7 +109,11 @@ printf '{}\n' >"${invalid_protection}"
 cat >"${classic_protection}" <<'JSON'
 {
   "enforce_admins":{"enabled":true},
-  "required_status_checks":{"strict":true,"contexts":["Public Workflow Policy / policy"]},
+  "required_status_checks":{
+    "strict":true,
+    "contexts":["Public Workflow Policy / policy"],
+    "checks":[{"context":"Public Workflow Policy / policy","app_id":15368}]
+  },
   "required_pull_request_reviews":{
     "required_approving_review_count":1,
     "dismiss_stale_reviews":true,
@@ -127,7 +131,7 @@ cat >"${ruleset_protection}" <<'JSON'
   "conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},
   "rules":[
     {"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}},
-    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy"}]}}
+    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy","integration_id":15368}]}}
   ]
 }
 JSON
@@ -136,7 +140,7 @@ PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${c
 PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE=1 PUBLIC_WORKFLOW_CLASSIC_JSON_FILE="${invalid_protection}" PUBLIC_WORKFLOW_RULESET_JSON_FILE="${ruleset_protection}" \
   "${protection_verifier}" example/repo main >/dev/null
 
-assert_protection_strict_rejected() {
+assert_protection_rejected() {
   local kind="$1"
   local fixture="$2"
   local classic_file="${invalid_protection}"
@@ -152,18 +156,34 @@ assert_protection_strict_rejected() {
   local status=$?
   set -e
   if [[ "${status}" -eq 0 ]]; then
-    echo "${kind} protection accepted missing/false strict status checks" >&2
+    echo "${kind} protection accepted an invalid producer/freshness fixture: ${fixture}" >&2
     exit 1
   fi
 }
 jq 'del(.required_status_checks.strict)' "${classic_protection}" >"${classic_protection}.missing"
 jq '.required_status_checks.strict=false' "${classic_protection}" >"${classic_protection}.false"
-assert_protection_strict_rejected classic "${classic_protection}.missing"
-assert_protection_strict_rejected classic "${classic_protection}.false"
+assert_protection_rejected classic "${classic_protection}.missing"
+assert_protection_rejected classic "${classic_protection}.false"
+jq 'del(.required_status_checks.checks[0].app_id)' "${classic_protection}" >"${classic_protection}.producer-missing"
+jq '.required_status_checks.checks[0].app_id=99999' "${classic_protection}" >"${classic_protection}.producer-wrong"
+jq '.required_status_checks.checks[0].app_id=null' "${classic_protection}" >"${classic_protection}.producer-null"
+jq 'del(.required_status_checks.checks)' "${classic_protection}" >"${classic_protection}.legacy-context-only"
+assert_protection_rejected classic "${classic_protection}.producer-missing"
+assert_protection_rejected classic "${classic_protection}.producer-wrong"
+assert_protection_rejected classic "${classic_protection}.producer-null"
+assert_protection_rejected classic "${classic_protection}.legacy-context-only"
 jq 'del(.rules[1].parameters.strict_required_status_checks_policy)' "${ruleset_protection}" >"${ruleset_protection}.missing"
 jq '.rules[1].parameters.strict_required_status_checks_policy=false' "${ruleset_protection}" >"${ruleset_protection}.false"
-assert_protection_strict_rejected ruleset "${ruleset_protection}.missing"
-assert_protection_strict_rejected ruleset "${ruleset_protection}.false"
+assert_protection_rejected ruleset "${ruleset_protection}.missing"
+assert_protection_rejected ruleset "${ruleset_protection}.false"
+jq 'del(.rules[1].parameters.required_status_checks[0].integration_id)' "${ruleset_protection}" >"${ruleset_protection}.producer-missing"
+jq '.rules[1].parameters.required_status_checks[0].integration_id=99999' "${ruleset_protection}" >"${ruleset_protection}.producer-wrong"
+jq '.rules[1].parameters.required_status_checks[0].integration_id=null' "${ruleset_protection}" >"${ruleset_protection}.producer-null"
+jq '.rules[1].parameters.required_status_checks=[] | .rules[1].parameters.contexts=["Public Workflow Policy / policy"]' "${ruleset_protection}" >"${ruleset_protection}.legacy-context-only"
+assert_protection_rejected ruleset "${ruleset_protection}.producer-missing"
+assert_protection_rejected ruleset "${ruleset_protection}.producer-wrong"
+assert_protection_rejected ruleset "${ruleset_protection}.producer-null"
+assert_protection_rejected ruleset "${ruleset_protection}.legacy-context-only"
 
 lifecycle_root="${tmp_dir}/lifecycle"
 mkdir -p "${lifecycle_root}/.github/workflows"

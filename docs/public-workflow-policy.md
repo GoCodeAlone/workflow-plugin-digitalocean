@@ -58,14 +58,66 @@ The same stable `Public Workflow Policy / policy` check also runs on pushes to
 `main`, comparing `github.event.before` as trusted policy authority with the new
 commit as candidate data. Task completion remains contingent on repository
 branch protection: changes must use pull requests, require at least one
-approval with stale approvals dismissed, require this exact status check,
-block direct pushes, enforce administrators, and permit no bypass actors. After
-the guard is merged and the required check is provisioned, an administrator
-must run:
+approval with stale approvals dismissed, require this exact status check from
+the GitHub Actions app, block direct pushes, enforce administrators, and permit
+no bypass actors. The producer binding is GitHub Actions app slug
+`github-actions`, app/integration ID `15368`; a legacy name-only context is not
+sufficient.
+
+For classic branch protection, preserve the repository's other required checks
+while provisioning this exact producer-bound check. For example:
 
 ```bash
+repo=GoCodeAlone/workflow-plugin-digitalocean
+branch=main
+context='Public Workflow Policy / policy'
+gh api "repos/${repo}/branches/${branch}/protection/required_status_checks" |
+  jq --arg context "${context}" --argjson app_id 15368 '
+    .strict = true
+    | .checks = ([.checks[]? | select(.context != $context)]
+      + [{context: $context, app_id: $app_id}])
+    | {strict, contexts: (.contexts // []), checks}
+  ' |
+  gh api --method PATCH \
+    "repos/${repo}/branches/${branch}/protection/required_status_checks" \
+    --input -
+```
+
+For a repository ruleset, the update payload's `required_status_checks` rule
+must contain the producer ID as well; submit the full existing ruleset update
+payload with a rule shaped like:
+
+```json
+{
+  "type": "required_status_checks",
+  "parameters": {
+    "strict_required_status_checks_policy": true,
+    "required_status_checks": [
+      {
+        "context": "Public Workflow Policy / policy",
+        "integration_id": 15368
+      }
+    ]
+  }
+}
+```
+
+```bash
+gh api --method PUT \
+  "repos/GoCodeAlone/workflow-plugin-digitalocean/rulesets/RULESET_ID" \
+  --input ruleset-update.json
+```
+
+Confirm the observed check-run producer, then verify the configured branch or
+ruleset:
+
+```bash
+gh api repos/GoCodeAlone/workflow-plugin-digitalocean/commits/main/check-runs \
+  --jq '.check_runs[] | select(.name == "Public Workflow Policy / policy") | {name, app: {slug: .app.slug, id: .app.id}}'
+
 ./.github/workflows/scripts/verify-public-workflow-branch-protection.sh GoCodeAlone/workflow-plugin-digitalocean main
 ```
 
 This script is read-only. It verifies classic branch protection or an active
-ruleset and never changes repository settings.
+ruleset, requires strict freshness and exact producer ID `15368`, and never
+changes repository settings.

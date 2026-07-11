@@ -12,7 +12,7 @@
     "workflowPath": ".github/workflows/ci.yml",
     "contextSHA256": "101f1581a29fc9ed407faf36a68b3b72b76f0da61e118c9d53998d7ff9824ff6",
     "state": "active",
-    "sha256": "6f57b7b5f9e8fe8e48064532fe7030d514d56f5f680e4c656170ec058ccd40f4",
+    "sha256": "3b29c9dfe5372f177e299e2b62c2a3b04e62fea22be23fd86711a8de474388f2",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
   },
   {
