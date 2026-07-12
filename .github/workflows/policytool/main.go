@@ -1126,7 +1126,23 @@ func inspectStatementGuards(prefix string, stmt *syntax.Stmt, findings *findingS
 }
 
 func safeExecutionEnvironmentAssignment(name, value string, literal bool) bool {
-	return name == "GOWORK" && literal && value == "off"
+	if !literal {
+		return false
+	}
+	switch name {
+	case "GOWORK":
+		return value == "off"
+	case "GIT_ASKPASS":
+		return value == "/bin/false"
+	case "GIT_CONFIG_GLOBAL":
+		return value == "/dev/null"
+	case "GIT_CONFIG_NOSYSTEM":
+		return value == "1"
+	case "GIT_TERMINAL_PROMPT":
+		return value == "0"
+	default:
+		return false
+	}
 }
 
 func environmentWordAssignment(word *syntax.Word) (name, value string, literal, assignment bool) {

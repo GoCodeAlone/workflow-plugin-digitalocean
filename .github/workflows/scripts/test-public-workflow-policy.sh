@@ -7,11 +7,15 @@ repo_root="$(git rev-parse --show-toplevel)"
 checker_binary="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 fixtures="${repo_root}/.github/workflows/scripts/fixtures/public-workflow-policy"
 policytool="${repo_root}/.github/workflows/policytool"
+integration_test="${repo_root}/internal/drivers/database_trusted_sources_integration_test.go"
 
-if GOWORK=off go list -m all | grep -Eq '^mvdan\.cc/sh/v3 '; then
+# BEGIN root-module-graph-check
+root_module_graph="$(GOWORK=off GOFLAGS=-mod=readonly go list -m all)"
+if grep -Eq '^mvdan\.cc/sh/v3 ' <<<"${root_module_graph}"; then
   echo "policy parser dependency leaked into the plugin module graph" >&2
   exit 1
 fi
+# END root-module-graph-check
 if [[ "$(cd "${policytool}" && GOWORK=off GOFLAGS=-mod=readonly go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" != "v3.13.1" ]]; then
   echo "policy tool must pin mvdan.cc/sh/v3 v3.13.1" >&2
   exit 1
@@ -20,7 +24,35 @@ fi
 
 governance_workflow="${repo_root}/.github/workflows/public-workflow-policy.yml"
 protection_verifier="${repo_root}/.github/workflows/scripts/verify-public-workflow-branch-protection.sh"
+if [[ "$(grep -Fc -- 'uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5' "${governance_workflow}")" -ne 1 ]]; then
+  echo "public policy must check out only the trusted base" >&2
+  exit 1
+fi
+for required_candidate_fetch in \
+  'Fetch candidate as inert data' \
+  'CANDIDATE_REPOSITORY:' \
+  'CANDIDATE_SHA:' \
+  'GIT_ASKPASS: /bin/false' \
+  'GIT_CONFIG_GLOBAL: /dev/null' \
+  'GIT_CONFIG_NOSYSTEM: 1' \
+  'GIT_TERMINAL_PROMPT: 0' \
+  'origin="https://github.com/${CANDIDATE_REPOSITORY}.git"' \
+  'credential.helper=' \
+  'core.askPass=/bin/false' \
+  'credential.interactive=never' \
+  'http.https://github.com/.extraheader=' \
+  'git -C candidate-source archive --worktree-attributes --format=tar FETCH_HEAD' \
+  'find candidate -type l -print -quit'; do
+  grep -Fq -- "${required_candidate_fetch}" "${governance_workflow}"
+done
+if rg -n -- 'Check out candidate|path: candidate|persist-credentials: true|git (checkout|switch|worktree)' "${governance_workflow}"; then
+  echo "candidate policy input can enter an executable checkout" >&2
+  exit 1
+fi
+grep -Fq -- 't.Fatalf("trusted-source app resolution failed (%T); resource identifiers are redacted", err)' "${integration_test}"
+grep -Fq -- 't.Fatalf("independent Apps API cross-check failed (%T); resource identifiers are redacted", listErr)' "${integration_test}"
 grep -Fq -- "github.event.before" "${governance_workflow}"
+grep -Fq -- "This one-time push executes newly merged main, never PR-head data." "${governance_workflow}"
 grep -Fq -- "0d368a29ba572e050c62cba90ae56908abbd4156" "${governance_workflow}"
 if grep -Fq -- "0d368a29ba572e050c62cba90ae56908abbd4155" "${governance_workflow}" || \
   grep -Fq -- "github.event.before != '0000000000000000000000000000000000000000'" "${governance_workflow}"; then
@@ -80,6 +112,146 @@ fixture_actions="${tmp_dir}/fixture-actions.json"
 printf '[]\n' >"${fixture_actions}"
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
+
+module_graph_probe="${tmp_dir}/module-graph-probe.sh"
+awk '
+  $0 == "# BEGIN root-module-graph-check" { in_probe=1; next }
+  $0 == "# END root-module-graph-check" { exit }
+  in_probe { print }
+' "$0" >"${module_graph_probe}"
+fake_go_bin="${tmp_dir}/fake-go-bin"
+mkdir -p "${fake_go_bin}"
+cat >"${fake_go_bin}/go" <<'BASH'
+#!/usr/bin/env bash
+exit 42
+BASH
+chmod +x "${fake_go_bin}/go"
+set +e
+PATH="${fake_go_bin}:$PATH" bash -euo pipefail "${module_graph_probe}" >/dev/null 2>&1
+module_graph_failure_status=$?
+set -e
+if [[ "${module_graph_failure_status}" -ne 42 ]]; then
+  echo "root module graph command failure did not fail closed" >&2
+  exit 1
+fi
+
+candidate_fetch_script="${tmp_dir}/fetch-candidate.sh"
+awk '
+  $0 == "      - name: Fetch candidate as inert data" { in_step=1; next }
+  in_step && $0 == "        run: |" { in_run=1; next }
+  in_run && /^      - name:/ { exit }
+  in_run { sub(/^          /, ""); print }
+' "${governance_workflow}" >"${candidate_fetch_script}"
+fake_bin="${tmp_dir}/fake-bin"
+fake_archive="${tmp_dir}/fake-archive"
+mkdir -p "${fake_bin}" "${fake_archive}/.github/workflows"
+printf 'name: inert candidate\n' >"${fake_archive}/.github/workflows/inert.yml"
+cat >"${fake_bin}/git" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${GIT_ASKPASS}" == /bin/false ]]
+[[ "${GIT_CONFIG_GLOBAL}" == /dev/null ]]
+[[ "${GIT_CONFIG_NOSYSTEM}" == 1 ]]
+[[ "${GIT_TERMINAL_PROMPT}" == 0 ]]
+printf '%s\n' "$*" >>"${FAKE_GIT_LOG}"
+case " $* " in
+  *" init --quiet "*) ;;
+  *" fetch "*)
+    [[ "$*" == *"https://github.com/example/repo.git ${CANDIDATE_SHA}"* ]]
+    ;;
+  *" rev-parse "*) printf '%s\n' "${FAKE_FETCHED_SHA:-${CANDIDATE_SHA}}" ;;
+  *" archive "*)
+    if [[ -n "${FAKE_REAL_ARCHIVE_REPO:-}" ]]; then
+      archive_attributes=()
+      if [[ " $* " == *" --worktree-attributes "* ]]; then
+        archive_attributes+=(--worktree-attributes)
+      fi
+      /usr/bin/git -C "${FAKE_REAL_ARCHIVE_REPO}" archive "${archive_attributes[@]}" --format=tar HEAD
+    else
+      /usr/bin/tar -cf - -C "${FAKE_ARCHIVE_ROOT}" .
+    fi
+    ;;
+  *) echo "unexpected fake git invocation: $*" >&2; exit 2 ;;
+esac
+BASH
+chmod +x "${fake_bin}/git"
+
+run_candidate_fetch() {
+  local workdir="$1"
+  local repository="$2"
+  local sha="$3"
+  local archive_root="$4"
+  mkdir -p "${workdir}"
+  (
+    cd "${workdir}"
+    PATH="${fake_bin}:$PATH" \
+      CANDIDATE_REPOSITORY="${repository}" \
+      CANDIDATE_SHA="${sha}" \
+      GIT_ASKPASS=/bin/false \
+      GIT_CONFIG_GLOBAL=/dev/null \
+      GIT_CONFIG_NOSYSTEM=1 \
+      GIT_TERMINAL_PROMPT=0 \
+      FAKE_GIT_LOG="${workdir}/git.log" \
+      FAKE_ARCHIVE_ROOT="${archive_root}" \
+      bash -euo pipefail "${candidate_fetch_script}"
+  )
+}
+
+candidate_sha=0123456789012345678901234567890123456789
+candidate_fetch_good="${tmp_dir}/candidate-fetch-good"
+run_candidate_fetch "${candidate_fetch_good}" example/repo "${candidate_sha}" "${fake_archive}"
+test -f "${candidate_fetch_good}/candidate/.github/workflows/inert.yml"
+grep -Fq -- "credential.helper=" "${candidate_fetch_good}/git.log"
+grep -Fq -- "core.askPass=/bin/false" "${candidate_fetch_good}/git.log"
+grep -Fq -- "credential.interactive=never" "${candidate_fetch_good}/git.log"
+grep -Fq -- "http.https://github.com/.extraheader=" "${candidate_fetch_good}/git.log"
+grep -Fq -- "https://github.com/example/repo.git ${candidate_sha}" "${candidate_fetch_good}/git.log"
+
+for invalid_candidate in \
+  'bad-repository|example/repo?token=leak|0123456789012345678901234567890123456789' \
+  'short-sha|example/repo|0123456789'; do
+  IFS='|' read -r label repository sha <<<"${invalid_candidate}"
+  if run_candidate_fetch "${tmp_dir}/candidate-${label}" "${repository}" "${sha}" "${fake_archive}" >/dev/null 2>&1; then
+    echo "candidate fetch accepted ${label}" >&2
+    exit 1
+  fi
+done
+
+mismatched_candidate_sha=ffffffffffffffffffffffffffffffffffffffff
+candidate_fetch_mismatch="${tmp_dir}/candidate-fetch-mismatch"
+if FAKE_FETCHED_SHA="${mismatched_candidate_sha}" \
+  run_candidate_fetch "${candidate_fetch_mismatch}" example/repo "${candidate_sha}" "${fake_archive}" >/dev/null 2>&1; then
+  echo "candidate fetch accepted a mismatched fetched commit" >&2
+  exit 1
+fi
+if grep -Fq -- " archive " "${candidate_fetch_mismatch}/git.log"; then
+  echo "candidate fetch archived data before verifying commit identity" >&2
+  exit 1
+fi
+
+fake_symlink_archive="${tmp_dir}/fake-symlink-archive"
+mkdir -p "${fake_symlink_archive}/.github/workflows"
+ln -s ../../outside "${fake_symlink_archive}/.github/workflows/escape.yml"
+if run_candidate_fetch "${tmp_dir}/candidate-symlink" example/repo "${candidate_sha}" "${fake_symlink_archive}" >/dev/null 2>&1; then
+  echo "candidate fetch accepted a symlink path escape" >&2
+  exit 1
+fi
+
+real_attribute_repo="${tmp_dir}/real-attribute-repo"
+mkdir -p "${real_attribute_repo}/.github/workflows"
+git -C "${real_attribute_repo}" init --quiet
+git -C "${real_attribute_repo}" config user.name policy-test
+git -C "${real_attribute_repo}" config user.email policy-test@example.invalid
+git -C "${real_attribute_repo}" config commit.gpgsign false
+printf '.github/workflows/hidden.yml export-ignore\n' >"${real_attribute_repo}/.gitattributes"
+printf 'name: must remain visible\n' >"${real_attribute_repo}/.github/workflows/hidden.yml"
+git -C "${real_attribute_repo}" add .
+git -C "${real_attribute_repo}" commit --quiet -m fixture
+rm -rf "${real_attribute_repo}/.gitattributes" "${real_attribute_repo}/.github"
+candidate_fetch_attributes="${tmp_dir}/candidate-fetch-attributes"
+FAKE_REAL_ARCHIVE_REPO="${real_attribute_repo}" \
+  run_candidate_fetch "${candidate_fetch_attributes}" example/repo "${candidate_sha}" "${fake_archive}"
+test -f "${candidate_fetch_attributes}/candidate/.github/workflows/hidden.yml"
 
 bootstrap_selector="${tmp_dir}/select-policy-root.sh"
 awk '
@@ -743,6 +915,21 @@ assert_exact_mutation_rejected \
   "${repo_root}/.github/workflows/release.yml" \
   's/--draft=false/--draft=true/' \
   "unreviewed exact statement containing gh"
+assert_exact_mutation_rejected \
+  "candidate fixed GitHub origin" \
+  "${repo_root}/.github/workflows/public-workflow-policy.yml" \
+  's|https://github.com/\${CANDIDATE_REPOSITORY}.git|https://example.com/\${CANDIDATE_REPOSITORY}.git|' \
+  "uses unreviewed exact action actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+assert_exact_mutation_rejected \
+  "candidate credential isolation" \
+  "${repo_root}/.github/workflows/public-workflow-policy.yml" \
+  '/-c credential.helper=/d' \
+  "uses unreviewed exact action actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+assert_exact_mutation_rejected \
+  "candidate symlink rejection" \
+  "${repo_root}/.github/workflows/public-workflow-policy.yml" \
+  's/find candidate -type l/find candidate -type f/' \
+  "uses unreviewed exact action actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 assert_exact_mutation_rejected \
   "release ancestry command removed" \
   "${repo_root}/.github/workflows/release.yml" \

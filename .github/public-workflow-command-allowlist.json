@@ -651,39 +651,39 @@
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "$assignment",
     "statementSHA256": "6e78bfd0781f308df8a82c819888f28647df16892ba5a7cef1571b725e102383",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact bootstrap root assignment."
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "$assignment",
-    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact bootstrap guard assignment."
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "[",
-    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact bootstrap condition."
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "echo",
-    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact bootstrap failure output."
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "exit",
-    "statementSHA256": "baecda6b3ea3cb657e58eada1eddf0c6fa40500385f841571b88d09d098074f8",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact bootstrap failure exit."
   },
@@ -691,7 +691,7 @@
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "echo",
     "statementSHA256": "7c133076e6ce17d413f1327ea6d975f452d350aba142430d9ad85847205e36b8",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact policy-root output."
   },
@@ -699,7 +699,7 @@
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "cd",
     "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact selected-root scan."
   },
@@ -707,8 +707,152 @@
     "path": ".github/workflows/public-workflow-policy.yml",
     "command": "check-public-workflow-policy.sh",
     "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact selected-root policy wrapper."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "0e17e768c1484e9def2346c58a2c32d337d4c33d780f0ffc79504af0c40ecba7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Construct only the validated fixed GitHub HTTPS candidate origin."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "66d1ee88edc672ead2282e1e159bc382cc6fad2c13a86c6ce585e0082a006b8d",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Capture the fetched commit identity before exporting candidate data."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "6af7f417e806699121e4d583e17b42321a812a4b8237364a263b970d48dc6132",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Capture any candidate symlink path for fail-closed rejection."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "mkdir",
+    "statementSHA256": "42f84c05333b2c7011f332ebca981a05c457d59e7595b13dac5dee7f58429d60",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Create isolated Git object and inert candidate-data directories."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "9919b241412c88da2b0a86cbeaab201cc2323a2fd0c957e2f726ebc62b7282a6",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Initialize an isolated object database without a candidate worktree."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "0cf020cfd2b573841c37a0529d43d5b53f9b318028b28b3536b2f6aff30f02bc",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fetch one exact candidate commit with credential sources disabled."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "66d1ee88edc672ead2282e1e159bc382cc6fad2c13a86c6ce585e0082a006b8d",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Resolve and bind the fetched commit identity."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "2dc46d037c2bf0885d2c864a2d1f4b7c6b204acccc1f374ae455291145e20150",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Export candidate tree objects as inert tar data without checkout."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "tar",
+    "statementSHA256": "2dc46d037c2bf0885d2c864a2d1f4b7c6b204acccc1f374ae455291145e20150",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Extract the Git-generated candidate archive into its isolated data directory."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "find",
+    "statementSHA256": "6af7f417e806699121e4d583e17b42321a812a4b8237364a263b970d48dc6132",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Find and reject candidate symlinks before trusted scanning."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "4ade2e44c08380b704763da57c411f70fc54eebcabf0abd0277746786def0bf8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report an invalid candidate repository without echoing its value."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "4ade2e44c08380b704763da57c411f70fc54eebcabf0abd0277746786def0bf8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on an invalid candidate repository."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "c7f1a421fa15eeab86ac50981d3a6b99248925a1dc7d62f2847e9a82efe2a4a1",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report an invalid candidate SHA without echoing its value."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "c7f1a421fa15eeab86ac50981d3a6b99248925a1dc7d62f2847e9a82efe2a4a1",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on an invalid candidate SHA."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "fe9e84eb32be5ac99349d7e60340785a6e5b3750dcecf795514c53ec76253516",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report a fetched commit mismatch without exposing identifiers."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "fe9e84eb32be5ac99349d7e60340785a6e5b3750dcecf795514c53ec76253516",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed when fetched and requested commits differ."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "ff503c4cc7be7d35246d5c16eca55f3af89544a6ad9ffc6bf0bb0cbe4a199d19",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report forbidden candidate symlink data without its path."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "ff503c4cc7be7d35246d5c16eca55f3af89544a6ad9ffc6bf0bb0cbe4a199d19",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on any candidate symlink."
   }
 ]

@@ -516,6 +516,34 @@ func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
 	}
 }
 
+func TestOnlyFailClosedGitEnvironmentAssignmentsAreSafe(t *testing.T) {
+	for _, source := range []string{
+		`GIT_ASKPASS=/bin/false git fetch`,
+		`GIT_CONFIG_GLOBAL=/dev/null git fetch`,
+		`GIT_CONFIG_NOSYSTEM=1 git fetch`,
+		`GIT_TERMINAL_PROMPT=0 git fetch`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) != 0 {
+			t.Errorf("fail-closed Git environment in %q was rejected: %v", source, findings.items)
+		}
+	}
+
+	for _, source := range []string{
+		`GIT_ASKPASS=./candidate-helper git fetch`,
+		`GIT_CONFIG_GLOBAL=./candidate-config git fetch`,
+		`GIT_CONFIG_NOSYSTEM=0 git fetch`,
+		`GIT_TERMINAL_PROMPT=1 git fetch`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("unsafe Git environment in %q was accepted", source)
+		}
+	}
+}
+
 func TestAuthorizationContextBindsCompleteWorkflow(t *testing.T) {
 	parseMapping := func(source string) *yaml.Node {
 		t.Helper()

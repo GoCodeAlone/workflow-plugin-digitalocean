@@ -60,7 +60,7 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 	}
 	resolved, err := d.resolveAppNamesMap(ctx, raw)
 	if err != nil {
-		t.Fatal("trusted-source app resolution failed; resource identifiers are redacted")
+		t.Fatalf("trusted-source app resolution failed (%T); resource identifiers are redacted", err)
 	}
 
 	gotUUID, ok := resolved[appName]
@@ -77,7 +77,7 @@ func TestDatabaseDriver_TrustedSources_AppNameResolution_Live(t *testing.T) {
 	for {
 		apps, resp, listErr := godoClient.Apps.List(ctx, opts)
 		if listErr != nil {
-			t.Fatal("independent Apps API cross-check failed; resource identifiers are redacted")
+			t.Fatalf("independent Apps API cross-check failed (%T); resource identifiers are redacted", listErr)
 		}
 		for _, app := range apps {
 			if app.Spec != nil && app.Spec.Name == appName {

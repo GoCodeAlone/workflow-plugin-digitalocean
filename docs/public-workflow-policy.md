@@ -2,9 +2,14 @@
 
 Public workflow changes are checked by `.github/workflows/public-workflow-policy.yml`.
 The `pull_request_target` job executes only SHA-pinned actions and the analyzer,
-wrapper, module, and trust manifests from the trusted base checkout. The pull
-request checkout is stored separately and read only as policy input. Candidate
-actions, scripts, Go files, modules, and trust manifests are never executed.
+wrapper, module, and trust manifests from the trusted base checkout. Candidate
+data is fetched without credentials from a validated `https://github.com`
+repository and exact 40-hex commit, exported with
+`git archive --worktree-attributes` so candidate attributes cannot hide files,
+and rejected if it contains symlinks. No candidate Git worktree is checked out,
+credentials are not persisted, and candidate actions, scripts, Go files,
+modules, and trust
+manifests are never executed.
 The job has only `contents: read`, uses GitHub-hosted runners, and receives no
 cloud credentials or OIDC authority.
 Every public workflow, regardless of trigger or call graph, rejects repository
@@ -70,7 +75,9 @@ rejected by the base analyzer.
 The one-time bootstrap recognizes only pre-policy base commit
 `0d368a29ba572e050c62cba90ae56908abbd4156`. If and only if a push reports that
 exact `github.event.before` and the trusted checkout lacks the policy files, the
-candidate hash-verified, readonly wrapper self-validates the candidate data.
+newly merged `main` hash-verified, readonly wrapper self-validates the merged
+data. This exception runs only on that exact push; pull-request head data is
+never selected as an executable policy root.
 Zero, adjacent, unknown, or later missing-policy bases fail closed. If `main`
 moves before bootstrap merges, rebase and update this exact SHA through review;
 never replace it with a generic missing-policy skip. After bootstrap,

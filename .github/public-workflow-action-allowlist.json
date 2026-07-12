@@ -107,23 +107,15 @@
     "path": ".github/workflows/public-workflow-policy.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "8ddc920b847e5e03515a92d8be49290bd9039f458fffcdeea7ad0a30f48e15dc",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact trusted checkout."
   },
   {
     "path": ".github/workflows/public-workflow-policy.yml",
-    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "nodeSHA256": "f282c6c71fc53419253c53a8ae0a234c5bbbd327dd9c441379b366e5b23dcadb",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
-    "state": "active",
-    "rationale": "Exact candidate checkout."
-  },
-  {
-    "path": ".github/workflows/public-workflow-policy.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "3c2f0c49ba03bc87e0aeebcd40257f3285d9b3e4a0b79982f795d6bfd5117bf9",
-    "contextSHA256": "481cb6fa9ce076e91736234798c7e03c4db609c301a43abf28edf99cfda1e8d7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact selected policy Go setup."
   }
