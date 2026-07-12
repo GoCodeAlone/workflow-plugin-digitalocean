@@ -4,7 +4,7 @@
     "workflowPath": ".github/workflows/ci.yml",
     "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
     "state": "active",
-    "sha256": "18d9d22a56315ab190730417dcd993325d442f7135ee769f563d087dd90604fa",
+    "sha256": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
     "rationale": "Enforces the credential-free public workflow boundary before other CI proof."
   },
   {
@@ -12,7 +12,7 @@
     "workflowPath": ".github/workflows/ci.yml",
     "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
     "state": "active",
-    "sha256": "64bb38f51f14bb4056d6b9885ddf7c4adf101499cd929d0d1b83fb9ee8b4d585",
+    "sha256": "6078b95f58c16be0b7d87a614c6364899658c05563bc6a7ef76564f0c29dce64",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
   },
   {
@@ -20,7 +20,7 @@
     "workflowPath": ".github/workflows/public-workflow-policy.yml",
     "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
-    "sha256": "18d9d22a56315ab190730417dcd993325d442f7135ee769f563d087dd90604fa",
+    "sha256": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
     "rationale": "Runs only the trusted policy wrapper for candidate-data scanning."
   },
   {

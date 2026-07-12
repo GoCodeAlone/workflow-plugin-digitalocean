@@ -576,6 +576,49 @@ func TestAuthorizationContextBindsCompleteWorkflow(t *testing.T) {
 	}
 }
 
+func TestNormalizePathResolvesRelativeToRepositoryRoot(t *testing.T) {
+	root := t.TempDir()
+	workflowDir := filepath.Join(root, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := filepath.Join(workflowDir, "ci.yml")
+	if err := os.WriteFile(workflowPath, []byte("name: CI\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := normalizePath(root, resolvedRoot, ".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("normalize relative workflow path: %v", err)
+	}
+	if got != ".github/workflows/ci.yml" {
+		t.Fatalf("normalized workflow path = %q, want .github/workflows/ci.yml", got)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.yml")
+	if err := os.WriteFile(outside, []byte("name: outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizePath(root, resolvedRoot, outside); err == nil {
+		t.Fatal("absolute workflow path outside root was accepted")
+	}
+	if _, err := normalizePath(root, resolvedRoot, "../outside.yml"); err == nil {
+		t.Fatal("relative workflow path outside root was accepted")
+	}
+
+	symlink := filepath.Join(workflowDir, "escape.yml")
+	if err := os.Symlink(outside, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizePath(root, resolvedRoot, ".github/workflows/escape.yml"); err == nil {
+		t.Fatal("workflow symlink escaping root was accepted")
+	}
+}
+
 func TestAssignmentOnlyCallIsRecognized(t *testing.T) {
 	file := parseShell(t, `SAFE_VALUE=one`)
 	call := firstCall(t, file)

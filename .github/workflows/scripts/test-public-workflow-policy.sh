@@ -664,6 +664,30 @@ policytool_hashes_before="$(git hash-object \
   "${policytool}/go.mod" \
   "${policytool}/go.sum" | tr '\n' ' ')"
 "${checker_binary}"
+ci_secret="${tmp_dir}/ci-secret.json"
+ci_executable="${tmp_dir}/ci-executable.json"
+ci_command="${tmp_dir}/ci-command.json"
+ci_action="${tmp_dir}/ci-action.json"
+ci_presence="${tmp_dir}/ci-presence.json"
+jq '[.[] | select(.path == ".github/workflows/ci.yml")]' \
+  "${repo_root}/.github/public-workflow-secret-allowlist.json" >"${ci_secret}"
+jq '[.[] | select(.workflowPath == ".github/workflows/ci.yml")]' \
+  "${repo_root}/.github/public-workflow-executable-allowlist.json" >"${ci_executable}"
+jq '[.[] | select(.path == ".github/workflows/ci.yml")]' \
+  "${repo_root}/.github/public-workflow-command-allowlist.json" >"${ci_command}"
+jq '[.[] | select(.path == ".github/workflows/ci.yml")]' \
+  "${repo_root}/.github/public-workflow-action-allowlist.json" >"${ci_action}"
+jq '[.[] | select(.path == ".github/workflows/ci.yml")]' \
+  "${repo_root}/.github/public-workflow-presence-allowlist.json" >"${ci_presence}"
+ci_policy_args=(
+  --allowlist "${ci_secret}"
+  --executable-allowlist "${ci_executable}"
+  --command-allowlist "${ci_command}"
+  --action-allowlist "${ci_action}"
+  --presence-allowlist "${ci_presence}"
+)
+(cd "${policytool}" && \
+  "${checker_binary}" "${ci_policy_args[@]}" ".github/workflows/ci.yml")
 policytool_hashes_after="$(git hash-object \
   "${policytool}/main.go" \
   "${policytool}/main_test.go" \
@@ -750,6 +774,24 @@ if [[ "${candidate_test_status}" -eq 0 ]] || ! grep -Fq -- \
   exit 1
 fi
 cp "${repo_root}/.github/workflows/scripts/test-public-workflow-policy.sh" "${candidate_policy_test}"
+
+(cd "${policytool}" && \
+  "${checker_binary}" --scan-root "${candidate_root}" \
+    "${ci_policy_args[@]}" ".github/workflows/ci.yml")
+
+printf 'name: Outside candidate root\n' >"${tmp_dir}/outside.yml"
+set +e
+relative_outside_output="$(cd "${policytool}" && \
+  "${checker_binary}" --scan-root "${candidate_root}" \
+    "${ci_policy_args[@]}" "../outside.yml" 2>&1)"
+relative_outside_status=$?
+set -e
+if [[ "${relative_outside_status}" -eq 0 ]] || ! grep -Fq -- \
+  "workflow path ../outside.yml is outside repository" <<<"${relative_outside_output}"; then
+  echo "relative workflow path escaped alternate scan root" >&2
+  printf '%s\n' "${relative_outside_output}" >&2
+  exit 1
+fi
 
 cat >"${candidate_root}/.github/workflows/candidate-live.yml" <<'YAML'
 name: Candidate live cloud workflow

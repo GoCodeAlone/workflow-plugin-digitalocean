@@ -1299,8 +1299,15 @@ func inspectShell(prefix, workflowPath, contextSHA256, source string, file *synt
 	return analysis
 }
 
+func absolutePathFromRoot(root, workflowPath string) (string, error) {
+	if !filepath.IsAbs(workflowPath) {
+		workflowPath = filepath.Join(root, workflowPath)
+	}
+	return filepath.Abs(workflowPath)
+}
+
 func normalizePath(repoRoot, resolvedRepoRoot, workflowPath string) (string, error) {
-	abs, err := filepath.Abs(workflowPath)
+	abs, err := absolutePathFromRoot(repoRoot, workflowPath)
 	if err != nil {
 		return "", err
 	}
@@ -1450,7 +1457,11 @@ func main() {
 		if pathErr != nil {
 			continue
 		}
-		data, readErr := os.ReadFile(workflowPath)
+		abs, pathErr := absolutePathFromRoot(scanRoot, workflowPath)
+		if pathErr != nil {
+			continue
+		}
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			continue
 		}
@@ -1678,7 +1689,12 @@ func main() {
 			findings.add("%v", err)
 			continue
 		}
-		data, err := os.ReadFile(workflowPath)
+		abs, err := absolutePathFromRoot(scanRoot, workflowPath)
+		if err != nil {
+			findings.add("resolve workflow path %s: %v", workflowPath, err)
+			continue
+		}
+		data, err := os.ReadFile(abs)
 		if err != nil {
 			findings.add("read workflow %s: %v", rel, err)
 			continue
