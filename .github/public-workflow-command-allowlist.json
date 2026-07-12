@@ -1,0 +1,858 @@
+[
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "$assignment",
+    "statementSHA256": "cce7b2dcf90f57e6c0debcae2ec8f47163c98bb92c8897577af9633e6091549b",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "check-public-workflow-policy.sh",
+    "statementSHA256": "059267b9a877a8957428b61e6450583c9962076265d2e5021c62503cbaaa80cd",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed check-public-workflow-policy.sh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "cp",
+    "statementSHA256": "0d014a1d348020afc447050504e37ef90fff840616f0bd14bbe55fa8691ff82c",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed cp statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "cp",
+    "statementSHA256": "f24c02e0a37916516a87e3adb67605ee89a9829472e4b8c1ea728f5e6b30fc13",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed cp statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "echo",
+    "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "exit",
+    "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "go",
+    "statementSHA256": "4b2eb9bc1a70c92294c2a9f9ff2429166f819eec67e05a3db30b46dfc3ea08de",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed go statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "go",
+    "statementSHA256": "f9f85ad974896d0638b921502dcc30e4a553f92830be8bdc9914a8959bf142ee",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed go statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "mktemp",
+    "statementSHA256": "cce7b2dcf90f57e6c0debcae2ec8f47163c98bb92c8897577af9633e6091549b",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed mktemp statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "rm",
+    "statementSHA256": "3da3a2022e982564e297bf3d72804a5c1681565348f74bd7aa037e6b0270d972",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed rm statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "rm",
+    "statementSHA256": "55776ebdb126dba0c3b4ff10113a6308b3322726b60c7ad3d327eed567a58c5c",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed rm statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "rm",
+    "statementSHA256": "abca00ffde9ce2b84108aa4b5161a54703373b74d9cd4d64625103d19db1b800",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed rm statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "sed",
+    "statementSHA256": "3da3a2022e982564e297bf3d72804a5c1681565348f74bd7aa037e6b0270d972",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed sed statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "sed",
+    "statementSHA256": "55776ebdb126dba0c3b4ff10113a6308b3322726b60c7ad3d327eed567a58c5c",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed sed statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "test",
+    "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "test-public-workflow-policy.sh",
+    "statementSHA256": "c133baf851f841a2a19da61077e346d5f5d6d7640e23b310a3c11f8307370a2a",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed test-public-workflow-policy.sh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "wfctl",
+    "statementSHA256": "10a8deeda60dd3240448a5f198fa8b22207e27f405c1bc21fd9178b8d27b94bf",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "wfctl",
+    "statementSHA256": "67815ba97241cf4f93fa278d1412e0fae91e87afc65f43fe52d211243a2bb95e",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "command": "wfctl",
+    "statementSHA256": "95886645768adfe207686bd3667365dff6bcdd9a4fdf24a4365b54afaf9fbd75",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "$assignment",
+    "statementSHA256": "093331b1b84d1c58079d5c0b8d2f058a975a324025abb22cf7ed2ca69a06a9e7",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "$assignment",
+    "statementSHA256": "23d2e852a8f1e9f31d8edec389b1e351c4d08625b40254eceb377bce7936cc44",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "$assignment",
+    "statementSHA256": "3fe77edde162ad628d6e62b08745f5e3d43e3e20646382a60e282cc682d6e9fe",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "[",
+    "statementSHA256": "6fd2cada34c437016a55a26dbfc7cc72bf6babdd9e3543c25456b9f7914f4126",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "cat",
+    "statementSHA256": "6b2ff2f0d7b1ee5941a00f3f793b16bc6b53ff2c6f059fde18accca794dcf185",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed cat statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "cut",
+    "statementSHA256": "3fe77edde162ad628d6e62b08745f5e3d43e3e20646382a60e282cc682d6e9fe",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed cut statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "396d6ead0a61ae03e911dbdc4a6064078f19cbc009bfb764c25c204e4fc1f4e2",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "5e842948011cffc9e9bc86629f1b0e3adf449fa79ca052764149cd24ca041904",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "6fd2cada34c437016a55a26dbfc7cc72bf6babdd9e3543c25456b9f7914f4126",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "72a5e116d623153ebc4430601ef5c237c6ec831065b3dcc1e541baaf03b6ccd1",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "873120afab23901b35757b80951550983705d568f7e68325bd8551f42908fff1",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "cd750043ce0c430f2e48be66f7fc48ef4849b18c41d88e254127bf57f5d63a7c",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "echo",
+    "statementSHA256": "f6e6a7f788e7e81dee63baed644740f3744121ca71ab95911e17004ae2614312",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "exit",
+    "statementSHA256": "6fd2cada34c437016a55a26dbfc7cc72bf6babdd9e3543c25456b9f7914f4126",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "gh",
+    "statementSHA256": "a776380d0ddae8595fabac7c961f30f3c5091ed3a9d6fffa2c2a31f44cd985d4",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed gh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "go",
+    "statementSHA256": "093331b1b84d1c58079d5c0b8d2f058a975a324025abb22cf7ed2ca69a06a9e7",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed go statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "go",
+    "statementSHA256": "23d2e852a8f1e9f31d8edec389b1e351c4d08625b40254eceb377bce7936cc44",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed go statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "grep",
+    "statementSHA256": "3fe77edde162ad628d6e62b08745f5e3d43e3e20646382a60e282cc682d6e9fe",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed grep statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "command": "set",
+    "statementSHA256": "95a072144179105d838904c6e40336e6ae7f60851442039c0a7ac26ad9654cd2",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "149162a81f938fb013f6b31e2f43ec1f9193e09020056ca8f923ec8b088f0ca9",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "48fb758778dd520f1044dd65e6000631d638fcf9b75386b77105d3ea755afada",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "51b8bbd61ee011e047ac3b7ae923fc423d7873724a6ee696f2cc37aac4819ed4",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "565683d48778f86b4464ec6b20b1f8e35f1c60ef9ad1bde8577e225acb8de1fa",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "ba8a8a98fa5b3b66bbbe3d3e3cb6041358e82ac4949c6dd3ddea3540165d509e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "$assignment",
+    "statementSHA256": "e649fb42e4facaf7e88104e9399f1d1a216f77a96522c7a30b9bf472d24f49ca",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "[",
+    "statementSHA256": "138841ff22d6934488bfc0b87ac12ab408bef9f97fde50cd0f28df9881da33e0",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "[",
+    "statementSHA256": "149162a81f938fb013f6b31e2f43ec1f9193e09020056ca8f923ec8b088f0ca9",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "[",
+    "statementSHA256": "51b8bbd61ee011e047ac3b7ae923fc423d7873724a6ee696f2cc37aac4819ed4",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "[",
+    "statementSHA256": "7d3d6d579e53ce8d9ce3e37c2d9ff59924aa5881beb6ade249f4d5d8c278754e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "138841ff22d6934488bfc0b87ac12ab408bef9f97fde50cd0f28df9881da33e0",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "149162a81f938fb013f6b31e2f43ec1f9193e09020056ca8f923ec8b088f0ca9",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "2a81a2cdac76eb62790ec96a93663454ae240d7ac8a250b16eb764a6ab8169ed",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "4bf4470299da7b615cab0fbb31dd300857da9f5db6bfb16e5905129d44766106",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "62989a181859f4cc8740b7881a097f23ce6ba071f3a235b81b5485f534461174",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "6c88f1f9370b8a3cafc853405d827248e754cf36f1621461a728ec9a29e9dd4a",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "echo",
+    "statementSHA256": "7d3d6d579e53ce8d9ce3e37c2d9ff59924aa5881beb6ade249f4d5d8c278754e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "exit",
+    "statementSHA256": "138841ff22d6934488bfc0b87ac12ab408bef9f97fde50cd0f28df9881da33e0",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "exit",
+    "statementSHA256": "7d3d6d579e53ce8d9ce3e37c2d9ff59924aa5881beb6ade249f4d5d8c278754e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "gh",
+    "statementSHA256": "51b8bbd61ee011e047ac3b7ae923fc423d7873724a6ee696f2cc37aac4819ed4",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed gh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "head",
+    "statementSHA256": "48fb758778dd520f1044dd65e6000631d638fcf9b75386b77105d3ea755afada",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed head statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "jq",
+    "statementSHA256": "ba8a8a98fa5b3b66bbbe3d3e3cb6041358e82ac4949c6dd3ddea3540165d509e",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed jq statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "printf",
+    "statementSHA256": "48fb758778dd520f1044dd65e6000631d638fcf9b75386b77105d3ea755afada",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed printf statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "set",
+    "statementSHA256": "95a072144179105d838904c6e40336e6ae7f60851442039c0a7ac26ad9654cd2",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "sort",
+    "statementSHA256": "48fb758778dd520f1044dd65e6000631d638fcf9b75386b77105d3ea755afada",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed sort statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "workflow-iac-host-conformance.sh",
+    "statementSHA256": "0bcb8f3f4336faf304854738f581207f763ddf87d96100010915422414dae114",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed workflow-iac-host-conformance.sh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "command": "workflow-iac-host-conformance.sh",
+    "statementSHA256": "25f5a3f87dd8ea0b1d9a054603733429e45a4bd3cde5c7c0357c21fc87b9a91c",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed workflow-iac-host-conformance.sh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "$assignment",
+    "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "$assignment",
+    "statementSHA256": "910883cf7b2a3bca13cc72327145028019076951bb0148425f4e7cf9ebb583f2",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed $assignment statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "[",
+    "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "[",
+    "statementSHA256": "483a2b1e8cb4898a51c519ff9a454d60168919b020b438380f8fd841afa12250",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "echo",
+    "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed echo statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "exit",
+    "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed builtin statement and complete workflow context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "gh",
+    "statementSHA256": "9c9f36435e87ec26d9b5e08b27d7d5eb8b722b2749a7ee984f985b1d26d447a2",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed gh statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "jq",
+    "statementSHA256": "06802d0b2f444147527af32f42b5de886ebfe767c6a1ea30c4e6e7683469f75f",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed jq statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "jq",
+    "statementSHA256": "910883cf7b2a3bca13cc72327145028019076951bb0148425f4e7cf9ebb583f2",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed jq statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "sed",
+    "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed sed statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "uname",
+    "statementSHA256": "12b71cfec1d7d8e6a30d063cfe824be5031d6c0f48b84c6f825745283dc88a67",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed uname statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "wfctl",
+    "statementSHA256": "483a2b1e8cb4898a51c519ff9a454d60168919b020b438380f8fd841afa12250",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "wfctl",
+    "statementSHA256": "f582015433d8275337b49e162ac0b0fe76b86363a68e42ebe73814b38e4dc789",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "wfctl",
+    "statementSHA256": "e7caa91226208c3bfb8e107a01582d645ef79eff3ceefa7b79eb10c7158c35c4",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed wfctl statement and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "git",
+    "statementSHA256": "8a8dea32ba85ab1140409e072bba02f7ffe5e2499bd98785e9d9787a36a2c016",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Fetch only the protected main ref before releasing a tagged commit.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "command": "git",
+    "statementSHA256": "fa57beadffd02d8f90409c161a2d5efc056b0c9cff3e07809dbd8a5d306e1d1a",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Require the exact tag commit to be contained in protected main.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "6e78bfd0781f308df8a82c819888f28647df16892ba5a7cef1571b725e102383",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact bootstrap root assignment."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact bootstrap guard assignment."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "[",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact bootstrap condition."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact bootstrap failure output."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "669becd36f330fd99a9598184b82d3ea7614aaa79558185745282e47c03ccfc8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact bootstrap failure exit."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "7c133076e6ce17d413f1327ea6d975f452d350aba142430d9ad85847205e36b8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact policy-root output."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "cd",
+    "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact selected-root scan."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "check-public-workflow-policy.sh",
+    "statementSHA256": "eeeaf45b8f688a7d0bb034fa6bf979e3b620aa80f9f0c9436751b42eb525f2f4",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact selected-root policy wrapper."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "0e17e768c1484e9def2346c58a2c32d337d4c33d780f0ffc79504af0c40ecba7",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Construct only the validated fixed GitHub HTTPS candidate origin."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "66d1ee88edc672ead2282e1e159bc382cc6fad2c13a86c6ce585e0082a006b8d",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Capture the fetched commit identity before exporting candidate data."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "$assignment",
+    "statementSHA256": "6af7f417e806699121e4d583e17b42321a812a4b8237364a263b970d48dc6132",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Capture any candidate symlink path for fail-closed rejection."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "mkdir",
+    "statementSHA256": "42f84c05333b2c7011f332ebca981a05c457d59e7595b13dac5dee7f58429d60",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Create isolated Git object and inert candidate-data directories."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "9919b241412c88da2b0a86cbeaab201cc2323a2fd0c957e2f726ebc62b7282a6",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Initialize an isolated object database without a candidate worktree."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "0cf020cfd2b573841c37a0529d43d5b53f9b318028b28b3536b2f6aff30f02bc",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fetch one exact candidate commit with credential sources disabled."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "66d1ee88edc672ead2282e1e159bc382cc6fad2c13a86c6ce585e0082a006b8d",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Resolve and bind the fetched commit identity."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "git",
+    "statementSHA256": "2dc46d037c2bf0885d2c864a2d1f4b7c6b204acccc1f374ae455291145e20150",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Export candidate tree objects as inert tar data without checkout."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "tar",
+    "statementSHA256": "2dc46d037c2bf0885d2c864a2d1f4b7c6b204acccc1f374ae455291145e20150",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Extract the Git-generated candidate archive into its isolated data directory."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "find",
+    "statementSHA256": "6af7f417e806699121e4d583e17b42321a812a4b8237364a263b970d48dc6132",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Find and reject candidate symlinks before trusted scanning."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "4ade2e44c08380b704763da57c411f70fc54eebcabf0abd0277746786def0bf8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report an invalid candidate repository without echoing its value."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "4ade2e44c08380b704763da57c411f70fc54eebcabf0abd0277746786def0bf8",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on an invalid candidate repository."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "c7f1a421fa15eeab86ac50981d3a6b99248925a1dc7d62f2847e9a82efe2a4a1",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report an invalid candidate SHA without echoing its value."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "c7f1a421fa15eeab86ac50981d3a6b99248925a1dc7d62f2847e9a82efe2a4a1",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on an invalid candidate SHA."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "fe9e84eb32be5ac99349d7e60340785a6e5b3750dcecf795514c53ec76253516",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report a fetched commit mismatch without exposing identifiers."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "fe9e84eb32be5ac99349d7e60340785a6e5b3750dcecf795514c53ec76253516",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed when fetched and requested commits differ."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "echo",
+    "statementSHA256": "ff503c4cc7be7d35246d5c16eca55f3af89544a6ad9ffc6bf0bb0cbe4a199d19",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Report forbidden candidate symlink data without its path."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "command": "exit",
+    "statementSHA256": "ff503c4cc7be7d35246d5c16eca55f3af89544a6ad9ffc6bf0bb0cbe4a199d19",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Fail closed on any candidate symlink."
+  }
+]

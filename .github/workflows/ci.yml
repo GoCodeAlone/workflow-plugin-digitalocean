@@ -4,8 +4,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+defaults:
+  run:
+    shell: bash
 env:
-  GOPRIVATE: github.com/GoCodeAlone/*
   WFCTL_VALIDATE_VERSION: v0.51.2
   WFCTL_CONFORMANCE_VERSION: v0.85.4
 jobs:
@@ -13,33 +15,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      SAFE_JOB_MODE: strict
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - name: Configure Git for private repos
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      - run: GOWORK=off go test -race ./...
+      - run: GOWORK=off go vet ./...
+      - name: Enforce credential-free public workflows
         run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
-      - run: go test -race ./...
-      - run: go vet ./...
-      - name: Validate conformance workflow ownership
-        run: |
-          ./.github/workflows/scripts/test-conformance-workflows.sh
-          ./.github/workflows/scripts/test-conformance-workflow-mutations.sh
-          ./.github/workflows/scripts/test-conformance-safety-helpers.sh
-          ./.github/workflows/scripts/test-conformance-scrub-safety.sh
+          ./.github/workflows/scripts/check-public-workflow-policy.sh
+          ./.github/workflows/scripts/test-public-workflow-policy.sh
 
   wfctl-strict-contracts:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Fail fast if plugin.json is missing
         run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
       - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
@@ -65,27 +60,19 @@ jobs:
           rm -rf "$tmp_dir"
 
   wfctl-conformance:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Fail fast if plugin.json is missing
         run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
       - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
         with:
           version: ${{ env.WFCTL_CONFORMANCE_VERSION }}
-      - name: Configure Git for private repos
-        env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          if [ -n "${RELEASES_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
       - name: Run typed IaC conformance
         run: |
           wfctl \
@@ -96,7 +83,7 @@ jobs:
             --format json \
             --output conformance-evidence.json \
             .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: workflow-plugin-digitalocean-conformance

@@ -1,0 +1,122 @@
+[
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
+    "nodeSHA256": "2e0ab657507095c018435a0da34a76ffffd3ca15eb3ceff7c2b17e13ebbb9383",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
+    "nodeSHA256": "50a4a8d5a662beda4b4b57507d7342495a175dd663e5c1e247961dcbb5d83bee",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "nodeSHA256": "0fe822ed8559961639e22a7249495326099fd0c0302ee96b5ecdf0e6434d6385",
+    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/grpc-version-sync.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
+    "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/iac-host-conformance.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
+    "contextSHA256": "2690ee60dffad2dd8b2097d442fe0f5bb50e3033d42b110c09a27a4decbeb47c",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
+    "nodeSHA256": "3e5cbc2bc14eefe54d00005483246362bda6b9987c3b1713d37e5c2da4e18dbf",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "e791bd1b96e7e25083de0122264bb45e4fb5ac5bde0c346d99a1f813370923d4",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/release.yml",
+    "uses": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94",
+    "nodeSHA256": "e5e477318c53fd26f9730d1dd44ad050447fc601d831dd95e16cf327ed11e980",
+    "contextSHA256": "50ddd8592c22d83996429e9a303b9676bf747f1742687c81f5320d9a371b467e",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "active"
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "8ddc920b847e5e03515a92d8be49290bd9039f458fffcdeea7ad0a30f48e15dc",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact trusted checkout."
+  },
+  {
+    "path": ".github/workflows/public-workflow-policy.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "3c2f0c49ba03bc87e0aeebcd40257f3285d9b3e4a0b79982f795d6bfd5117bf9",
+    "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
+    "state": "active",
+    "rationale": "Exact selected policy Go setup."
+  }
+]

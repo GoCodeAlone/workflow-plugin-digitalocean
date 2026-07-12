@@ -1,0 +1,11 @@
+name: Lifecycle old
+on: pull_request
+defaults:
+  run:
+    shell: bash
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo old
+      - run: ./scripts/lifecycle.sh

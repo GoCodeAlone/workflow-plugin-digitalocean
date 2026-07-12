@@ -1,0 +1,671 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+func parseShell(t *testing.T, source string) *syntax.File {
+	t.Helper()
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(source), "test")
+	if err != nil {
+		t.Fatalf("parse shell: %v", err)
+	}
+	return file
+}
+
+func firstCall(t *testing.T, file *syntax.File) *syntax.CallExpr {
+	t.Helper()
+	var call *syntax.CallExpr
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if call != nil {
+			return false
+		}
+		if candidate, ok := node.(*syntax.CallExpr); ok {
+			call = candidate
+			return false
+		}
+		return true
+	})
+	if call == nil {
+		t.Fatal("shell source did not contain a call")
+	}
+	return call
+}
+
+func TestResolvedProgramUnwrapsReviewedWrappers(t *testing.T) {
+	file := parseShell(t, `MODE=ci command exec env AUTH=x ./scripts/live.sh`)
+	program, _, resolved := resolvedProgram(firstCall(t, file))
+	if !resolved {
+		t.Fatal("expected wrapped program to resolve")
+	}
+	value, literal := literalWord(program)
+	if !literal || value != "./scripts/live.sh" {
+		t.Fatalf("resolved program = %q, literal=%v", value, literal)
+	}
+}
+
+func TestResolvedProgramRejectsDynamicCommand(t *testing.T) {
+	file := parseShell(t, `sudo "$TOOL"`)
+	_, _, resolved := resolvedProgram(firstCall(t, file))
+	if resolved {
+		t.Fatal("dynamic wrapped command resolved as a literal program")
+	}
+}
+
+func TestPureRejectionGuardConfinesDenyPattern(t *testing.T) {
+	patterns := map[string]string{"PROVIDER_DENY_PATTERN": "doctl|api.digitalocean.com"}
+	safe := parseShell(t, `if rg "$PROVIDER_DENY_PATTERN" .github/workflows/; then echo blocked; exit 1; fi`)
+	if !pureRejectionGuard(safe, patterns) {
+		t.Fatal("expected parser-proven rejection guard")
+	}
+	unsafe := parseShell(t, `if rg "$PROVIDER_DENY_PATTERN" .github/workflows/; then exit 1; fi; "$PROVIDER_DENY_PATTERN"`)
+	if pureRejectionGuard(unsafe, patterns) {
+		t.Fatal("deny pattern escaped rejection guard")
+	}
+}
+
+func TestDefaultsRunShell(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("defaults:\n  run:\n    shell: bash\n"), &doc); err != nil {
+		t.Fatalf("parse workflow defaults: %v", err)
+	}
+	shell := defaultsRunShell(doc.Content[0])
+	if shell == nil || shell.Value != "bash" {
+		t.Fatalf("defaults shell = %#v", shell)
+	}
+}
+
+func TestExpressionIdentifiersIgnoresStringData(t *testing.T) {
+	masked := expressionIdentifiers(`format('No secrets are used', secrets.RELEASES_TOKEN)`)
+	if strings.Contains(masked, "No secrets are used") {
+		t.Fatalf("expression string data was not masked: %q", masked)
+	}
+	if !strings.Contains(masked, "secrets.RELEASES_TOKEN") {
+		t.Fatalf("secret identifier was masked: %q", masked)
+	}
+}
+
+func TestStatementDigestCoversCompleteCall(t *testing.T) {
+	original := parseShell(t, `GOWORK=off env MODE=ci go test -race ./...`)
+	originalDigest, err := statementDigest(original.Stmts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []string{
+		`GOWORK=off env MODE=ci go test -race ./... ./extra/...`,
+		`GOWORK=off env MODE=ci go test ./...`,
+		`GOWORK=off env MODE=prod go test -race ./...`,
+		`env MODE=ci go test -race ./...`,
+	} {
+		file := parseShell(t, mutation)
+		digest, err := statementDigest(file.Stmts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest == originalDigest {
+			t.Errorf("mutation retained invocation digest: %s", mutation)
+		}
+	}
+}
+
+func TestGithubExpressionSourceChangesInvocationDigest(t *testing.T) {
+	left, err := normalizeGithubExpressions(`gh release edit ${{ github.ref_name }} --draft=false`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := normalizeGithubExpressions(`gh release edit ${{ vars.RELEASE_TAG }} --draft=false`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftFile := parseShell(t, left)
+	leftDigest, err := statementDigest(leftFile.Stmts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightFile := parseShell(t, right)
+	rightDigest, err := statementDigest(rightFile.Stmts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest == rightDigest {
+		t.Fatal("different GitHub expressions produced the same invocation digest")
+	}
+}
+
+func TestActionAllowlistIsExactByWorkflowAndReference(t *testing.T) {
+	entry := actionEntry{
+		Path:          ".github/workflows/ci.yml",
+		Uses:          "actions/checkout@ffffffffffffffffffffffffffffffffffffffff",
+		NodeSHA256:    strings.Repeat("a", 64),
+		ContextSHA256: strings.Repeat("b", 64),
+		Rationale:     "Checkout this repository at the reviewed action commit.",
+	}
+	allowed := map[string]actionEntry{actionKey(entry.Path, entry.Uses, entry.NodeSHA256, entry.ContextSHA256): entry}
+	if _, ok := matchAction(entry.Path, entry.Uses, entry.NodeSHA256, entry.ContextSHA256, allowed); !ok {
+		t.Fatal("exact reviewed action did not match")
+	}
+	for _, changed := range []string{
+		"actions/checkout@main",
+		"actions/checkout@v5",
+		"actions/checkout@0123456789012345678901234567890123456789",
+		"${{ vars.ACTION_REF }}",
+	} {
+		if _, ok := matchAction(entry.Path, changed, entry.NodeSHA256, entry.ContextSHA256, allowed); ok {
+			t.Errorf("changed action %q matched", changed)
+		}
+	}
+	if _, ok := matchAction(".github/workflows/release.yml", entry.Uses, entry.NodeSHA256, entry.ContextSHA256, allowed); ok {
+		t.Fatal("action allowlist leaked across workflow paths")
+	}
+}
+
+func TestResolvedProgramUnwrapsAllowedWrappersButRejectsSudo(t *testing.T) {
+	for _, source := range []string{
+		`command go test ./...`,
+		`exec go test ./...`,
+		`env GOWORK=off go test ./...`,
+	} {
+		file := parseShell(t, source)
+		program, args, resolved := resolvedProgram(firstCall(t, file))
+		value, literal := literalWord(program)
+		if !resolved || !literal || value != "go" || len(args) < 1 {
+			t.Fatalf("%q resolved to %q, args=%d, resolved=%v", source, value, len(args), resolved)
+		}
+	}
+	file := parseShell(t, `sudo go test ./...`)
+	if _, _, resolved := resolvedProgram(firstCall(t, file)); resolved {
+		t.Fatal("sudo unexpectedly resolved as a reviewed wrapper")
+	}
+}
+
+func TestKnownCloudSecretRejectsSpacesCredentials(t *testing.T) {
+	for _, name := range []string{
+		"SPACES_ACCESS_KEY_ID",
+		"SPACES_SECRET_ACCESS_KEY",
+		"DIGITALOCEAN_SPACES_ACCESS_KEY_ID",
+		"DIGITALOCEAN_SPACES_SECRET_ACCESS_KEY",
+		"DO_SPACES_ACCESS_KEY_ID",
+		"DO_SPACES_SECRET_ACCESS_KEY",
+	} {
+		if !knownCloudSecret(name) {
+			t.Errorf("%s was not categorized as a cloud secret", name)
+		}
+	}
+}
+
+func TestDecodeJSONRequiresExactlyOneValue(t *testing.T) {
+	tmp := t.TempDir()
+	valid := filepath.Join(tmp, "valid.json")
+	if err := os.WriteFile(valid, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var target []allowEntry
+	if err := decodeJSONFile(valid, &target); err != nil {
+		t.Fatalf("valid JSON failed: %v", err)
+	}
+	for name, content := range map[string]string{
+		"trailing-object":  `[] {}`,
+		"trailing-garbage": `[] garbage`,
+	} {
+		path := filepath.Join(tmp, name+".json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := decodeJSONFile(path, &target); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestYAMLStructureRejectsAliasesAndDuplicateKeys(t *testing.T) {
+	for name, source := range map[string]string{
+		"alias":     "run: &shared echo safe\nother: *shared\n",
+		"duplicate": "run: echo first\nrun: echo second\n",
+		"nested":    "job:\n  env: &env\n    VALUE: safe\n  other: *env\n",
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatalf("%s parse: %v", name, err)
+		}
+		findings := &findingSet{}
+		validateYAMLStructure("fixture", &doc, findings)
+		if len(findings.items) == 0 {
+			t.Errorf("%s structure was accepted", name)
+		}
+	}
+}
+
+func TestActionNodeDigestCoversCompleteStep(t *testing.T) {
+	parseStep := func(source string) *yaml.Node {
+		t.Helper()
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Content[0]
+	}
+	original := parseStep("name: Upload\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n")
+	originalDigest := actionNodeDigest(original)
+	for _, mutation := range []string{
+		"name: Upload\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: other.json\n",
+		"name: Changed\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n",
+		"name: Upload\nif: always()\nuses: actions/upload-artifact@0123456789012345678901234567890123456789\nwith:\n  path: evidence.json\n",
+	} {
+		if actionNodeDigest(parseStep(mutation)) == originalDigest {
+			t.Errorf("action step mutation retained digest: %q", mutation)
+		}
+	}
+}
+
+func TestStatementDigestCoversRedirectsAndAssignments(t *testing.T) {
+	original := parseShell(t, `MODE=ci go test ./...`)
+	originalDigest, err := statementDigest(original.Stmts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []string{
+		`MODE=prod go test ./...`,
+		`MODE=ci go test ./... > results.txt`,
+		`MODE=ci go test ./... 2>&1`,
+	} {
+		file := parseShell(t, mutation)
+		digest, err := statementDigest(file.Stmts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest == originalDigest {
+			t.Errorf("statement mutation retained digest: %s", mutation)
+		}
+	}
+}
+
+func TestDangerousAssignmentsAndEnvironmentRedirects(t *testing.T) {
+	for _, source := range []string{
+		`PATH=/tmp/bin`,
+		`BASH_ENV=./bootstrap`,
+		`ENV=./profile`,
+		`SHELLOPTS=xtrace`,
+		`LD_PRELOAD=./hook.so command`,
+		`DYLD_INSERT_LIBRARIES=./hook.dylib command`,
+		`command exec env PATH=/tmp/bin go test ./...`,
+		`echo value >> "$GITHUB_ENV"`,
+		`echo value >> "${GITHUB_ENV:?missing}"`,
+		`printf '%s\n' value >> "$GITHUB_PATH"`,
+	} {
+		file := parseShell(t, source)
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", file.Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("dangerous statement was accepted: %s", source)
+		}
+	}
+}
+
+func TestWorkingDirectoryIsCategoricallyRejected(t *testing.T) {
+	for name, source := range map[string]string{
+		"literal": "working-directory: ./subdir\n",
+		"dynamic": "working-directory: ${{ vars.WORKDIR }}\n",
+		"mapping": "working-directory:\n  path: ./subdir\n",
+	} {
+		var node yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &node); err != nil {
+			t.Fatal(err)
+		}
+		findings := &findingSet{}
+		checkWorkingDirectory("fixture "+name, node.Content[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("%s working-directory was accepted", name)
+		}
+	}
+}
+
+func TestExecutionAffectingEnvironmentNames(t *testing.T) {
+	for _, name := range []string{
+		"PATH", "BASH_ENV", "ENV", "SHELLOPTS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES",
+		"NODE_OPTIONS", "PYTHONPATH", "PYTHONHOME", "RUBYOPT", "PERL5OPT", "PERL5LIB",
+		"GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_SSH", "GIT_SSH_COMMAND", "HOME", "IFS", "CDPATH",
+		"CC", "CXX", "AR", "LD", "GOROOT", "GOPATH", "GOENV", "GOFLAGS", "GOTOOLCHAIN",
+		"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBRARY_PATH", "CPATH", "RUSTC_WRAPPER", "JAVA_TOOL_OPTIONS",
+		"CFLAGS", "LDFLAGS", "GOEXPERIMENT", "GIT_EXEC_PATH", "CGO_LDFLAGS", "CARGO_HOME", "SHELL",
+		"BASH_FUNC_attack%%", "bash_func_attack%%",
+	} {
+		if !executionAffectingEnv(name) {
+			t.Errorf("%s was not rejected", name)
+		}
+	}
+	for _, name := range []string{"GOPRIVATE", "GH_TOKEN", "GITHUB_TOKEN", "RELEASES_TOKEN", "WFCTL_CONFORMANCE_VERSION"} {
+		if executionAffectingEnv(name) {
+			t.Errorf("required safe environment %s was rejected", name)
+		}
+	}
+}
+
+func TestTrustGroupThreeStateLifecycle(t *testing.T) {
+	active := strings.Repeat("a", 64)
+	staged := strings.Repeat("b", 64)
+	wf := ".github/workflows/wf.yml"
+	transition := []trustGroup{{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}}
+	for name, phase := range map[string]struct {
+		groups  []trustGroup
+		context string
+	}{
+		"phase1": {transition, active},
+		"phase2": {transition, staged},
+		"phase3": {[]trustGroup{{Path: wf, ContextSHA256: staged, State: "active", Presence: "present"}}, staged},
+	} {
+		selected, findings := selectTrustGroups(phase.groups, map[string]string{wf: phase.context})
+		if len(findings) != 0 || !selected[wf+"\x00"+phase.context] {
+			t.Errorf("%s selection = %v, findings = %v", name, selected, findings)
+		}
+	}
+	for _, phase := range []struct {
+		name     string
+		groups   []trustGroup
+		contexts map[string]string
+	}{
+		{"add phase1", []trustGroup{{Path: ".github/workflows/new.yml", State: "active", Presence: "absent"}, {Path: ".github/workflows/new.yml", ContextSHA256: staged, State: "staged", Presence: "present"}}, map[string]string{}},
+		{"add phase2", []trustGroup{{Path: ".github/workflows/new.yml", State: "active", Presence: "absent"}, {Path: ".github/workflows/new.yml", ContextSHA256: staged, State: "staged", Presence: "present"}}, map[string]string{".github/workflows/new.yml": staged}},
+		{"delete phase2", []trustGroup{{Path: ".github/workflows/old.yml", ContextSHA256: active, State: "active", Presence: "present"}, {Path: ".github/workflows/old.yml", State: "staged", Presence: "absent"}}, map[string]string{}},
+		{"absent tombstone", []trustGroup{{Path: ".github/workflows/old.yml", State: "active", Presence: "absent"}}, map[string]string{}},
+	} {
+		selected, findings := selectTrustGroups(phase.groups, phase.contexts)
+		if len(findings) != 0 || len(selected) != 1 {
+			t.Errorf("%s selection = %v, findings = %v", phase.name, selected, findings)
+		}
+	}
+	for name, groups := range map[string][]trustGroup{
+		"unmatched":       {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}},
+		"mixed":           {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: active, State: "staged", Presence: "present"}},
+		"multiple staged": {{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}, {Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}, {Path: wf, ContextSHA256: strings.Repeat("c", 64), State: "staged", Presence: "present"}},
+		"invalid state":   {{Path: wf, ContextSHA256: active, State: "pending", Presence: "present"}},
+		"lone staged":     {{Path: wf, ContextSHA256: staged, State: "staged", Presence: "present"}},
+	} {
+		_, findings := selectTrustGroups(groups, map[string]string{wf: staged})
+		if len(findings) == 0 {
+			t.Errorf("%s trust groups were accepted", name)
+		}
+	}
+	duplicate := trustGroup{Path: wf, ContextSHA256: active, State: "active", Presence: "present"}
+	if _, findings := selectTrustGroups([]trustGroup{duplicate, duplicate}, map[string]string{wf: active}); len(findings) == 0 {
+		t.Error("duplicate active trust groups were accepted")
+	}
+	for _, invalidPath := range []string{"", "../../outside.yml", ".github/workflows/nested/workflow.yml", ".github/workflows/workflow.txt", ".github\\workflows\\workflow.yml"} {
+		group := trustGroup{Path: invalidPath, State: "active", Presence: "absent"}
+		if _, findings := selectTrustGroups([]trustGroup{group}, map[string]string{}); len(findings) == 0 {
+			t.Errorf("invalid tombstone path %q was accepted", invalidPath)
+		}
+	}
+}
+
+func TestWorkflowSecretAuthorityBoundary(t *testing.T) {
+	for name, test := range map[string]struct {
+		secrets     map[string]bool
+		wantFinding bool
+	}{
+		"workflow call noncloud": {map[string]bool{"RELEASES_TOKEN": true}, true},
+		"branch push noncloud":   {map[string]bool{"PUBLISH_TOKEN": true}, true},
+		"tag push noncloud":      {map[string]bool{"REGISTRY_TOKEN": true}, true},
+		"cloud secret":           {map[string]bool{"DIGITALOCEAN_TOKEN": true}, true},
+		"automatic token":        {map[string]bool{"GITHUB_TOKEN": true}, false},
+	} {
+		findings := &findingSet{}
+		validateSecretReferences("fixture.yml", "fixture "+name, test.secrets, map[string]bool{}, findings)
+		if got := len(findings.items) > 0; got != test.wantFinding {
+			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
+		}
+	}
+}
+
+func TestWorkflowCallEnvironmentRejectsNamedSecret(t *testing.T) {
+	const workflowPath = ".github/workflows/reusable.yml"
+	var doc yaml.Node
+	source := "on: workflow_call\njobs:\n  deploy:\n    environment: production\n    uses: acme/platform/.github/workflows/deploy.yml@0123456789012345678901234567890123456789\n    secrets:\n      token: ${{ secrets.RELEASES_TOKEN }}\n"
+	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+		t.Fatal(err)
+	}
+	job := mappingValue(mappingValue(doc.Content[0], "jobs"), "deploy")
+	secrets := secretReferences(job)
+	findings := &findingSet{}
+	validateSecretReferences(workflowPath, "fixture workflow_call", secrets, map[string]bool{}, findings)
+	if len(findings.items) == 0 {
+		t.Fatal("workflow_call environment accepted a named repository secret")
+	}
+}
+
+func TestReusableWorkflowSecretShapesFailClosed(t *testing.T) {
+	for name, test := range map[string]struct {
+		source      string
+		wantFinding bool
+	}{
+		"inherit scalar":  {"secrets: inherit\n", true},
+		"inherit mapping": {"secrets:\n  token: inherit\n", true},
+		"dynamic mapping": {"secrets:\n  token: ${{ secrets[vars.SECRET_NAME] }}\n", true},
+		"automatic token": {"secrets:\n  token: ${{ github.token }}\n", false},
+	} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(test.source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		job := doc.Content[0]
+		findings := &findingSet{}
+		validateInheritedSecrets("fixture "+name, mappingValue(job, "secrets"), findings)
+		validateCredentialSelectors("fixture "+name, job, findings)
+		if got := len(findings.items) > 0; got != test.wantFinding {
+			t.Errorf("%s finding = %v, want %v: %v", name, got, test.wantFinding, findings.items)
+		}
+	}
+}
+
+func TestOnlyLiteralGOWORKOffAssignmentIsSafe(t *testing.T) {
+	for _, source := range []string{
+		`GOWORK=off go test ./...`,
+		`env GOWORK=off go test ./...`,
+		`env "GOWORK=off" go test ./...`,
+		`exec env GOWORK=off go test ./...`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) != 0 {
+			t.Errorf("literal GOWORK=off in %q was rejected: %v", source, findings.items)
+		}
+	}
+
+	for _, source := range []string{
+		`GOWORK=auto go test ./...`,
+		`GOWORK= go test ./...`,
+		`GOWORK="$MODE" go test ./...`,
+		`env GOWORK=auto go test ./...`,
+		`env GOWORK="$MODE" go test ./...`,
+		`env "GOWORK=$MODE" go test ./...`,
+		`env "PATH=$MODE" go test ./...`,
+		`env 'BASH_FUNC_attack%%=() { :; }' go test ./...`,
+		`nice env 'BASH_FUNC_attack%%=() { :; }' bash -c attack`,
+		`nice env "BASH_FUNC_attack%${PERCENT}=() { :; }" bash -c attack`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("non-literal-off GOWORK in %q was accepted", source)
+		}
+	}
+
+	for name, source := range map[string]string{
+		"literal off": "GOWORK: off\n",
+		"auto":        "GOWORK: auto\n",
+		"empty":       "GOWORK: ''\n",
+		"dynamic":     "GOWORK: ${{ vars.GOWORK }}\n",
+	} {
+		var env yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &env); err != nil {
+			t.Fatal(err)
+		}
+		findings := &findingSet{}
+		envValues("fixture", env.Content[0], false, findings)
+		if name == "literal off" && len(findings.items) != 0 {
+			t.Errorf("literal YAML GOWORK=off was rejected: %v", findings.items)
+		}
+		if name != "literal off" && len(findings.items) == 0 {
+			t.Errorf("%s YAML GOWORK assignment was accepted", name)
+		}
+	}
+}
+
+func TestOnlyFailClosedGitEnvironmentAssignmentsAreSafe(t *testing.T) {
+	for _, source := range []string{
+		`GIT_ASKPASS=/bin/false git fetch`,
+		`GIT_CONFIG_GLOBAL=/dev/null git fetch`,
+		`GIT_CONFIG_NOSYSTEM=1 git fetch`,
+		`GIT_TERMINAL_PROMPT=0 git fetch`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) != 0 {
+			t.Errorf("fail-closed Git environment in %q was rejected: %v", source, findings.items)
+		}
+	}
+
+	for _, source := range []string{
+		`GIT_ASKPASS=./candidate-helper git fetch`,
+		`GIT_CONFIG_GLOBAL=./candidate-config git fetch`,
+		`GIT_CONFIG_NOSYSTEM=0 git fetch`,
+		`GIT_TERMINAL_PROMPT=1 git fetch`,
+	} {
+		findings := &findingSet{}
+		inspectStatementGuards("fixture", parseShell(t, source).Stmts[0], findings)
+		if len(findings.items) == 0 {
+			t.Errorf("unsafe Git environment in %q was accepted", source)
+		}
+	}
+}
+
+func TestAuthorizationContextBindsCompleteWorkflow(t *testing.T) {
+	parseMapping := func(source string) *yaml.Node {
+		t.Helper()
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Content[0]
+	}
+	base := "on: push\nenv:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\njobs:\n  test:\n    runs-on: ubuntu-latest\n    env:\n      JOB_MODE: one\n    steps:\n      - env:\n          STEP_MODE: one\n        run: echo safe\n"
+	workflow := parseMapping(base)
+	original := authorizationContextDigest(workflow, nil, nil)
+	job := mappingValue(mappingValue(workflow, "jobs"), "test")
+	step := mappingValue(job, "steps").Content[0]
+	if got := authorizationContextDigest(workflow, job, step); got != original {
+		t.Fatalf("job/step arguments narrowed workflow-wide context digest: got %s, want %s", got, original)
+	}
+	for name, changed := range map[string]string{
+		"trigger":        strings.Replace(base, "on: push", "on: pull_request_target", 1),
+		"workflow env":   strings.Replace(base, "SAFE_MODE: one", "SAFE_MODE: two", 1),
+		"defaults":       strings.Replace(base, "shell: bash", "shell: sh", 1),
+		"job env":        strings.Replace(base, "JOB_MODE: one", "JOB_MODE: two", 1),
+		"container":      strings.Replace(base, "runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    container: attacker:latest", 1),
+		"step control":   strings.Replace(base, "run: echo safe", "if: always()\n        run: echo safe", 1),
+		"step statement": strings.Replace(base, "run: echo safe", "run: set -x; echo safe", 1),
+	} {
+		if authorizationContextDigest(parseMapping(changed), nil, nil) == original {
+			t.Errorf("%s mutation retained complete workflow digest", name)
+		}
+	}
+}
+
+func TestNormalizePathResolvesRelativeToRepositoryRoot(t *testing.T) {
+	root := t.TempDir()
+	workflowDir := filepath.Join(root, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := filepath.Join(workflowDir, "ci.yml")
+	if err := os.WriteFile(workflowPath, []byte("name: CI\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := normalizePath(root, resolvedRoot, ".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("normalize relative workflow path: %v", err)
+	}
+	if got != ".github/workflows/ci.yml" {
+		t.Fatalf("normalized workflow path = %q, want .github/workflows/ci.yml", got)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.yml")
+	if err := os.WriteFile(outside, []byte("name: outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizePath(root, resolvedRoot, outside); err == nil {
+		t.Fatal("absolute workflow path outside root was accepted")
+	}
+	if _, err := normalizePath(root, resolvedRoot, "../outside.yml"); err == nil {
+		t.Fatal("relative workflow path outside root was accepted")
+	}
+
+	symlink := filepath.Join(workflowDir, "escape.yml")
+	if err := os.Symlink(outside, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizePath(root, resolvedRoot, ".github/workflows/escape.yml"); err == nil {
+		t.Fatal("workflow symlink escaping root was accepted")
+	}
+}
+
+func TestAssignmentOnlyCallIsRecognized(t *testing.T) {
+	file := parseShell(t, `SAFE_VALUE=one`)
+	call := firstCall(t, file)
+	if !assignmentOnlyCall(call) {
+		t.Fatal("standalone safe assignment was not recognized")
+	}
+	if assignmentOnlyCall(firstCall(t, parseShell(t, `SAFE_VALUE=one echo safe`))) {
+		t.Fatal("command with an assignment prefix was treated as assignment-only")
+	}
+}
+
+func TestBuiltinRequiresExactStatementAuthority(t *testing.T) {
+	file := parseShell(t, `set -x`)
+	findings := &findingSet{}
+	inspectShell(
+		"fixture", ".github/workflows/fixture.yml", strings.Repeat("0", 64),
+		"set -x", file, false, t.TempDir(),
+		map[string]executableEntry{}, map[string]bool{},
+		map[string]commandEntry{}, map[string]bool{}, findings,
+	)
+	if len(findings.items) != 1 || !strings.Contains(findings.items[0], "unreviewed exact statement containing set") {
+		t.Fatalf("builtin authority findings = %v", findings.items)
+	}
+}
+
+func TestStatementWithoutCallRequiresExactAuthority(t *testing.T) {
+	file := parseShell(t, `(( X ))`)
+	findings := &findingSet{}
+	inspectShell(
+		"fixture", ".github/workflows/fixture.yml", strings.Repeat("0", 64),
+		"(( X ))", file, false, t.TempDir(),
+		map[string]executableEntry{}, map[string]bool{},
+		map[string]commandEntry{}, map[string]bool{}, findings,
+	)
+	if len(findings.items) != 1 || !strings.Contains(findings.items[0], "unreviewed exact shell statement") {
+		t.Fatalf("call-free statement authority findings = %v", findings.items)
+	}
+}
+
+func TestJobContainerAndServicesAreCategoricallyRejected(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("container: attacker:latest\nservices:\n  db:\n    image: attacker:latest\n"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	findings := &findingSet{}
+	checkJobRuntime("fixture", doc.Content[0], findings)
+	if len(findings.items) != 2 {
+		t.Fatalf("job runtime findings = %v", findings.items)
+	}
+}
