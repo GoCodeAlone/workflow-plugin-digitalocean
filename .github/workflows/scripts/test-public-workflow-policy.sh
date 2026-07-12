@@ -91,6 +91,7 @@ fi
 grep -Fq -- 'Workflow authority changes use three pull requests' "${repo_root}/docs/public-workflow-policy.md"
 
 tmp_dir="$(mktemp -d "${repo_root}/.workflow-policy-test.XXXXXX")"
+archive_copy_root="$(mktemp -d "${TMPDIR:-/tmp}/workflow-policy-archive.XXXXXX")"
 integrity_extra="${policytool}/extra_linux.go"
 integrity_vendor="${policytool}/vendor"
 integrity_symlink="${policytool}/extra-link.go"
@@ -100,7 +101,7 @@ cleanup() {
   if [[ -n "${mutated_workflow}" && -f "${mutation_backup}" ]]; then
     cp "${mutation_backup}" "${mutated_workflow}"
   fi
-  rm -rf "${tmp_dir}" "${integrity_extra}" "${integrity_vendor}" "${integrity_symlink}"
+  rm -rf "${tmp_dir}" "${archive_copy_root}" "${integrity_extra}" "${integrity_vendor}" "${integrity_symlink}"
 }
 trap cleanup EXIT
 export TMPDIR="${tmp_dir}"
@@ -112,6 +113,47 @@ fixture_actions="${tmp_dir}/fixture-actions.json"
 printf '[]\n' >"${fixture_actions}"
 empty_allowlist="${tmp_dir}/empty-allowlist.json"
 printf '[]\n' >"${empty_allowlist}"
+
+archive_repo="${archive_copy_root}/repo"
+mkdir -p "${archive_repo}"
+git -C "${repo_root}" ls-files -z | \
+  tar -C "${repo_root}" --null -T - -cf - | tar -C "${archive_repo}" -xf -
+test ! -e "${archive_repo}/.git"
+if git -C "${archive_repo}" rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "archive regression fixture remains inside an enclosing Git worktree" >&2
+  exit 1
+fi
+archive_checker="${archive_repo}/.github/workflows/scripts/check-public-workflow-policy.sh"
+(cd "${archive_repo}" && ./.github/workflows/scripts/check-public-workflow-policy.sh --scan-root "${archive_repo}") >/dev/null
+
+archive_repo_alias="${archive_copy_root}/repo-alias"
+ln -s "${archive_repo}" "${archive_repo_alias}"
+(cd "${archive_repo_alias}" && ./.github/workflows/scripts/check-public-workflow-policy.sh --scan-root "${archive_repo_alias}") >/dev/null
+
+archive_checker_link="${archive_copy_root}/linked-checker.sh"
+ln -s "${archive_checker}" "${archive_checker_link}"
+set +e
+archive_link_output="$(cd "${archive_repo}" && "${archive_checker_link}" --scan-root "${archive_repo}" 2>&1)"
+archive_link_status=$?
+set -e
+if [[ "${archive_link_status}" -eq 0 ]] || ! grep -Fq -- "policy wrapper path must not be a symlink" <<<"${archive_link_output}"; then
+  echo "policy wrapper accepted a symlinked entry path" >&2
+  printf '%s\n' "${archive_link_output}" >&2
+  exit 1
+fi
+
+mkdir -p "${archive_copy_root}/misplaced"
+misplaced_checker="${archive_copy_root}/misplaced/check-public-workflow-policy.sh"
+cp "${archive_checker}" "${misplaced_checker}"
+set +e
+misplaced_output="$(cd "${archive_repo}" && "${misplaced_checker}" --scan-root "${archive_repo}" 2>&1)"
+misplaced_status=$?
+set -e
+if [[ "${misplaced_status}" -eq 0 ]] || ! grep -Fq -- "policy wrapper must reside in .github/workflows/scripts" <<<"${misplaced_output}"; then
+  echo "policy wrapper accepted an invalid repository layout" >&2
+  printf '%s\n' "${misplaced_output}" >&2
+  exit 1
+fi
 
 module_graph_probe="${tmp_dir}/module-graph-probe.sh"
 awk '

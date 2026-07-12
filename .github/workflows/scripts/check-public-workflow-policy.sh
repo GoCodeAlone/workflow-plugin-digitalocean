@@ -1,7 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
+wrapper_source="${BASH_SOURCE[0]}"
+if [[ -L "${wrapper_source}" ]]; then
+  echo "policy wrapper path must not be a symlink" >&2
+  exit 1
+fi
+# Resolve ancestor-directory aliases physically; all later confinement checks
+# and repository paths use only this canonical directory.
+wrapper_dir="$(cd -- "$(dirname -- "${wrapper_source}")" && pwd -P)"
+if [[ "${wrapper_source##*/}" != "check-public-workflow-policy.sh" ]]; then
+  echo "policy wrapper must use its canonical filename" >&2
+  exit 1
+fi
+case "${wrapper_dir}" in
+  */.github/workflows/scripts) ;;
+  *)
+    echo "policy wrapper must reside in .github/workflows/scripts" >&2
+    exit 1
+    ;;
+esac
+repo_root="${wrapper_dir%/.github/workflows/scripts}"
+for required_dir in \
+  "${repo_root}" \
+  "${repo_root}/.github" \
+  "${repo_root}/.github/workflows" \
+  "${repo_root}/.github/workflows/scripts"; do
+  if [[ ! -d "${required_dir}" || -L "${required_dir}" ]]; then
+    echo "policy wrapper repository path is not a canonical directory" >&2
+    exit 1
+  fi
+done
 policytool="${repo_root}/.github/workflows/policytool"
 
 sha256_file() {
