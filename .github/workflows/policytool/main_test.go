@@ -554,7 +554,13 @@ func TestAuthorizationContextBindsCompleteWorkflow(t *testing.T) {
 		return doc.Content[0]
 	}
 	base := "on: push\nenv:\n  SAFE_MODE: one\ndefaults:\n  run:\n    shell: bash\njobs:\n  test:\n    runs-on: ubuntu-latest\n    env:\n      JOB_MODE: one\n    steps:\n      - env:\n          STEP_MODE: one\n        run: echo safe\n"
-	original := authorizationContextDigest(parseMapping(base), nil, nil)
+	workflow := parseMapping(base)
+	original := authorizationContextDigest(workflow, nil, nil)
+	job := mappingValue(mappingValue(workflow, "jobs"), "test")
+	step := mappingValue(job, "steps").Content[0]
+	if got := authorizationContextDigest(workflow, job, step); got != original {
+		t.Fatalf("job/step arguments narrowed workflow-wide context digest: got %s, want %s", got, original)
+	}
 	for name, changed := range map[string]string{
 		"trigger":        strings.Replace(base, "on: push", "on: pull_request_target", 1),
 		"workflow env":   strings.Replace(base, "SAFE_MODE: one", "SAFE_MODE: two", 1),

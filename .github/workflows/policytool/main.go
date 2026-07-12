@@ -279,7 +279,7 @@ func checkJobRuntime(prefix string, job *yaml.Node, findings *findingSet) {
 	}
 }
 
-func authorizationContextDigest(workflow, job, step *yaml.Node) string {
+func authorizationContextDigest(workflow, _, _ *yaml.Node) string {
 	var canonical bytes.Buffer
 	canonicalYAMLNode(&canonical, workflow)
 	digest := sha256.Sum256(canonical.Bytes())
