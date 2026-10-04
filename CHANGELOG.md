@@ -21,6 +21,25 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ## [Unreleased]
 
+### Added
+
+- Parent-bound `digitalocean.database_user` resources and explicit user/admin
+  rotation epochs, with sensitive output routing and persisted prior-state
+  recovery through the released Workflow SDK.
+- Targeted App Platform one-off jobs with exact component/deployment ownership,
+  bounded status/log/cancellation, and restartable cleanup after ambiguous
+  responses, including provider-encrypted secret normalization.
+- Read-only live Droplet pricing checks for exact slug/region and maximum
+  monthly cost, enforced before mutation rather than from a static catalog.
+- Credential-free CI executes the released native wfctl saved-plan/state proof
+  and requires genuine cleanup/redaction evidence; skipped proof is not success.
+
+### Changed
+
+- Minimum supported Workflow engine is `0.86.1` for the public prior-state SDK.
+  Provider behavior remains plugin-owned; no app-specific recovery integration
+  or live deployment is implied by this release.
+
 ### Changed
 
 - **App Platform deployment strategy naming** — the legacy

@@ -12,6 +12,7 @@ DigitalOcean IaC provider for the [GoCodeAlone/workflow](https://github.com/GoCo
 | `infra.app_domain` | App Platform domain binding |
 | `infra.k8s_cluster` | DigitalOcean Kubernetes (DOKS) |
 | `infra.database` | Managed database (PostgreSQL, MySQL, Redis, MongoDB) |
+| `digitalocean.database_user` | Parent-bound managed database user with explicit credential rotation |
 | `infra.cache` | Managed Redis cache |
 | `infra.load_balancer` | Load balancer |
 | `infra.vpc` | Virtual Private Cloud |
@@ -24,6 +25,12 @@ DigitalOcean IaC provider for the [GoCodeAlone/workflow](https://github.com/GoCo
 | `infra.volume` | Block Storage volume |
 | `infra.iam_role` | IAM role (declarative) |
 | `infra.api_gateway` | API gateway |
+
+`digitalocean.database_user` is a provider-owned resource type. wfctl v0.86.1
+supports its driver and saved-plan execution, but its YAML desired-resource
+discovery currently omits provider-specific types. Before applying a YAML plan,
+verify that every declared resource appears; do not accept an incomplete plan.
+Generic host discovery needs an upstream correction, not a provider type alias.
 
 ## Quick start
 
@@ -144,7 +151,7 @@ The nested shape matches Workflow DNS replay fixtures while keeping existing fla
 
 ## Requirements
 
-- workflow engine ≥ `0.57.1`
+- workflow engine ≥ `0.86.1`
 - `DIGITALOCEAN_TOKEN` environment variable set to a valid DO personal access token
 
 ## Contributing

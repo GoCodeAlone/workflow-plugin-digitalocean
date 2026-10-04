@@ -14,6 +14,7 @@ package internal
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -163,6 +164,51 @@ func TestPluginBinaryEmbedsManifest(t *testing.T) {
 		if !strings.Contains(mainText, want) {
 			t.Fatalf("cmd/plugin/main.go missing %q", want)
 		}
+	}
+}
+
+func TestRecoveryResourceConfigDiscovery(t *testing.T) {
+	type field struct {
+		Type        string `json:"type"`
+		Required    bool   `json:"required"`
+		Description string `json:"description"`
+	}
+	for _, name := range []string{"plugin.json", "cmd/plugin/plugin.json"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(testRepoRoot(t), name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest struct {
+				Capabilities struct {
+					IaCProvider struct {
+						ConfigSchema map[string]struct {
+							Fields map[string]field `json:"fields"`
+						} `json:"configSchema"`
+					} `json:"iacProvider"`
+				} `json:"capabilities"`
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []struct {
+				resource string
+				name     string
+				typeName string
+				required bool
+			}{
+				{"digitalocean.database_user", "database_id", "string", true},
+				{"digitalocean.database_user", "username", "string", true},
+				{"digitalocean.database_user", "rotation_epoch", "string", false},
+				{"infra.database", "admin_rotation_epoch", "string", false},
+				{"infra.droplet", "max_monthly_usd", "number", false},
+			} {
+				got, ok := manifest.Capabilities.IaCProvider.ConfigSchema[want.resource].Fields[want.name]
+				if !ok || got.Type != want.typeName || got.Required != want.required || got.Description == "" {
+					t.Errorf("%s.%s discovery = %+v (present %t), want %s required=%t and a description", want.resource, want.name, got, ok, want.typeName, want.required)
+				}
+			}
+		})
 	}
 }
 

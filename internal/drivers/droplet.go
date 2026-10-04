@@ -33,6 +33,7 @@ type DropletDriver struct {
 	storage        StorageClient        // optional; required only when spec.Config["volumes"] is non-empty
 	storageActions StorageActionsClient // required for Replace; nil-safe in non-Replace paths
 	actions        ActionsClient        // required for Replace; nil-safe in non-Replace paths
+	sizes          DropletSizesClient   // required only for explicit monthly USD caps
 	region         string
 	// test-only timeout overrides (zero = use production defaults)
 	replaceTimeout      time.Duration
@@ -48,6 +49,7 @@ func NewDropletDriver(c *godo.Client, region string) *DropletDriver {
 		storage:        c.Storage,
 		storageActions: c.StorageActions,
 		actions:        c.Actions,
+		sizes:          c.Sizes,
 		region:         region,
 	}
 }
@@ -59,6 +61,7 @@ func NewDropletDriver(c *godo.Client, region string) *DropletDriver {
 //
 // Existing tests that pass (DropletsClient, region) continue to compile unchanged.
 // Tests that exercise Replace must additionally pass StorageActionsClient and ActionsClient.
+// Capped specs additionally require a DropletSizesClient.
 func NewDropletDriverWithClient(c DropletsClient, region string, optional ...interface{}) *DropletDriver {
 	d := &DropletDriver{client: c, region: region}
 	for _, o := range optional {
@@ -78,6 +81,8 @@ func NewDropletDriverWithClient(c DropletsClient, region string, optional ...int
 			d.storageActions = v
 		case ActionsClient:
 			d.actions = v
+		case DropletSizesClient:
+			d.sizes = v
 		}
 	}
 	return d
@@ -112,6 +117,10 @@ func (d *DropletDriver) Create(ctx context.Context, spec interfaces.ResourceSpec
 func (d *DropletDriver) createWithResolvedVolumes(
 	ctx context.Context, spec interfaces.ResourceSpec, resolvedIDs []string,
 ) (*interfaces.ResourceOutput, error) {
+	quote, err := QuoteDropletPrice(ctx, d.sizes, spec)
+	if err != nil {
+		return nil, err
+	}
 	size := strFromConfig(spec.Config, "size", "s-1vcpu-2gb")
 	image := strFromConfig(spec.Config, "image", "ubuntu-24-04-x64")
 	region := strFromConfig(spec.Config, "region", d.region)
@@ -180,7 +189,11 @@ func (d *DropletDriver) createWithResolvedVolumes(
 			return nil, fmt.Errorf("droplet create %q: wait ready (id=%d): %w", spec.Name, droplet.ID, waitErr)
 		}
 	}
-	return d.dropletOutput(ctx, ready), nil
+	out := d.dropletOutput(ctx, ready)
+	if quote != nil {
+		out.Outputs["price_quote"] = quote
+	}
+	return out, nil
 }
 
 // dropletReady reports whether a Droplet is considered fully provisioned
@@ -286,7 +299,10 @@ func (d *DropletDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) 
 // ssh_keys. Operators must taint the Droplet manually to roll a new value
 // for any of these. See the inline comment near the end of this function
 // for the full rationale.
-func (d *DropletDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+func (d *DropletDriver) Diff(ctx context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	if _, err := QuoteDropletPrice(ctx, d.sizes, desired); err != nil {
+		return nil, err
+	}
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
@@ -782,6 +798,9 @@ var _ interfaces.ResourceReplacer = (*DropletDriver)(nil)
 // so the workflow engine's error-prefix backstop sees the recognized
 // "<resource-type> replace " family and passes the error through unchanged.
 func (d *DropletDriver) Replace(ctx context.Context, oldRef interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	if _, err := QuoteDropletPrice(ctx, d.sizes, spec); err != nil {
+		return nil, fmt.Errorf("droplet replace: pricing preflight: %w", err)
+	}
 	oldID, err := providerIDToInt(oldRef.ProviderID)
 	if err != nil {
 		return nil, fmt.Errorf("droplet replace %q: invalid old ProviderID %q: %w", oldRef.Name, oldRef.ProviderID, err)

@@ -106,8 +106,8 @@ func TestDOIaCProviderRequiredServer_AllRPCs(t *testing.T) {
 		t.Fatalf("Capabilities RPC: %v", err)
 	}
 	got := capsResp.GetCapabilities()
-	if len(got) != 17 {
-		t.Errorf("Capabilities len = %d, want 17 (one per DO resource type)", len(got))
+	if len(got) != 18 {
+		t.Errorf("Capabilities len = %d, want 18 (one per DO resource type)", len(got))
 	}
 	hasContainerService := false
 	for _, c := range got {

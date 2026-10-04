@@ -2,8 +2,12 @@ package drivers_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,6 +15,168 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/digitalocean/godo"
 )
+
+func TestDatabaseDriver_AdminRotationEpoch(t *testing.T) {
+	const id = "9cc10173-e9ea-4176-9dbc-a4cee4c4ff30"
+	const password = "ADMIN_SECRET:/?#@%+"
+	resets, resizes := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/databases/"+id:
+			_ = json.NewEncoder(w).Encode(map[string]any{"database": map[string]any{
+				"id": id, "name": "db", "engine": "pg", "status": "online", "size": "db-s-1vcpu-1gb",
+				"connection": map[string]any{"host": "db.example.test", "port": 25060, "database": "defaultdb", "user": "doadmin", "password": password, "uri": "postgres://" + password, "ssl": true},
+			}})
+		case r.Method == http.MethodPut && r.URL.Path == "/v2/databases/"+id+"/resize":
+			resizes++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v2/databases/"+id+"/users/doadmin/reset_auth":
+			resets++
+			_ = json.NewEncoder(w).Encode(map[string]any{"user": map[string]any{"name": "doadmin", "password": password}})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	d := drivers.NewDatabaseDriver(godoClientForTest(t, srv), "nyc3")
+	spec := interfaces.ResourceSpec{Name: "db", Type: "infra.database", Config: map[string]any{"admin_rotation_epoch": "2", "size": "db-s-1vcpu-1gb"}}
+	current := &interfaces.ResourceOutput{Name: "db", ProviderID: id, Outputs: map[string]any{"admin_rotation_epoch": "1", "size": "db-s-1vcpu-1gb"}}
+	diff, err := d.Diff(t.Context(), spec, current)
+	if err != nil || !diff.NeedsUpdate {
+		t.Fatalf("epoch diff = %v, %v", diff, err)
+	}
+	ref := interfaces.ResourceRef{Name: "db", Type: "infra.database", ProviderID: id}
+	out, err := d.UpdateWithState(t.Context(), ref, spec, databaseOutputState(ref, current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resets != 1 || out.Outputs["admin_rotation_epoch"] != "2" {
+		t.Fatalf("rotation metadata/reset count incorrect: %d", resets)
+	}
+	if out.Outputs["password"] != password || !out.Sensitive["password"] || !out.Sensitive["uri"] {
+		t.Fatal("rotation credentials not routed")
+	}
+	u, err := url.Parse(out.Outputs["uri"].(string))
+	if err != nil {
+		t.Fatal("invalid admin URI")
+	}
+	got, _ := u.User.Password()
+	if got != password || u.User.Username() != "doadmin" || u.Query().Get("sslmode") != "require" {
+		t.Fatal("admin URI lost escaping or TLS")
+	}
+	if _, err := d.Diff(t.Context(), spec, out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.UpdateWithState(t.Context(), ref, spec, databaseOutputState(ref, out)); err != nil {
+		t.Fatal(err)
+	}
+	if resets != 1 {
+		t.Fatalf("same epoch reset again: %d", resets)
+	}
+	fresh := drivers.NewDatabaseDriver(godoClientForTest(t, srv), "nyc3")
+	diff, err = fresh.Diff(t.Context(), spec, out)
+	if err != nil || diff.NeedsUpdate {
+		t.Fatalf("persisted epoch diff = %v, %v", diff, err)
+	}
+	read, err := fresh.Read(t.Context(), interfaces.ResourceRef{Name: "db", ProviderID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"uri", "password", "admin_rotation_epoch"} {
+		if _, ok := read.Outputs[key]; ok {
+			t.Fatalf("refresh overwrote routed/local field %s", key)
+		}
+	}
+	if resizes != 2 {
+		t.Fatalf("unexpected resize count %d", resizes)
+	}
+}
+
+func TestDatabaseDriver_AdminRotationRequiresPriorEpochAndCapability(t *testing.T) {
+	d := drivers.NewDatabaseDriverWithClient(&mockDatabaseClient{db: testDatabase()}, "nyc3")
+	spec := interfaces.ResourceSpec{Name: "db", Config: map[string]any{"admin_rotation_epoch": "2"}}
+	if _, err := d.Update(t.Context(), interfaces.ResourceRef{Name: "db", ProviderID: "9cc10173-e9ea-4176-9dbc-a4cee4c4ff30"}, spec); err == nil {
+		t.Fatal("rotation without prior epoch/capability accepted")
+	}
+	for _, value := range []any{"", 2, true, []any{"KNOWN_SECRET"}} {
+		spec.Config["admin_rotation_epoch"] = value
+		_, err := d.Diff(t.Context(), spec, nil)
+		if err == nil || strings.Contains(err.Error(), "KNOWN_SECRET") {
+			t.Fatal("invalid epoch accepted or disclosed")
+		}
+	}
+}
+
+func TestDatabaseDriver_AdminRotationSafeAPIDiagnostics(t *testing.T) {
+	for _, operation := range []string{"cluster_create", "parent", "resize", "admin_reset"} {
+		t.Run(operation, func(t *testing.T) {
+			f, client := newDatabaseUserAPI(t, "app-user")
+			f.status[operation] = http.StatusForbidden
+			d := drivers.NewDatabaseDriver(client, "nyc3")
+			spec := interfaces.ResourceSpec{Name: "db", Type: "infra.database", Config: map[string]any{"admin_rotation_epoch": "2"}}
+			var err error
+			if operation == "cluster_create" {
+				_, err = d.Create(t.Context(), spec)
+			} else {
+				_, err = d.Diff(t.Context(), spec, &interfaces.ResourceOutput{ProviderID: databaseUserParent, Outputs: map[string]any{"admin_rotation_epoch": "1"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref := interfaces.ResourceRef{Name: "db", Type: "infra.database", ProviderID: databaseUserParent}
+				_, err = d.UpdateWithState(t.Context(), ref, spec, databasePriorState(ref, "admin_rotation_epoch", "1"))
+			}
+			if !errors.Is(err, interfaces.ErrForbidden) || strings.Contains(err.Error(), databaseUserSecret) {
+				t.Fatalf("unsafe API diagnostics or lost category: %v", err)
+			}
+			var cause *godo.ErrorResponse
+			if !errors.As(err, &cause) {
+				t.Fatal("API cause lost")
+			}
+		})
+	}
+}
+
+func TestDatabaseDriver_AdminRotationCreateAndLegacyNoReset(t *testing.T) {
+	f, client := newDatabaseUserAPI(t, "app-user")
+	d := drivers.NewDatabaseDriver(client, "nyc3")
+	spec := interfaces.ResourceSpec{Name: "db", Config: map[string]any{"admin_rotation_epoch": "initial"}}
+	out, err := d.Create(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Outputs["admin_rotation_epoch"] != "initial" || out.Outputs["password"] != databaseUserSecret {
+		t.Fatal("initial epoch/credentials missing")
+	}
+	if f.count("admin_reset") != 0 {
+		t.Fatal("new cluster unnecessarily reset admin")
+	}
+	spec.Config = map[string]any{}
+	if _, err := d.Update(t.Context(), interfaces.ResourceRef{ProviderID: databaseUserParent}, spec); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("admin_reset") != 0 {
+		t.Fatal("legacy update reset admin without epoch")
+	}
+}
+
+func TestDatabaseDriver_AdminRotationReturnsPostResizeMetadata(t *testing.T) {
+	_, client := newDatabaseUserAPI(t, "app-user")
+	d := drivers.NewDatabaseDriver(client, "nyc3")
+	spec := interfaces.ResourceSpec{Name: "db", Type: "infra.database", Config: map[string]any{"admin_rotation_epoch": "2", "size": "db-s-2vcpu-4gb"}}
+	current := &interfaces.ResourceOutput{ProviderID: databaseUserParent, Outputs: map[string]any{"admin_rotation_epoch": "1", "size": "db-s-1vcpu-1gb"}}
+	if _, err := d.Diff(t.Context(), spec, current); err != nil {
+		t.Fatal(err)
+	}
+	ref := interfaces.ResourceRef{Name: "db", Type: "infra.database", ProviderID: databaseUserParent}
+	out, err := d.UpdateWithState(t.Context(), ref, spec, databaseOutputState(ref, current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Outputs["size"] != "db-s-2vcpu-4gb" {
+		t.Fatal("rotation persisted stale pre-resize metadata")
+	}
+}
 
 type mockDatabaseClient struct {
 	db              *godo.Database
@@ -480,8 +646,11 @@ func TestDatabaseDriver_Read_NameBasedHydratesConnectionOutputs(t *testing.T) {
 	if mock.getCalls != 1 {
 		t.Fatalf("Get calls = %d, want 1 to hydrate connection outputs", mock.getCalls)
 	}
-	if uri, _ := out.Outputs["uri"].(string); uri == "" {
-		t.Fatalf("uri output missing after adoption/name-based read: %#v", out.Outputs)
+	if host, _ := out.Outputs["host"].(string); host == "" {
+		t.Fatal("host output missing after adoption/name-based read")
+	}
+	if _, ok := out.Outputs["uri"]; ok {
+		t.Fatal("refresh must preserve routed URI by omitting credential output")
 	}
 }
 

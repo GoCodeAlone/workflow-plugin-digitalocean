@@ -103,23 +103,24 @@ func (p *DOProvider) Initialize(ctx context.Context, config map[string]any) erro
 	p.client = godo.NewClient(oauthClient)
 
 	p.drivers = map[string]interfaces.ResourceDriver{
-		"infra.container_service": drivers.NewAppPlatformDriver(p.client, p.region),
-		"infra.app_domain":        drivers.NewAppDomainDriver(p.client),
-		"infra.k8s_cluster":       drivers.NewKubernetesDriver(p.client, p.region),
-		"infra.database":          drivers.NewDatabaseDriver(p.client, p.region),
-		"infra.cache":             drivers.NewCacheDriver(p.client, p.region),
-		"infra.load_balancer":     drivers.NewLoadBalancerDriver(p.client, p.region),
-		"infra.vpc":               drivers.NewVPCDriver(p.client, p.region),
-		"infra.firewall":          drivers.NewFirewallDriver(p.client),
-		"infra.dns":               drivers.NewDNSDriver(p.client),
-		"infra.storage":           drivers.NewSpacesDriver(p.client, p.region, spacesAccessKey, spacesSecretKey),
-		"infra.spaces_key":        drivers.NewSpacesKeyDriver(p.client),
-		"infra.registry":          drivers.NewRegistryDriver(p.client),
-		"infra.certificate":       drivers.NewCertificateDriver(p.client),
-		"infra.droplet":           drivers.NewDropletDriver(p.client, p.region),
-		"infra.volume":            drivers.NewVolumeDriver(p.client, p.region),
-		"infra.iam_role":          drivers.NewIAMRoleDriver(),
-		"infra.api_gateway":       drivers.NewAPIGatewayDriver(p.client, p.region),
+		"infra.container_service":    drivers.NewAppPlatformDriver(p.client, p.region),
+		"infra.app_domain":           drivers.NewAppDomainDriver(p.client),
+		"infra.k8s_cluster":          drivers.NewKubernetesDriver(p.client, p.region),
+		"infra.database":             drivers.NewDatabaseDriver(p.client, p.region),
+		"digitalocean.database_user": drivers.NewDatabaseUserDriver(p.client),
+		"infra.cache":                drivers.NewCacheDriver(p.client, p.region),
+		"infra.load_balancer":        drivers.NewLoadBalancerDriver(p.client, p.region),
+		"infra.vpc":                  drivers.NewVPCDriver(p.client, p.region),
+		"infra.firewall":             drivers.NewFirewallDriver(p.client),
+		"infra.dns":                  drivers.NewDNSDriver(p.client),
+		"infra.storage":              drivers.NewSpacesDriver(p.client, p.region, spacesAccessKey, spacesSecretKey),
+		"infra.spaces_key":           drivers.NewSpacesKeyDriver(p.client),
+		"infra.registry":             drivers.NewRegistryDriver(p.client),
+		"infra.certificate":          drivers.NewCertificateDriver(p.client),
+		"infra.droplet":              drivers.NewDropletDriver(p.client, p.region),
+		"infra.volume":               drivers.NewVolumeDriver(p.client, p.region),
+		"infra.iam_role":             drivers.NewIAMRoleDriver(),
+		"infra.api_gateway":          drivers.NewAPIGatewayDriver(p.client, p.region),
 	}
 	return nil
 }
@@ -133,6 +134,7 @@ func (p *DOProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 		{ResourceType: "infra.app_domain", Tier: 2, Operations: noScale},
 		{ResourceType: "infra.k8s_cluster", Tier: 1, Operations: ops},
 		{ResourceType: "infra.database", Tier: 1, Operations: ops},
+		{ResourceType: "digitalocean.database_user", Tier: 1, Operations: noScale},
 		{ResourceType: "infra.cache", Tier: 1, Operations: ops},
 		{ResourceType: "infra.load_balancer", Tier: 1, Operations: ops},
 		{ResourceType: "infra.vpc", Tier: 1, Operations: ops},
@@ -255,15 +257,26 @@ func (p *DOProvider) ResolveSizing(resourceType string, size interfaces.Size, hi
 // (including the ForceNew → replace promotion), emits creates/deletes in
 // dependency-correct order, and consults the diff cache.
 //
-// The 2-statement form (call + pointer-bridge return) is mandated by the
-// W-Refactor / iac-codemod analyzer (cmd/iac-codemod AssertPlanDelegatesToHelper);
-// see workflow CHANGELOG entry referencing platform.ComputePlan as the
-// canonical target for v2 IaC providers.
+// Live pricing is checked outside ComputePlan so a cached Diff or a new
+// resource cannot bypass the cap. Action classification stays delegated to
+// the canonical helper; quotes are exposed by ValidatePlan diagnostics.
 //
 // addresses workflow-plugin-digitalocean#63: the prior hand-rolled body
 // duplicated ComputePlan's classification logic and silently dropped the
 // ForceNew → replace upgrade path (only NeedsReplace was honored).
 func (p *DOProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
+	var sizes drivers.DropletSizesClient
+	if p.client != nil {
+		sizes = p.client.Sizes
+	}
+	for _, spec := range desired {
+		if spec.Type != "infra.droplet" {
+			continue
+		}
+		if _, err := drivers.QuoteDropletPrice(ctx, sizes, spec); err != nil {
+			return nil, fmt.Errorf("digitalocean plan: %w", err)
+		}
+	}
 	plan, err := platform.ComputePlan(ctx, p, desired, current)
 	return &plan, err
 }

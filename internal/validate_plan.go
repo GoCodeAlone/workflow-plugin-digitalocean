@@ -1,11 +1,14 @@
 package internal
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/GoCodeAlone/workflow-plugin-digitalocean/internal/drivers"
 	"github.com/GoCodeAlone/workflow/interfaces"
 )
 
@@ -52,8 +55,8 @@ func looksLikeResourceName(s string) bool {
 }
 
 // ValidatePlan implements interfaces.ProviderValidator (W-4): a read-only,
-// no-remote-call cross-resource constraint check that runs at `wfctl infra
-// align` time before any cloud API call. Diagnostics surface as
+// cross-resource constraint check. Explicitly capped droplets additionally
+// require a fresh read-only Sizes lookup. Diagnostics surface as
 // PlanDiagnosticError|Warning|Info with severity-driven exit-code mapping
 // (Error always fails align; Warning fails only under --strict; Info never
 // affects exit).
@@ -84,6 +87,10 @@ func looksLikeResourceName(s string) bool {
 // load balancer zone matching against attached droplets, registry
 // regional restrictions.
 func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDiagnostic {
+	return p.validatePlanContext(context.Background(), plan)
+}
+
+func (p *DOProvider) validatePlanContext(ctx context.Context, plan *interfaces.IaCPlan) []interfaces.PlanDiagnostic {
 	if plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
@@ -118,6 +125,26 @@ func (p *DOProvider) ValidatePlan(plan *interfaces.IaCPlan) []interfaces.PlanDia
 			continue
 		}
 		region, _ := a.Resource.Config["region"].(string)
+		if a.Resource.Type == "infra.droplet" {
+			var sizes drivers.DropletSizesClient
+			if p.client != nil {
+				sizes = p.client.Sizes
+			}
+			quote, err := drivers.QuoteDropletPrice(ctx, sizes, a.Resource)
+			if err != nil {
+				diags = append(diags, interfaces.PlanDiagnostic{Severity: interfaces.PlanDiagnosticError, Resource: a.Resource.Name, Field: "max_monthly_usd", Message: err.Error()})
+				continue
+			}
+			if quote != nil {
+				message, err := json.Marshal(quote)
+				if err != nil {
+					diags = append(diags, interfaces.PlanDiagnostic{Severity: interfaces.PlanDiagnosticError, Resource: a.Resource.Name, Field: "max_monthly_usd", Message: "cannot encode live droplet price quote"})
+				} else {
+					diags = append(diags, interfaces.PlanDiagnostic{Severity: interfaces.PlanDiagnosticInfo, Resource: a.Resource.Name, Field: "price_quote", Message: string(message)})
+				}
+				continue
+			}
+		}
 		switch a.Resource.Type {
 		case "infra.container_service":
 			diags = appendAppPlatformDiagnostics(diags, a.Resource, region, byName)
