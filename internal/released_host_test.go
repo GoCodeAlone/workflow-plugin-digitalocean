@@ -100,7 +100,7 @@ func releasedHostTransport() *http.Transport {
 }
 
 func releasedHostEnvironment(root string) []string {
-	return []string{"HOME=" + filepath.Join(root, "home"), "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin", "LANG=C", "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=go1.26.5", "GOFLAGS=-mod=readonly"}
+	return []string{"HOME=" + filepath.Join(root, "home"), "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin", "LANG=C", "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}
 }
 
 func releasedHostGoTool() (string, error) {
@@ -341,6 +341,53 @@ func TestReleasedHostChildEnvironment(t *testing.T) {
 		if (key == "HOME" || key == "TMPDIR" || key == "XDG_CONFIG_HOME") && !strings.HasPrefix(value, root+string(filepath.Separator)) {
 			t.Fatal("native child paths are not owned")
 		}
+	}
+}
+
+func TestReleasedHostRuntimeEnvironmentPreventsToolchainSelection(t *testing.T) {
+	const child = "released-host-runtime-environment-child"
+	if os.Args[len(os.Args)-1] == child {
+		if os.Getenv("GOTOOLCHAIN") != "local" {
+			t.Fatal("runtime environment permits automatic toolchain selection")
+		}
+		if os.Getenv("PATH") != "/usr/bin:/bin" || os.Getenv("GOMODCACHE") != "" || os.Getenv("GOPATH") != "" {
+			t.Fatal("runtime environment changed its fixed PATH or redirects compiler caches")
+		}
+		home := os.Getenv("HOME")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			t.Fatal("cannot create owned runtime home")
+		}
+		if err := os.WriteFile(filepath.Join(home, "runtime-child"), nil, 0o600); err != nil {
+			t.Fatal("cannot write owned runtime marker")
+		}
+		return
+	}
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal("cannot resolve compiled runtime probe")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := releasedHostCommand(ctx, releasedHostEnvironment(root), root, executable,
+		"-test.run=^TestReleasedHostRuntimeEnvironmentPreventsToolchainSelection$", "--", child)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compiled runtime environment probe failed: %s", output)
+	}
+	if cmd.Process == nil || cmd.Process.Signal(syscall.Signal(0)) == nil {
+		t.Fatal("runtime environment probe left an owned child")
+	}
+	if _, err := os.Stat(filepath.Join(root, "home", "runtime-child")); err != nil {
+		t.Fatal("compiled runtime environment probe did not execute")
+	}
+	if _, err := os.Stat(filepath.Join(root, "home", "go", "pkg", "mod")); !os.IsNotExist(err) {
+		t.Fatal("runtime environment probe produced a compiler cache")
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal("ordinary owned runtime cleanup failed")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatal("owned runtime root survived ordinary cleanup")
 	}
 }
 
