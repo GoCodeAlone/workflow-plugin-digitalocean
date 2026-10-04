@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "external",
   "tier": "community",
-  "minEngineVersion": "0.80.1",
+  "minEngineVersion": "0.86.1",
   "required_secrets": [
     {
       "name": "DIGITALOCEAN_TOKEN",
@@ -24,11 +24,14 @@
     "workflow.plugin.external.iac.IaCProviderValidator",
     "workflow.plugin.external.iac.IaCProviderDriftConfigDetector",
     "workflow.plugin.external.iac.IaCProviderLogCapture",
+    "workflow.plugin.external.iac.IaCProviderRunner",
+    "workflow.plugin.external.iac.IaCProviderJobCanceler",
     "workflow.plugin.external.iac.IaCProviderRequirementMapper",
     "workflow.plugin.external.iac.IaCProviderRegionLister",
     "workflow.plugin.external.iac.IaCProviderOwnership",
     "workflow.plugin.external.iac.IaCProviderFinalizer",
     "workflow.plugin.external.iac.ResourceDriver",
+    "workflow.plugin.external.iac.ResourceSensitiveInputDeclarer",
     "workflow.plugin.external.iac.IaCStateBackend"
   ],
   "keywords": [
@@ -88,6 +91,7 @@
         "infra.app_domain",
         "infra.k8s_cluster",
         "infra.database",
+        "digitalocean.database_user",
         "infra.cache",
         "infra.load_balancer",
         "infra.vpc",
@@ -102,6 +106,56 @@
         "infra.api_gateway"
       ],
       "configSchema": {
+        "digitalocean.database_user": {
+          "description": "Managed database user with provider-generated credentials and opt-in epoch-controlled password rotation.",
+          "fields": {
+            "database_id": {
+              "type": "string",
+              "required": true,
+              "description": "Parent managed database's canonical UUID."
+            },
+            "username": {
+              "type": "string",
+              "required": true,
+              "description": "Nonempty database username. The provider escapes it in API paths and resource identifiers."
+            },
+            "rotation_epoch": {
+              "type": "string",
+              "required": false,
+              "description": "Nonempty opaque epoch. Changing it requests password rotation; returned password and TLS URI are sensitive outputs, not desired inputs."
+            }
+          }
+        },
+        "infra.database": {
+          "description": "Managed database. Administrator password rotation is opt-in and separate from ordinary configuration updates.",
+          "fields": {
+            "admin_rotation_epoch": {
+              "type": "string",
+              "required": false,
+              "description": "Nonempty opaque epoch. Changing it requests administrator password rotation; omission preserves legacy behavior."
+            }
+          }
+        },
+        "infra.droplet": {
+          "description": "DigitalOcean Droplet with optional fresh catalog price validation before plan, create, or destructive replacement.",
+          "fields": {
+            "size": {
+              "type": "string",
+              "required": false,
+              "description": "Explicit size slug required when max_monthly_usd is present."
+            },
+            "region": {
+              "type": "string",
+              "required": false,
+              "description": "Explicit region slug required when max_monthly_usd is present."
+            },
+            "max_monthly_usd": {
+              "type": "number",
+              "required": false,
+              "description": "Positive finite monthly USD cap. A fresh Sizes API quote must confirm exact size and region availability and price at or below this cap; uncapped resources make no price lookup."
+            }
+          }
+        },
         "infra.container_service": {
           "expose": {
             "type": "string",

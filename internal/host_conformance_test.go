@@ -11,6 +11,7 @@ import (
 
 	"github.com/GoCodeAlone/workflow/plugin/external"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
+	"github.com/digitalocean/godo"
 )
 
 func TestWorkflowHostConformance_LoadsTypedIaCPlugin(t *testing.T) {
@@ -50,6 +51,11 @@ func TestWorkflowHostConformance_LoadsTypedIaCPlugin(t *testing.T) {
 	if !registryHasService(registry, pb.IaCProviderRequired_ServiceDesc.ServiceName) {
 		t.Fatalf("contract registry missing required service %q: %v", pb.IaCProviderRequired_ServiceDesc.ServiceName, registry.GetContracts())
 	}
+	for _, name := range []string{pb.IaCProviderRunner_ServiceDesc.ServiceName, pb.IaCProviderJobCanceler_ServiceDesc.ServiceName, pb.ResourceSensitiveInputDeclarer_ServiceDesc.ServiceName} {
+		if !registryHasService(registry, name) {
+			t.Fatalf("host did not discover %q", name)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -69,6 +75,63 @@ func TestWorkflowHostConformance_LoadsTypedIaCPlugin(t *testing.T) {
 	}
 	if !capabilitiesHasResource(capabilities, "infra.container_service") {
 		t.Fatalf("provider capabilities missing infra.container_service: %v", capabilities.GetCapabilities())
+	}
+}
+
+func TestWorkflowHostConformance_AppPlatformRunnerLifecycle(t *testing.T) {
+	if os.Getenv("WORKFLOW_IAC_HOST_CONFORMANCE") != "1" {
+		t.Skip("set WORKFLOW_IAC_HOST_CONFORMANCE=1 to run host compatibility smoke")
+	}
+	api := newAppJobAPIFake()
+	api.app.Spec.Databases = []*godo.AppDatabaseSpec{{Name: "db"}}
+	apiServer := appJobHTTPFake(t, api)
+	repoRoot := testRepoRoot(t)
+	pluginName := readPluginName(t, filepath.Join(repoRoot, "plugin.json"))
+	pluginsDir := filepath.Join(t.TempDir(), "plugins")
+	pluginDir := filepath.Join(pluginsDir, pluginName)
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"plugin.json", "plugin.contracts.json"} {
+		copyFile(t, filepath.Join(repoRoot, file), filepath.Join(pluginDir, file))
+	}
+	// Only the HTTP dependency is redirected. The fixture launches the same
+	// NewIaCServer and published SDK used by the production plugin entrypoint.
+	build := exec.Command("go", "build", "-o", filepath.Join(pluginDir, pluginName), "./internal/testdata/app-platform-runner")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build real-server fixture: %v\n%s", err, output)
+	}
+	t.Setenv("WORKFLOW_DO_JOB_TEST_API", apiServer.URL)
+	t.Setenv("WORKFLOW_DO_JOB_TEST_MANIFEST", filepath.Join(repoRoot, "plugin.json"))
+	mgr := external.NewExternalPluginManager(pluginsDir, nil)
+	t.Cleanup(mgr.Shutdown)
+	adapter, err := mgr.LoadPlugin(pluginName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{pb.IaCProviderRunner_ServiceDesc.ServiceName, pb.IaCProviderJobCanceler_ServiceDesc.ServiceName} {
+		if !registryHasService(adapter.ContractRegistry(), name) {
+			t.Fatalf("missing runner contract %s", name)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	spec := validAppJobSpec()
+	client := pb.NewIaCProviderRunnerClient(adapter.Conn())
+	handle, err := client.RunJob(ctx, &pb.JobSpec{Name: spec.Name, Target: &pb.ResourceRef{Name: spec.Target.Name, Type: spec.Target.Type, ProviderId: spec.Target.ProviderID}, Image: spec.Image, RunCommand: spec.RunCommand, TimeoutSeconds: 300, EnvVarsSecret: spec.EnvVarsSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := client.JobStatus(ctx, handle)
+	if err != nil || reply.GetState() != pb.JobState_JOB_STATE_RUNNING {
+		t.Fatalf("native process status: %v %v", reply, err)
+	}
+	if _, err := pb.NewIaCProviderJobCancelerClient(adapter.Conn()).CancelJob(ctx, reply.GetHandle()); err != nil {
+		t.Fatal(err)
+	}
+	if api.cancels != 1 || len(api.app.Spec.Jobs) != 0 {
+		t.Fatal("launched provider did not cancel and clean up")
 	}
 }
 

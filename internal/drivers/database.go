@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -59,6 +60,8 @@ type DatabaseDriver struct {
 	pendingFirewallUpdates []deferredFirewallUpdate
 }
 
+var _ interfaces.ResourceStateUpdater = (*DatabaseDriver)(nil)
+
 // NewDatabaseDriver creates a DatabaseDriver backed by a real godo client.
 // The godo Apps client is wired automatically to support type=app trusted_source
 // name → UUID resolution at apply time.
@@ -81,6 +84,10 @@ func NewDatabaseDriverWithClients(c DatabaseClient, apps appNameLister, region s
 }
 
 func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	epoch, epochPresent, err := databaseEpochFromConfig(spec.Config, "admin_rotation_epoch")
+	if err != nil {
+		return nil, err
+	}
 	engine := strFromConfig(spec.Config, "engine", "pg")
 	version := strFromConfig(spec.Config, "version", "")
 	size := strFromConfig(spec.Config, "size", "db-s-1vcpu-1gb")
@@ -116,6 +123,9 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 
 	db, _, err := d.client.Create(ctx, req)
 	if err != nil {
+		if epochPresent {
+			return nil, databaseAPIError("database create", err)
+		}
 		return nil, fmt.Errorf("database create %q: %w", spec.Name, WrapGodoError(err))
 	}
 	if db == nil || db.ID == "" {
@@ -129,6 +139,13 @@ func (d *DatabaseDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 		})
 	}
 
+	if epochPresent {
+		out, err := databaseAdminOutput(db, db.Connection, epoch)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
 	return dbOutput(db), nil
 }
 
@@ -156,9 +173,12 @@ func (d *DatabaseDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (
 	}
 	db, _, err := d.client.Get(ctx, ref.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("database read %q: %w", ref.Name, WrapGodoError(err))
+		return nil, databaseAPIError("database read", err)
 	}
-	return dbOutput(db), nil
+	if db == nil {
+		return nil, databaseValidationError("database API returned incomplete database")
+	}
+	return dbReadOutput(db), nil
 }
 
 // findDatabaseByName iterates the paginated database list and returns the first
@@ -169,16 +189,16 @@ func (d *DatabaseDriver) findDatabaseByName(ctx context.Context, name string) (*
 		return nil, err
 	}
 	if db.ID == "" {
-		return dbOutput(db), nil
+		return dbReadOutput(db), nil
 	}
 	hydrated, _, err := d.client.Get(ctx, db.ID)
 	if err != nil {
-		return nil, fmt.Errorf("database read %q after name lookup: %w", name, WrapGodoError(err))
+		return nil, databaseAPIError("database read after name lookup", err)
 	}
 	if hydrated == nil {
-		return dbOutput(db), nil
+		return dbReadOutput(db), nil
 	}
-	return dbOutput(hydrated), nil
+	return dbReadOutput(hydrated), nil
 }
 
 func (d *DatabaseDriver) lookupDatabaseByName(ctx context.Context, name string) (*godo.Database, error) {
@@ -219,9 +239,52 @@ func (d *DatabaseDriver) resolveProviderID(ctx context.Context, ref interfaces.R
 }
 
 func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	return d.UpdateWithState(ctx, ref, spec, nil)
+}
+
+func (d *DatabaseDriver) UpdateWithState(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec, prior *interfaces.ResourceState) (*interfaces.ResourceOutput, error) {
+	epoch, epochPresent, err := databaseEpochFromConfig(spec.Config, "admin_rotation_epoch")
+	if err != nil {
+		return nil, err
+	}
+	if prior != nil || epochPresent {
+		if err := interfaces.ValidateUpdatePriorState(ref, spec, prior); err != nil {
+			return nil, err
+		}
+	}
+	if epochPresent && !canonicalDatabaseID(ref.ProviderID) {
+		return nil, databaseValidationError("database rotation requires canonical database UUID")
+	}
 	providerID, err := d.resolveProviderID(ctx, ref)
 	if err != nil {
 		return nil, err
+	}
+	var rotate bool
+	var rotationDB *godo.Database
+	var resetter databaseAuthResetter
+	if epochPresent {
+		previous, _, err := databaseEpochFromConfig(prior.Outputs, "admin_rotation_epoch")
+		if err != nil {
+			return nil, err
+		}
+		rotate = previous != epoch
+		if rotate {
+			var ok bool
+			resetter, ok = d.client.(databaseAuthResetter)
+			if !ok {
+				return nil, databaseValidationError("database client does not support admin auth reset")
+			}
+			rotationDB, err = readDatabaseParent(ctx, d.client, providerID)
+			if err != nil {
+				return nil, err
+			}
+			if rotationDB.Connection == nil || !validDatabaseUsername(rotationDB.Connection.User) {
+				return nil, databaseValidationError("database admin connection is incomplete")
+			}
+			if _, err := databaseTLSURI(rotationDB, rotationDB.Connection.User, "preflight"); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// Resolve firewall rules BEFORE mutating the database. buildUpdateFirewallRules
 	// can fail for config errors (wrong type) or app name→UUID resolution failures,
@@ -251,6 +314,9 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 		NumNodes: numNodes,
 	})
 	if err != nil {
+		if epochPresent {
+			return nil, databaseAPIError("database update", err)
+		}
 		return nil, fmt.Errorf("database update %q: %w", ref.Name, WrapGodoError(err))
 	}
 	// Sync firewall rules when trusted_sources key is present in config.
@@ -260,6 +326,9 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 			Rules: fwRules,
 		})
 		if err != nil {
+			if epochPresent {
+				return nil, databaseAPIError("database update firewall", err)
+			}
 			return nil, fmt.Errorf("database update firewall %q: %w", ref.Name, WrapGodoError(err))
 		}
 	}
@@ -270,7 +339,41 @@ func (d *DatabaseDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 		})
 	}
 	ref.ProviderID = providerID // pass healed ID to Read
-	return d.Read(ctx, ref)
+	if rotate {
+		username := rotationDB.Connection.User
+		rotationDB, err = readDatabaseParent(ctx, d.client, providerID)
+		if err != nil {
+			return nil, err
+		}
+		if rotationDB.Connection == nil || rotationDB.Connection.User != username {
+			return nil, databaseValidationError("database admin identity changed during update")
+		}
+		if _, err := databaseTLSURI(rotationDB, username, "preflight"); err != nil {
+			return nil, err
+		}
+		user, _, err := resetter.ResetUserAuth(ctx, providerID, url.PathEscape(username), &godo.DatabaseResetUserAuthRequest{})
+		if err != nil {
+			return nil, databaseAPIError("database admin reset auth", err)
+		}
+		if err := validateDatabaseUser(user, username); err != nil {
+			return nil, err
+		}
+		connection := *rotationDB.Connection
+		connection.Password = user.Password
+		out, err := databaseAdminOutput(rotationDB, &connection, epoch)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	out, err := d.Read(ctx, ref)
+	if err == nil {
+		if epochPresent {
+			out.Outputs["admin_rotation_epoch"] = epoch
+		}
+		preserveDatabaseState(out, prior, "admin_rotation_epoch")
+	}
+	return out, err
 }
 
 func (d *DatabaseDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
@@ -286,11 +389,27 @@ func (d *DatabaseDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 }
 
 func (d *DatabaseDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
+	epoch, epochPresent, err := databaseEpochFromConfig(desired.Config, "admin_rotation_epoch")
+	if err != nil {
+		return nil, err
+	}
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
 	var changes []interfaces.FieldChange
 	var needsReplace bool
+	if epochPresent {
+		if !canonicalDatabaseID(current.ProviderID) {
+			return nil, databaseValidationError("database rotation requires canonical database UUID state")
+		}
+		previous, _, err := databaseEpochFromConfig(current.Outputs, "admin_rotation_epoch")
+		if err != nil {
+			return nil, err
+		}
+		if previous != epoch {
+			changes = append(changes, interfaces.FieldChange{Path: "admin_rotation_epoch", Old: previous, New: epoch})
+		}
+	}
 	for _, field := range []struct {
 		key string
 		def string
@@ -363,6 +482,42 @@ func (d *DatabaseDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, 
 
 func (d *DatabaseDriver) SensitiveKeys() []string {
 	return []string{"uri", "password", "user"}
+}
+
+func (d *DatabaseDriver) SensitiveInputPaths(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []string{"/password", "/uri"}, nil
+}
+
+// Optional capability keeps the existing DatabaseClient and old mocks compatible.
+type databaseAuthResetter interface {
+	ResetUserAuth(context.Context, string, string, *godo.DatabaseResetUserAuthRequest) (*godo.DatabaseUser, *godo.Response, error)
+}
+
+func dbReadOutput(db *godo.Database) *interfaces.ResourceOutput {
+	out := dbOutput(db)
+	for _, key := range []string{"uri", "password", "user"} {
+		delete(out.Outputs, key)
+	}
+	return out
+}
+
+func databaseAdminOutput(db *godo.Database, connection *godo.DatabaseConnection, epoch string) (*interfaces.ResourceOutput, error) {
+	if connection == nil || !validDatabaseUsername(connection.User) {
+		return nil, databaseValidationError("database admin connection is incomplete")
+	}
+	snapshot := *db
+	snapshot.Connection = connection
+	uri, err := databaseTLSURI(&snapshot, connection.User, connection.Password)
+	if err != nil {
+		return nil, err
+	}
+	out := dbOutput(&snapshot)
+	out.Outputs["uri"], out.Outputs["password"] = uri, connection.Password
+	out.Outputs["admin_rotation_epoch"] = epoch
+	return out, nil
 }
 
 // resolveAppNamesMap builds a name→UUID map for all non-UUID app names found

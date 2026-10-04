@@ -70,6 +70,7 @@ type doIaCServer struct {
 	// dispatch methods are declared in resourcedriver_server.go
 	// (Task 11 of the strict-contracts force-cutover plan).
 	pb.UnimplementedResourceDriverServer
+	pb.UnimplementedResourceSensitiveInputDeclarerServer
 	// pb.UnimplementedPluginServiceServer satisfies the
 	// mustEmbedUnimplementedPluginServiceServer() forward-compat
 	// requirement on pb.PluginServiceServer. All PluginService methods
@@ -448,12 +449,12 @@ func (s *doIaCServer) RepairDirtyMigration(ctx context.Context, req *pb.RepairDi
 // ValidatePlan satisfies pb.IaCProviderValidatorServer. Note the Go
 // interface returns []PlanDiagnostic only (no error); this method
 // therefore never errors at the gRPC layer beyond marshalling failures.
-func (s *doIaCServer) ValidatePlan(_ context.Context, req *pb.ValidatePlanRequest) (*pb.ValidatePlanResponse, error) {
+func (s *doIaCServer) ValidatePlan(ctx context.Context, req *pb.ValidatePlanRequest) (*pb.ValidatePlanResponse, error) {
 	plan, err := planFromPB(req.GetPlan())
 	if err != nil {
 		return nil, fmt.Errorf("digitalocean iacserver: decode ValidatePlan plan: %w", err)
 	}
-	diags := s.provider.ValidatePlan(plan)
+	diags := s.provider.validatePlanContext(ctx, plan)
 	out := make([]*pb.PlanDiagnostic, 0, len(diags))
 	for _, d := range diags {
 		out = append(out, &pb.PlanDiagnostic{

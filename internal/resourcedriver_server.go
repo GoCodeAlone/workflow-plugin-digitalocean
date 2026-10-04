@@ -42,6 +42,25 @@ import (
 // A signature drift in iac.proto fails the build at this line rather
 // than at first RPC dispatch.
 var _ pb.ResourceDriverServer = (*doIaCServer)(nil)
+var _ pb.ResourceSensitiveInputDeclarerServer = (*doIaCServer)(nil)
+var _ interfaces.ResourceStateUpdater = (*doIaCServer)(nil)
+
+// The public SDK decodes the Update RPC and calls this native optional surface.
+func (s *doIaCServer) UpdateWithState(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec, prior *interfaces.ResourceState) (*interfaces.ResourceOutput, error) {
+	if prior != nil {
+		if err := interfaces.ValidateUpdatePriorState(ref, spec, prior); err != nil {
+			return nil, err
+		}
+	}
+	driver, err := s.resolveResourceDriver(ref.Type)
+	if err != nil {
+		return nil, err
+	}
+	if updater, ok := driver.(interfaces.ResourceStateUpdater); ok {
+		return updater.UpdateWithState(ctx, ref, spec, prior)
+	}
+	return driver.Update(ctx, ref, spec)
+}
 
 // resolveResourceDriver looks up the per-type driver registered on
 // the underlying *DOProvider. Returns a typed gRPC error with
@@ -207,6 +226,22 @@ func (s *doIaCServer) SensitiveKeys(_ context.Context, req *pb.SensitiveKeysRequ
 	return &pb.SensitiveKeysResponse{Keys: append([]string(nil), keys...)}, nil
 }
 
+func (s *doIaCServer) SensitiveInputPaths(ctx context.Context, req *pb.ResourceSensitiveInputPathsRequest) (*pb.ResourceSensitiveInputPathsResponse, error) {
+	driver, err := s.resolveResourceDriver(req.GetResourceType())
+	if err != nil {
+		return nil, err
+	}
+	declarer, ok := driver.(interfaces.ResourceSensitiveInputDeclarer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "driver does not declare sensitive inputs")
+	}
+	paths, err := declarer.SensitiveInputPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ResourceSensitiveInputPathsResponse{Paths: append([]string(nil), paths...)}, nil
+}
+
 // Troubleshoot dispatches to interfaces.Troubleshooter.Troubleshoot
 // when the per-type driver implements that optional interface.
 // Drivers that don't satisfy Troubleshooter surface a typed gRPC
@@ -293,4 +328,3 @@ func outputFromPB(o *pb.ResourceOutput) (*interfaces.ResourceOutput, error) {
 		Status:     o.GetStatus(),
 	}, nil
 }
-
