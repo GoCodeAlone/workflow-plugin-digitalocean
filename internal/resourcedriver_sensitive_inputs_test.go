@@ -487,7 +487,24 @@ func TestDODatabaseRotationNativeReleasedWFCTL(t *testing.T) {
 		}
 		return output
 	}
-	version := run(true, "version")
+	versionResult := captureReleasedHostVersion(ctx, childEnv, root, wfctl, "version")
+	versionRedactor := secrets.NewRedactor()
+	versionRedactor.AddValue("fixture-secret", sentinel)
+	versionRedactor.AddValue("fixture-token", "fixture-token")
+	versionRedactor.AddValue("owned-root", root)
+	versionRedactor.AddValue("released-host-path", wfctl)
+	versionEvidence := versionResult.diagnostic(versionRedactor)
+	// Go retains test logs on failure even when the temporary proof root is gone.
+	t.Logf("%s", versionEvidence)
+	commandNumber++
+	write(fmt.Sprintf("wfctl-%02d.log", commandNumber), []byte(versionEvidence+"\n"))
+	if strings.Contains(string(versionResult.Combined), sentinel) {
+		t.Fatal("released wfctl printed credential bytes")
+	}
+	if versionResult.Status != releasedHostVersionCompleted {
+		t.Fatalf("released wfctl command %d returned unexpected status", commandNumber)
+	}
+	version := versionResult.Combined
 	if strings.TrimSpace(string(version)) != "v0.86.1" {
 		t.Fatal("proof did not run the required released wfctl")
 	}

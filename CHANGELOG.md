@@ -33,12 +33,18 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
   monthly cost, enforced before mutation rather than from a static catalog.
 - Credential-free CI executes the released native wfctl saved-plan/state proof
   and requires genuine cleanup/redaction evidence; skipped proof is not success.
+- Released-host version checks retain bounded, quoted, known-value-redacted
+  stdout/stderr and execution status in test failure output without relaxing
+  raw version or binary identity admission.
 
 ### Changed
 
 - Minimum supported Workflow engine is `0.86.1` for the public prior-state SDK.
   Provider behavior remains plugin-owned; no app-specific recovery integration
   or live deployment is implied by this release.
+- Released-host fixtures explicitly disable wfctl background update lookups,
+  preventing unrelated release notices from contaminating strict version
+  evidence while preserving binary identity and raw combined-output checks.
 
 ### Changed
 
