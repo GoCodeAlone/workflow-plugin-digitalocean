@@ -11,8 +11,8 @@ import (
 	"testing"
 )
 
-// Entire CI, trust and executable inventory at the approved check-contract source repair baseline.
-const recoveryTrustedInventorySHA256 = "dea712c4fa3c579863dcc7c29ca6f83b2a600dde3ab592ac49500b46eafe194f"
+// Entire CI, trust and executable inventory at the approved check-contract trust cleanup baseline.
+const recoveryTrustedInventorySHA256 = "9decad275cbdcb642c21311bc2996931432f2046fe969db07e6b9fa0deb63a05"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string
