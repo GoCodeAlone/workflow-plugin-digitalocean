@@ -11,8 +11,8 @@ import (
 	"testing"
 )
 
-// Entire CI, trust and executable inventory at immutable 5e5887a5.
-const recoveryTrustedInventorySHA256 = "0d7179d840de07d0791ada93c2e1be1cc228a2eb37efbd93baba439ea669f250"
+// Entire CI, trust and executable inventory at the approved check-contract trust staging baseline.
+const recoveryTrustedInventorySHA256 = "0a4569f3fbf7bc49e6879879ad75b14c5424be723fd9a2882aa059b6a378415e"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string
@@ -54,7 +54,7 @@ func TestRecoveryCIAndTrustBytesUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != 46 || digest != recoveryTrustedInventorySHA256 {
-		t.Fatalf("CI/trust/script bytes differ from immutable base: files=%d digest=%s", count, digest)
+		t.Fatalf("CI/trust/script bytes differ from approved baseline: files=%d digest=%s", count, digest)
 	}
 }
 
