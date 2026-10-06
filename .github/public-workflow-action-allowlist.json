@@ -118,5 +118,45 @@
     "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
     "rationale": "Exact selected policy Go setup."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
+    "nodeSHA256": "2e0ab657507095c018435a0da34a76ffffd3ca15eb3ceff7c2b17e13ebbb9383",
+    "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "staged"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
+    "nodeSHA256": "50a4a8d5a662beda4b4b57507d7342495a175dd663e5c1e247961dcbb5d83bee",
+    "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "staged"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
+    "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "staged"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+    "nodeSHA256": "63e1fbea8394f4452eca79cb20922e0b2b95957668000216016ece59a792c060",
+    "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "staged"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "nodeSHA256": "0fe822ed8559961639e22a7249495326099fd0c0302ee96b5ecdf0e6434d6385",
+    "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+    "rationale": "Exact reviewed immutable action node and inherited execution context.",
+    "state": "staged"
   }
 ]
