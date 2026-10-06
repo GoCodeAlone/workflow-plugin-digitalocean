@@ -24,7 +24,7 @@ jobs:
           go-version-file: go.mod
       - run: GOWORK=off go test -race ./...
       - run: GOWORK=off go vet ./...
-      - name: Enforce credential-free public workflows
+      - name: Enforce credential-free public workflows and exact check contract
         run: |
           ./.github/workflows/scripts/check-public-workflow-policy.sh
           ./.github/workflows/scripts/test-public-workflow-policy.sh

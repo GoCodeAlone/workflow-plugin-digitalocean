@@ -60,7 +60,7 @@ if grep -Fq -- "0d368a29ba572e050c62cba90ae56908abbd4155" "${governance_workflow
   exit 1
 fi
 grep -Fq -- "branches: [main]" "${governance_workflow}"
-grep -Fq -- 'required_check="Public Workflow Policy / policy"' "${protection_verifier}"
+grep -Fq -- 'required_check="policy"' "${protection_verifier}"
 grep -Fq -- 'required_approving_review_count >= 1' "${protection_verifier}"
 grep -Fq -- 'dismiss_stale_reviews' "${protection_verifier}"
 grep -Fq -- 'bypass_pull_request_allowances.users' "${protection_verifier}"
@@ -349,8 +349,8 @@ cat >"${classic_protection}" <<'JSON'
   "enforce_admins":{"enabled":true},
   "required_status_checks":{
     "strict":true,
-    "contexts":["Public Workflow Policy / policy"],
-    "checks":[{"context":"Public Workflow Policy / policy","app_id":15368}]
+    "contexts":["policy"],
+    "checks":[{"context":"policy","app_id":15368}]
   },
   "required_pull_request_reviews":{
     "required_approving_review_count":1,
@@ -370,7 +370,7 @@ cat >"${ruleset_protection}" <<'JSON'
   "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
   "rules":[
     {"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}},
-    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"Public Workflow Policy / policy","integration_id":15368}]}},
+    {"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"policy","integration_id":15368}]}},
     {"type":"non_fast_forward"},
     {"type":"deletion"}
   ]
@@ -417,6 +417,10 @@ assert_protection_rejected() {
     exit 1
   fi
 }
+jq '.required_status_checks.contexts=["Public Workflow Policy / policy"] | .required_status_checks.checks[0].context="Public Workflow Policy / policy"' "${classic_protection}" >"${classic_protection}.obsolete-name"
+jq '.rules[1].parameters.required_status_checks[0].context="Public Workflow Policy / policy"' "${ruleset_protection}" >"${ruleset_protection}.obsolete-name"
+assert_protection_rejected classic "${classic_protection}.obsolete-name"
+assert_protection_rejected ruleset "${ruleset_protection}.obsolete-name"
 jq 'del(.required_status_checks.strict)' "${classic_protection}" >"${classic_protection}.missing"
 jq '.required_status_checks.strict=false' "${classic_protection}" >"${classic_protection}.false"
 assert_protection_rejected classic "${classic_protection}.missing"
@@ -436,7 +440,7 @@ assert_protection_rejected ruleset "${ruleset_protection}.false"
 jq 'del(.rules[1].parameters.required_status_checks[0].integration_id)' "${ruleset_protection}" >"${ruleset_protection}.producer-missing"
 jq '.rules[1].parameters.required_status_checks[0].integration_id=99999' "${ruleset_protection}" >"${ruleset_protection}.producer-wrong"
 jq '.rules[1].parameters.required_status_checks[0].integration_id=null' "${ruleset_protection}" >"${ruleset_protection}.producer-null"
-jq '.rules[1].parameters.required_status_checks=[] | .rules[1].parameters.contexts=["Public Workflow Policy / policy"]' "${ruleset_protection}" >"${ruleset_protection}.legacy-context-only"
+jq '.rules[1].parameters.required_status_checks=[] | .rules[1].parameters.contexts=["policy"]' "${ruleset_protection}" >"${ruleset_protection}.legacy-context-only"
 assert_protection_rejected ruleset "${ruleset_protection}.producer-missing"
 assert_protection_rejected ruleset "${ruleset_protection}.producer-wrong"
 assert_protection_rejected ruleset "${ruleset_protection}.producer-null"
