@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo="${1:?usage: verify-public-workflow-branch-protection.sh OWNER/REPO [BRANCH]}"
 branch="${2:-main}"
-required_check="Public Workflow Policy / policy"
+required_check="policy"
 required_app_id=15368
 fixture_mode=false
 if [[ "${PUBLIC_WORKFLOW_PROTECTION_FIXTURE_MODE:-}" == "1" ]]; then

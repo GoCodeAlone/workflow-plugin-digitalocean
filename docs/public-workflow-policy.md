@@ -88,7 +88,7 @@ required status check is installed immediately after the bootstrap merge; it
 is necessarily absent during bootstrap because no base workflow produces it.
 This exception does not apply to any later workflow-authority change.
 
-The same stable `Public Workflow Policy / policy` check also runs on pushes to
+The same stable `policy` check also runs on pushes to
 `main`, comparing `github.event.before` as trusted policy authority with the new
 commit as candidate data. Task completion remains contingent on repository
 branch protection: changes must use pull requests, require at least one
@@ -104,13 +104,17 @@ while provisioning this exact producer-bound check. For example:
 ```bash
 repo=GoCodeAlone/workflow-plugin-digitalocean
 branch=main
-context='Public Workflow Policy / policy'
+context='policy'
+obsolete_context='Public Workflow Policy / policy'
 gh api "repos/${repo}/branches/${branch}/protection/required_status_checks" |
-  jq --arg context "${context}" --argjson app_id 15368 '
-    .strict = true
-    | .checks = ([.checks[]? | select(.context != $context)]
+  jq --arg context "${context}" --arg obsolete "${obsolete_context}" --argjson app_id 15368 '
+    if ((.contexts // []) - [.checks[]?.context] | length) > 0 then
+      error("required contexts lack check entries; inspect before replacing")
+    else . end
+    | .strict = true
+    | .checks = ([.checks[]? | select(.context != $context and .context != $obsolete)]
       + [{context: $context, app_id: $app_id}])
-    | {strict, contexts: (.contexts // []), checks}
+    | {strict, contexts: [], checks}
   ' |
   gh api --method PATCH \
     "repos/${repo}/branches/${branch}/protection/required_status_checks" \
@@ -129,7 +133,7 @@ payload with rules including:
     "strict_required_status_checks_policy": true,
     "required_status_checks": [
       {
-        "context": "Public Workflow Policy / policy",
+        "context": "policy",
         "integration_id": 15368
       }
     ]
@@ -151,7 +155,7 @@ ruleset:
 
 ```bash
 gh api repos/GoCodeAlone/workflow-plugin-digitalocean/commits/main/check-runs \
-  --jq '.check_runs[] | select(.name == "Public Workflow Policy / policy") | {name, app: {slug: .app.slug, id: .app.id}}'
+  --jq '.check_runs[] | select(.name == "policy") | {name, app: {slug: .app.slug, id: .app.id}}'
 
 ./.github/workflows/scripts/verify-public-workflow-branch-protection.sh GoCodeAlone/workflow-plugin-digitalocean main
 ```
