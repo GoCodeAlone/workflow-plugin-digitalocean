@@ -16,9 +16,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/GoCodeAlone/workflow/secrets"
 )
 
 const releasedHostURL = "https://github.com/GoCodeAlone/workflow/releases/download/v0.86.1/wfctl-linux-amd64"
@@ -100,7 +103,7 @@ func releasedHostTransport() *http.Transport {
 }
 
 func releasedHostEnvironment(root string) []string {
-	return []string{"HOME=" + filepath.Join(root, "home"), "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin", "LANG=C", "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}
+	return []string{"HOME=" + filepath.Join(root, "home"), "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin", "LANG=C", "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly", "WFCTL_NO_UPDATE_CHECK=1"}
 }
 
 func releasedHostGoTool() (string, error) {
@@ -172,6 +175,231 @@ func releasedHostCommand(ctx context.Context, env []string, dir, executable stri
 	}
 	cmd.WaitDelay = time.Second
 	return cmd
+}
+
+const releasedHostVersionOutputLimit = 4096
+const releasedHostVersionEvidenceLimit = 16384
+
+type releasedHostVersionStatus string
+
+const (
+	releasedHostVersionCompleted    releasedHostVersionStatus = "completed"
+	releasedHostVersionNonzero      releasedHostVersionStatus = "nonzero"
+	releasedHostVersionTimeout      releasedHostVersionStatus = "timeout"
+	releasedHostVersionCanceled     releasedHostVersionStatus = "canceled"
+	releasedHostVersionOverflow     releasedHostVersionStatus = "overflow"
+	releasedHostVersionStartFailure releasedHostVersionStatus = "start-failure"
+	releasedHostVersionWaitFailure  releasedHostVersionStatus = "wait-failure"
+)
+
+type releasedHostVersionResult struct {
+	Stdout, Stderr, Combined []byte
+	Status                   releasedHostVersionStatus
+	ExitCode                 int
+	Overflow                 bool
+}
+
+func captureReleasedHostVersion(ctx context.Context, env []string, dir, executable string, args ...string) releasedHostVersionResult {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	capture := releasedHostVersionCapture{cancel: cancel, result: releasedHostVersionResult{
+		Stdout: make([]byte, 0, releasedHostVersionOutputLimit), Stderr: make([]byte, 0, releasedHostVersionOutputLimit), Combined: make([]byte, 0, releasedHostVersionOutputLimit),
+		Status: releasedHostVersionCompleted, ExitCode: -1,
+	}}
+	cmd := releasedHostCommand(ctx, env, dir, executable, args...)
+	cmd.Stdout = releasedHostVersionWriter{capture: &capture, stdout: true}
+	cmd.Stderr = releasedHostVersionWriter{capture: &capture}
+	err := cmd.Run()
+	// Also kill descendants if the leader exited before cancellation/WaitDelay.
+	cleanupErr := cmd.Cancel()
+	result := capture.result
+	if cmd.ProcessState != nil {
+		result.ExitCode = cmd.ProcessState.ExitCode()
+	}
+	switch {
+	case result.Overflow:
+		result.Status = releasedHostVersionOverflow
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		result.Status = releasedHostVersionTimeout
+	case ctx.Err() != nil:
+		result.Status = releasedHostVersionCanceled
+	case cmd.ProcessState == nil:
+		result.Status = releasedHostVersionStartFailure
+	case cleanupErr != nil || errors.Is(err, exec.ErrWaitDelay):
+		result.Status = releasedHostVersionWaitFailure
+	case err != nil:
+		result.Status = releasedHostVersionNonzero
+	}
+	return result
+}
+
+type releasedHostVersionCapture struct {
+	mu     sync.Mutex
+	result releasedHostVersionResult
+	cancel context.CancelFunc
+}
+
+type releasedHostVersionWriter struct {
+	capture *releasedHostVersionCapture
+	stdout  bool
+}
+
+func (w releasedHostVersionWriter) Write(p []byte) (int, error) {
+	c := w.capture
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := min(len(p), releasedHostVersionOutputLimit-len(c.result.Combined))
+	if w.stdout {
+		c.result.Stdout = append(c.result.Stdout, p[:n]...)
+	} else {
+		c.result.Stderr = append(c.result.Stderr, p[:n]...)
+	}
+	// Preserve raw read-arrival order, not a synthetic stdout/stderr concatenation.
+	c.result.Combined = append(c.result.Combined, p[:n]...)
+	if n < len(p) {
+		c.result.Overflow = true
+		c.cancel()
+	}
+	return len(p), nil
+}
+
+func (r releasedHostVersionResult) diagnostic(redactor *secrets.Redactor) string {
+	summary := fmt.Sprintf("released wfctl version: status=%s exit=%d overflow=%t stdout_bytes=%d stderr_bytes=%d combined_bytes=%d",
+		r.Status, r.ExitCode, r.Overflow, len(r.Stdout), len(r.Stderr), len(r.Combined))
+	// Never redact a clipped prefix: it may end partway through a known value.
+	if redactor == nil || r.Overflow || r.Status == releasedHostVersionTimeout || r.Status == releasedHostVersionCanceled || r.Status == releasedHostVersionWaitFailure {
+		return summary + " streams=omitted (incomplete capture or redactor unavailable)"
+	}
+	streams := fmt.Sprintf(" stdout=%q stderr=%q combined=%q", redactor.Redact(string(r.Stdout)), redactor.Redact(string(r.Stderr)), redactor.Redact(string(r.Combined)))
+	if len(summary)+len(streams) > releasedHostVersionEvidenceLimit {
+		return summary + " streams=omitted (quoted evidence limit)"
+	}
+	return summary + streams
+}
+
+func TestReleasedHostVersionCapture(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, stdout, stderr string
+		status                       releasedHostVersionStatus
+		exitCode                     int
+		admitted                     bool
+	}{
+		{"stderr version", `printf 'v0.86.1\n' >&2`, "", "v0.86.1\n", releasedHostVersionCompleted, 0, true},
+		{"stdout version", `printf 'v0.86.1\n'`, "v0.86.1\n", "", releasedHostVersionCompleted, 0, true},
+		{"extra stderr", `printf 'v0.86.1\n'; printf 'unexpected\n' >&2`, "v0.86.1\n", "unexpected\n", releasedHostVersionCompleted, 0, false},
+		{"extra stdout", `printf 'unexpected\n'; printf 'v0.86.1\n' >&2`, "unexpected\n", "v0.86.1\n", releasedHostVersionCompleted, 0, false},
+		{"wrong version", `printf 'v0.86.0\n' >&2`, "", "v0.86.0\n", releasedHostVersionCompleted, 0, false},
+		{"malformed", `printf 'v0.86.1\000\033\377\n' >&2`, "", "v0.86.1\x00\x1b\xff\n", releasedHostVersionCompleted, 0, false},
+		{"empty", `:`, "", "", releasedHostVersionCompleted, 0, false},
+		{"nonzero", `printf 'v0.86.1\n'; printf 'denied\n' >&2; exit 7`, "v0.86.1\n", "denied\n", releasedHostVersionNonzero, 7, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			result := captureReleasedHostVersion(t.Context(), releasedHostEnvironment(root), root, "/bin/sh", "-c", tc.script)
+			if string(result.Stdout) != tc.stdout || string(result.Stderr) != tc.stderr {
+				t.Fatal("version evidence lost separate raw streams")
+			}
+			if result.Status != tc.status || result.ExitCode != tc.exitCode || result.Overflow {
+				t.Fatalf("version execution status = %s/%d/%t; want %s/%d/false", result.Status, result.ExitCode, result.Overflow, tc.status, tc.exitCode)
+			}
+			// Cross-pipe read order is not guaranteed; never synthesize stdout-only admission.
+			combined := string(result.Combined)
+			if combined != tc.stdout+tc.stderr && combined != tc.stderr+tc.stdout {
+				t.Fatal("combined version evidence changed raw command bytes")
+			}
+			if admitted := result.Status == releasedHostVersionCompleted && strings.TrimSpace(combined) == "v0.86.1"; admitted != tc.admitted {
+				t.Fatal("strict raw combined version admission changed")
+			}
+			evidence := result.diagnostic(secrets.NewRedactor())
+			if !strings.Contains(evidence, "stdout="+strconv.Quote(tc.stdout)) || !strings.Contains(evidence, "stderr="+strconv.Quote(tc.stderr)) || !strings.Contains(evidence, "combined="+strconv.Quote(combined)) {
+				t.Fatal("version diagnostic did not safely quote actual streams")
+			}
+			if strings.ContainsAny(evidence, "\x00\x1b\n\r") {
+				t.Fatal("version diagnostic permits control-byte injection")
+			}
+		})
+	}
+}
+
+func TestReleasedHostVersionDiagnosticPrivacy(t *testing.T) {
+	root := t.TempDir()
+	const sentinel = "task27-private-fixture-value"
+	result := captureReleasedHostVersion(t.Context(), releasedHostEnvironment(root), root, "/bin/sh", "-c",
+		`printf '%s\n' "$1"; printf '%s\n' "$2" >&2; exit 9`, "probe", sentinel, root)
+	redactor := secrets.NewRedactor()
+	redactor.AddValue("fixture", sentinel)
+	redactor.AddValue("owned-root", root)
+	evidence := result.diagnostic(redactor)
+	if strings.Contains(evidence, sentinel) || strings.Contains(evidence, root) || !strings.Contains(evidence, "[REDACTED:fixture]") || !strings.Contains(evidence, "[REDACTED:owned-root]") {
+		t.Fatal("version diagnostic exposed or discarded registered private evidence")
+	}
+	if string(result.Stdout) != sentinel+"\n" || string(result.Stderr) != root+"\n" || !strings.Contains(string(result.Combined), sentinel) {
+		t.Fatal("diagnostic redaction modified raw consumer/admission bytes")
+	}
+	if result.Status != releasedHostVersionNonzero || result.ExitCode != 9 || !strings.Contains(evidence, "status=nonzero exit=9") {
+		t.Fatal("private diagnostic lost nonzero status")
+	}
+	if unarmed := result.diagnostic(nil); strings.Contains(unarmed, sentinel) || strings.Contains(unarmed, root) {
+		t.Fatal("unarmed diagnostic emitted raw private bytes")
+	}
+}
+
+func TestReleasedHostVersionCaptureStatus(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	result := captureReleasedHostVersion(ctx, releasedHostEnvironment(root), root, "/bin/sleep", "5")
+	if result.Status != releasedHostVersionTimeout || result.ExitCode != -1 || time.Since(start) > 2*time.Second || !strings.Contains(result.diagnostic(secrets.NewRedactor()), "status=timeout") {
+		t.Fatal("version timeout was not bounded and classified")
+	}
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	result = captureReleasedHostVersion(canceled, releasedHostEnvironment(root), root, "/bin/sleep", "5")
+	if result.Status != releasedHostVersionCanceled || result.ExitCode != -1 {
+		t.Fatal("version cancellation was not classified")
+	}
+	result = captureReleasedHostVersion(t.Context(), releasedHostEnvironment(root), root, filepath.Join(root, "private-missing-command"))
+	if result.Status != releasedHostVersionStartFailure || result.ExitCode != -1 || strings.Contains(result.diagnostic(secrets.NewRedactor()), root) {
+		t.Fatal("version start failure leaked command path or lacked status")
+	}
+}
+
+func TestReleasedHostVersionCaptureOverflow(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr", "combined"} {
+		t.Run(stream, func(t *testing.T) {
+			root := t.TempDir()
+			const sentinel = "task27-boundary-private-value"
+			redactor := secrets.NewRedactor()
+			redactor.AddValue("fixture", sentinel)
+			prefix := strings.Repeat("x", releasedHostVersionOutputLimit-len(sentinel)/2)
+			payload := prefix + sentinel
+			script := `printf '%s' "$1"; exec /bin/sleep 5`
+			switch stream {
+			case "stderr":
+				script = `exec 1>&2; ` + script
+			case "combined":
+				payload = strings.Repeat("x", releasedHostVersionOutputLimit/2-1)
+				script = `printf '%s' "$1"; printf '%s' "$1" >&2; printf '%s' "$2"; exec /bin/sleep 5`
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			start := time.Now()
+			result := captureReleasedHostVersion(ctx, releasedHostEnvironment(root), root, "/bin/sh", "-c", script, "probe", payload, sentinel)
+			if result.Status != releasedHostVersionOverflow || !result.Overflow || time.Since(start) > time.Second {
+				t.Fatal("version output overflow did not cancel promptly")
+			}
+			for _, raw := range [][]byte{result.Stdout, result.Stderr, result.Combined} {
+				if len(raw) > releasedHostVersionOutputLimit {
+					t.Fatal("version capture allocated unbounded output")
+				}
+			}
+			evidence := result.diagnostic(redactor)
+			if strings.Contains(evidence, sentinel[:len(sentinel)/2]) || strings.Contains(evidence, "xxx") || !strings.Contains(evidence, "omitted") || !strings.Contains(evidence, "overflow=true") || len(evidence) > releasedHostVersionEvidenceLimit {
+				t.Fatal("overflow diagnostic leaked partial clipped evidence or lost classification")
+			}
+		})
+	}
 }
 
 func verifyReleasedHostFile(path string, size int64, digest string) error {
@@ -342,6 +570,16 @@ func TestReleasedHostChildEnvironment(t *testing.T) {
 			t.Fatal("native child paths are not owned")
 		}
 	}
+}
+
+func TestReleasedHostEnvironmentDisablesBackgroundUpdateCheck(t *testing.T) {
+	t.Setenv("WFCTL_NO_UPDATE_CHECK", "")
+	for _, entry := range releasedHostEnvironment(t.TempDir()) {
+		if entry == "WFCTL_NO_UPDATE_CHECK=1" {
+			return
+		}
+	}
+	t.Fatal("released host environment permits background update lookup")
 }
 
 func TestReleasedHostRuntimeEnvironmentPreventsToolchainSelection(t *testing.T) {
