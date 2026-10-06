@@ -1,11 +1,5 @@
 [
   {
-    "path": ".github/workflows/ci.yml",
-    "contextSHA256": "bd59b3a017546b8326c4236173338080f29d7ba816bae3bc13c6004cd9296b7e",
-    "state": "active",
-    "presence": "present"
-  },
-  {
     "path": ".github/workflows/grpc-version-sync.yml",
     "contextSHA256": "9bdb21b7f5f3db3132465d241f9c5b0936359888b3d684754316c152e6bd55c8",
     "state": "active",
@@ -32,7 +26,7 @@
   {
     "path": ".github/workflows/ci.yml",
     "contextSHA256": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
-    "state": "staged",
+    "state": "active",
     "presence": "present"
   }
 ]
