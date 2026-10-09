@@ -295,7 +295,7 @@ func TestDODatabaseRotationNativeReleasedWFCTL(t *testing.T) {
 	if buildCache == "" {
 		buildCache = filepath.Join(root, "build-cache")
 	}
-	buildEnv = append(buildEnv, "GOTOOLCHAIN=go1.26.5", "GOMODCACHE="+moduleCache, "GOCACHE="+buildCache, "CGO_ENABLED=0")
+	buildEnv = append(buildEnv, "GOTOOLCHAIN=go1.27.2", "GOMODCACHE="+moduleCache, "GOCACHE="+buildCache, "CGO_ENABLED=0")
 	buildCtx, buildCancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer buildCancel()
 	goTool, err := releasedHostGoTool()
@@ -308,8 +308,8 @@ func TestDODatabaseRotationNativeReleasedWFCTL(t *testing.T) {
 		t.Fatal("production entrypoint build failed")
 	}
 	buildInfo, err := buildinfo.ReadFile(filepath.Join(pluginDir, pluginName))
-	if err != nil || buildInfo.GoVersion != "go1.26.5" {
-		t.Fatal("production entrypoint was not built with Go1.26.5")
+	if err != nil || buildInfo.GoVersion != "go1.27.2" {
+		t.Fatal("production entrypoint was not built with Go1.27.2")
 	}
 	const parent = "9cc10173-e9ea-4176-9dbc-a4cee4c4ff30"
 	const sentinel = "NATIVE_TASK7_KNOWN_SECRET:/?#@%+"
