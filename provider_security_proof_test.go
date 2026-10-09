@@ -122,7 +122,9 @@ func providerProofSummary(t *testing.T, scope string, value any) {
 	if pathErr != nil || tempErr != nil || relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		t.Fatal("CI step-summary path escapes the runner temporary directory")
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
+	// Keep the complete typed evidence compact. Pretty-printing four package
+	// graphs can exceed the runner summary budget without adding information.
+	data, err := json.Marshal(value)
 	if err != nil || len(data) > 512*1024 {
 		t.Fatal("cannot encode bounded CI proof summary")
 	}

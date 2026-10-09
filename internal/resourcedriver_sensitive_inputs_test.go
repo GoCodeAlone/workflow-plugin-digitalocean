@@ -287,25 +287,43 @@ func TestDODatabaseRotationNativeReleasedWFCTL(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot resolve toolchain module directory")
 	}
-	moduleCache := os.Getenv("GOMODCACHE")
-	if moduleCache == "" {
-		moduleCache = filepath.Join(home, "go", "pkg", "mod")
-	}
-	buildCache := os.Getenv("GOCACHE")
-	if buildCache == "" {
-		buildCache = filepath.Join(root, "build-cache")
-	}
-	buildEnv = append(buildEnv, "GOTOOLCHAIN=go1.27.2", "GOMODCACHE="+moduleCache, "GOCACHE="+buildCache, "CGO_ENABLED=0")
-	buildCtx, buildCancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer buildCancel()
 	goTool, err := releasedHostGoTool()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Resolve the existing compiler caches using only path configuration. The
+	// build can reuse them while the released runtime keeps its isolated HOME,
+	// fixed PATH, disabled toolchain selection and credential-free environment.
+	cacheEnv := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "LANG=C", "GOENV=off", "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}
+	for _, key := range []string{"GOCACHE", "GOMODCACHE", "GOPATH", "XDG_CACHE_HOME"} {
+		if value := os.Getenv(key); value != "" {
+			cacheEnv = append(cacheEnv, key+"="+value)
+		}
+	}
+	cached := captureReleasedHostVersion(ctx, cacheEnv, repoRoot, goTool, "env", "-json", "GOCACHE", "GOMODCACHE", "GOVERSION")
+	var caches struct{ GOCACHE, GOMODCACHE, GOVERSION string }
+	if cached.Status != releasedHostVersionCompleted || cached.ExitCode != 0 || len(cached.Stderr) != 0 ||
+		json.Unmarshal(cached.Stdout, &caches) != nil || caches.GOVERSION != "go1.27.2" {
+		t.Fatalf("cannot resolve patched compiler caches: status=%s exit=%d overflow=%t", cached.Status, cached.ExitCode, cached.Overflow)
+	}
+	for _, path := range []string{caches.GOCACHE, caches.GOMODCACHE} {
+		info, err := os.Stat(path)
+		if err != nil || !filepath.IsAbs(path) || !info.IsDir() {
+			t.Fatal("compiler cache must already exist at an absolute directory")
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+			t.Fatal("compiler build must not create a private fixture cache")
+		}
+	}
+	buildEnv = append(buildEnv, "GOMODCACHE="+caches.GOMODCACHE, "GOCACHE="+caches.GOCACHE, "CGO_ENABLED=0")
+	buildCtx, buildCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer buildCancel()
 	build := releasedHostCommand(buildCtx, buildEnv, repoRoot, goTool, "build", "-overlay", filepath.Join(root, "overlay.json"), "-o", filepath.Join(pluginDir, pluginName), "./cmd/plugin")
-	if output, err := build.CombinedOutput(); err != nil {
-		_ = output
-		t.Fatal("production entrypoint build failed")
+	capture := releasedHostVersionCapture{cancel: buildCancel}
+	build.Stdout, build.Stderr = releasedHostVersionWriter{capture: &capture, stdout: true}, releasedHostVersionWriter{capture: &capture}
+	if err := build.Run(); err != nil || capture.result.Overflow {
+		t.Fatalf("production entrypoint build failed: %v (context=%v overflow=%t)", err, buildCtx.Err(), capture.result.Overflow)
 	}
 	buildInfo, err := buildinfo.ReadFile(filepath.Join(pluginDir, pluginName))
 	if err != nil || buildInfo.GoVersion != "go1.27.2" {
