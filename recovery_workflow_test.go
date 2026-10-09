@@ -11,8 +11,8 @@ import (
 	"testing"
 )
 
-// Entire CI, trust and executable inventory at the approved check-contract trust cleanup baseline.
-const recoveryTrustedInventorySHA256 = "9decad275cbdcb642c21311bc2996931432f2046fe969db07e6b9fa0deb63a05"
+// Exact CI, trust and executable inventory after reviewed Go 1.27.2 CI/tool adoption.
+const recoveryTrustedInventorySHA256 = "f6e0996f81de8b566e98860c8d3fc2a613c8544c6697dca24a2a4d2d6a06607c"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string

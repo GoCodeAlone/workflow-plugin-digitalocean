@@ -4,7 +4,7 @@
     "workflowPath": ".github/workflows/public-workflow-policy.yml",
     "contextSHA256": "b8f88db240092833ebe1a3fe2a8f68a9a5ee0858d64e650a43159f3587c76797",
     "state": "active",
-    "sha256": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
+    "sha256": "3fbf786aad1448c55a934f3fc3ed22644d5e83fef2a1a299a09b48b803ae7d37",
     "rationale": "Runs only the trusted policy wrapper for candidate-data scanning."
   },
   {
@@ -30,5 +30,21 @@
     "state": "active",
     "sha256": "8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9",
     "rationale": "Exercises fail-closed workflow policy mutations in the CI test job."
+  },
+  {
+    "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
+    "workflowPath": ".github/workflows/ci.yml",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+    "state": "staged",
+    "sha256": "3fbf786aad1448c55a934f3fc3ed22644d5e83fef2a1a299a09b48b803ae7d37",
+    "rationale": "Exact reviewed Go1.27.2 CI context; Enforces the credential-free public workflow boundary before other CI proof."
+  },
+  {
+    "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
+    "workflowPath": ".github/workflows/ci.yml",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+    "state": "staged",
+    "sha256": "8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9",
+    "rationale": "Exact reviewed Go1.27.2 CI context; Exercises fail-closed workflow policy mutations in the CI test job."
   }
 ]

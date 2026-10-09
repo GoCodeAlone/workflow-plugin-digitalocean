@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: "1.27.2"
       - run: GOWORK=off go test -race ./...
       - run: GOWORK=off go vet ./...
       - name: Enforce credential-free public workflows and exact check contract
@@ -69,7 +69,7 @@ jobs:
         run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: "1.27.2"
       - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
         with:
           version: ${{ env.WFCTL_CONFORMANCE_VERSION }}
