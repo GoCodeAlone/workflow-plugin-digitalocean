@@ -2803,47 +2803,67 @@ func TestAppPlatformDriver_appOutput_DoesNotLeakPlaintextSecrets(t *testing.T) {
 }
 
 func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testing.T) {
-	app := &godo.App{
-		ID:             "app-uuid",
-		LiveURL:        "https://live.example.com",
-		DefaultIngress: "https://default.example.com",
-		Spec: &godo.AppSpec{
-			Name:   "snapshot-app",
-			Region: "nyc",
-			Services: []*godo.AppServiceSpec{
-				{
-					Name: "web",
-					Image: &godo.ImageSourceSpec{
-						RegistryType: godo.ImageSourceSpecRegistryType_DOCR,
-						Repository:   "web",
-						Tag:          "sha-web",
-					},
+	const activeSecret = "active-spec-secret-must-not-leak"
+	activeSpec := &godo.AppSpec{
+		Services: []*godo.AppServiceSpec{
+			{
+				Name: "api-main",
+				Image: &godo.ImageSourceSpec{
+					RegistryType:        godo.ImageSourceSpecRegistryType_DOCR,
+					Registry:            "acme",
+					Repository:          "web",
+					Tag:                 "sha-web-active",
+					RegistryCredentials: activeSecret,
 				},
-				{
-					Name: "admin",
-					Image: &godo.ImageSourceSpec{
-						RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
-						Registry:     "acme",
-						Repository:   "admin",
-						Tag:          "sha-admin",
-					},
-				},
+				Envs: []*godo.AppVariableDefinition{{Key: "SECRET", Value: activeSecret}},
 			},
-			Workers: []*godo.AppWorkerSpec{
-				{
-					Name: "worker",
-					Image: &godo.ImageSourceSpec{
-						RegistryType: godo.ImageSourceSpecRegistryType_DockerHub,
-						Registry:     "acme",
-						Repository:   "worker",
-						Tag:          "sha-worker",
-					},
+			{
+				Name: "admin-ui",
+				Image: &godo.ImageSourceSpec{
+					RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+					Registry:     "acme",
+					Repository:   "admin",
+					Tag:          "sha-admin-active",
 				},
 			},
 		},
-		ActiveDeployment:     &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active},
-		InProgressDeployment: &godo.Deployment{ID: "dep-progress", Phase: godo.DeploymentPhase_Deploying},
-		PendingDeployment:    &godo.Deployment{ID: "dep-pending", Phase: godo.DeploymentPhase_PendingBuild},
+		Workers: []*godo.AppWorkerSpec{
+			{
+				Name: "jobs-background",
+				Image: &godo.ImageSourceSpec{
+					RegistryType:        godo.ImageSourceSpecRegistryType_DockerHub,
+					Registry:            "acme",
+					Repository:          "worker",
+					Tag:                 "sha-worker-active",
+					RegistryCredentials: activeSecret,
+				},
+				Envs: []*godo.AppVariableDefinition{{Key: "SECRET", Value: activeSecret}},
+			},
+		},
+	}
+	desiredSpec := &godo.AppSpec{
+		Name:   "snapshot-app",
+		Region: "nyc",
+		Services: []*godo.AppServiceSpec{
+			{
+				Name: "api-main",
+				Image: &godo.ImageSourceSpec{
+					RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+					Registry:     "acme",
+					Repository:   "web",
+					Tag:          "sha-web-desired",
+				},
+			},
+		},
+	}
+	app := &godo.App{
+		ID:                   "app-uuid",
+		LiveURL:              "https://live.example.com",
+		DefaultIngress:       "https://default.example.com",
+		Spec:                 desiredSpec,
+		ActiveDeployment:     &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active, Spec: activeSpec},
+		InProgressDeployment: &godo.Deployment{ID: "dep-progress", Phase: godo.DeploymentPhase_Deploying, Spec: desiredSpec},
+		PendingDeployment:    &godo.Deployment{ID: "dep-pending", Phase: godo.DeploymentPhase_PendingBuild, Spec: desiredSpec},
 	}
 
 	outputs := drivers.AppOutputForTest(app)
@@ -2855,6 +2875,8 @@ func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testin
 	requireOutputString(t, outputs, "in_progress_deployment_phase", string(godo.DeploymentPhase_Deploying))
 	requireOutputString(t, outputs, "pending_deployment_id", "dep-pending")
 	requireOutputString(t, outputs, "pending_deployment_phase", string(godo.DeploymentPhase_PendingBuild))
+	requireOutputString(t, outputs, "image", "ghcr.io/acme/web:sha-web-desired")
+	requireOutputString(t, outputs, "active_deployment_image_refs_source", "active_deployment.spec")
 
 	imageRefs, ok := outputs["active_deployment_image_refs"].(map[string]any)
 	if !ok {
@@ -2868,14 +2890,24 @@ func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testin
 	if !ok {
 		t.Fatalf("active_deployment_image_refs.workers = %T, want map[string]any", imageRefs["workers"])
 	}
-	if got := services["web"]; got != "registry.digitalocean.com/web/web:sha-web" {
-		t.Fatalf("services[web] = %v", got)
+	if len(services) != 2 || len(workers) != 1 {
+		t.Fatalf("unexpected component names: services=%v workers=%v", services, workers)
 	}
-	if got := services["admin"]; got != "ghcr.io/acme/admin:sha-admin" {
-		t.Fatalf("services[admin] = %v", got)
+	if got := services["api-main"]; got != "registry.digitalocean.com/acme/web:sha-web-active" {
+		t.Fatalf("services[api-main] = %v", got)
 	}
-	if got := workers["worker"]; got != "docker.io/acme/worker:sha-worker" {
-		t.Fatalf("workers[worker] = %v", got)
+	if got := services["admin-ui"]; got != "ghcr.io/acme/admin:sha-admin-active" {
+		t.Fatalf("services[admin-ui] = %v", got)
+	}
+	if got := workers["jobs-background"]; got != "docker.io/acme/worker:sha-worker-active" {
+		t.Fatalf("workers[jobs-background] = %v", got)
+	}
+	data, err := json.Marshal(outputs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), activeSecret) {
+		t.Fatalf("active spec secret leaked into state.Outputs JSON: %s", data)
 	}
 }
 
@@ -2908,6 +2940,97 @@ func TestAppPlatformDriver_appOutput_OmitsDeploymentSlotAliases(t *testing.T) {
 	requireOutputString(t, outputs, "pending_deployment_phase", "")
 }
 
+func TestAppPlatformDriver_appOutput_OmitsUnprovedActiveImageRefs(t *testing.T) {
+	spec := &godo.AppSpec{
+		Name: "unproved-app",
+		Services: []*godo.AppServiceSpec{{Name: "api-main", Image: &godo.ImageSourceSpec{
+			RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+			Registry:     "acme",
+			Repository:   "web",
+			Tag:          "desired-tag",
+		}}},
+	}
+	for _, tc := range []struct {
+		name string
+		dep  *godo.Deployment
+	}{
+		{"missing-spec", &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active}},
+		{"empty-spec", &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active, Spec: &godo.AppSpec{}}},
+		{"missing-id", &godo.Deployment{Phase: godo.DeploymentPhase_Active, Spec: spec}},
+		{"unknown-phase", &godo.Deployment{ID: "dep-active", Spec: spec}},
+		{"changing-deployment", &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Deploying, Spec: spec}},
+		{"pending-deployment", &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_PendingBuild, Spec: spec}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := drivers.AppOutputForTest(&godo.App{ID: "app-uuid", Spec: spec, ActiveDeployment: tc.dep})
+			requireOutputString(t, outputs, "image", "ghcr.io/acme/web:desired-tag")
+			for _, key := range []string{"active_deployment_image_refs", "active_deployment_image_refs_source"} {
+				if _, ok := outputs[key]; ok {
+					t.Fatalf("%s should be omitted without proved active refs", key)
+				}
+			}
+		})
+	}
+}
+
+func TestAppPlatformDriver_appOutput_FiltersUnsupportedActiveImageRefs(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		image *godo.ImageSourceSpec
+		want  string
+	}{
+		{"nil-image", nil, ""},
+		{"missing-repository", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Tag: "tag"}, ""},
+		{"digest-only", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Repository: "web", Digest: "sha256:abc"}, ""},
+		{"digest-and-tag", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Repository: "web", Tag: "tag", Digest: "sha256:abc"}, ""},
+		{"unknown-registry", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType("UNKNOWN"), Registry: "acme", Repository: "web", Tag: "tag"}, ""},
+		{"missing-docr-namespace", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DOCR, Repository: "web", Tag: "tag"}, ""},
+		{"ghcr-default-tag", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Repository: "web"}, "ghcr.io/acme/web:latest"},
+		{"dockerhub-tag", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DockerHub, Registry: "acme", Repository: "web", Tag: "tag"}, "docker.io/acme/web:tag"},
+		{"docr-known-namespace", &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_DOCR, Registry: "acme", Repository: "web", Tag: "tag"}, "registry.digitalocean.com/acme/web:tag"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			activeSpec := &godo.AppSpec{
+				Services: []*godo.AppServiceSpec{nil, {Image: tc.image}, {Name: "api-main", Image: tc.image}},
+				Workers:  []*godo.AppWorkerSpec{nil, {Image: tc.image}, {Name: "jobs-background", Image: tc.image}},
+			}
+			outputs := drivers.AppOutputForTest(&godo.App{
+				ID: "app-uuid",
+				Spec: &godo.AppSpec{
+					Name: "filtered-app",
+					Services: []*godo.AppServiceSpec{{Name: "api-main", Image: &godo.ImageSourceSpec{
+						RegistryType: godo.ImageSourceSpecRegistryType_Ghcr,
+						Registry:     "acme",
+						Repository:   "web",
+						Tag:          "desired-tag",
+					}}},
+				},
+				ActiveDeployment: &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active, Spec: activeSpec},
+			})
+			requireOutputString(t, outputs, "image", "ghcr.io/acme/web:desired-tag")
+			if tc.want == "" {
+				for _, key := range []string{"active_deployment_image_refs", "active_deployment_image_refs_source"} {
+					if _, ok := outputs[key]; ok {
+						t.Fatalf("%s should be omitted for unsupported images", key)
+					}
+				}
+				return
+			}
+			requireOutputString(t, outputs, "active_deployment_image_refs_source", "active_deployment.spec")
+			refs, ok := outputs["active_deployment_image_refs"].(map[string]any)
+			if !ok {
+				t.Fatalf("active_deployment_image_refs = %T, want map[string]any", outputs["active_deployment_image_refs"])
+			}
+			for kind, name := range map[string]string{"services": "api-main", "workers": "jobs-background"} {
+				components, ok := refs[kind].(map[string]any)
+				if !ok || len(components) != 1 || components[name] != tc.want {
+					t.Fatalf("%s = %v, want only %s=%s", kind, refs[kind], name, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
 	app := &godo.App{
 		ID: "app-uuid",
@@ -2937,8 +3060,10 @@ func TestAppPlatformDriver_appOutput_OmitsNilDeploymentSlots(t *testing.T) {
 	} {
 		requireOutputString(t, outputs, key, "")
 	}
-	if _, ok := outputs["active_deployment_image_refs"]; ok {
-		t.Fatal("active_deployment_image_refs should be omitted when active deployment is nil")
+	for _, key := range []string{"active_deployment_image_refs", "active_deployment_image_refs_source"} {
+		if _, ok := outputs[key]; ok {
+			t.Fatalf("%s should be omitted when active deployment is nil", key)
+		}
 	}
 }
 

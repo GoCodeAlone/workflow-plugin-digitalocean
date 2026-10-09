@@ -57,7 +57,16 @@ Key output fields include:
 | `active_deployment_id`, `active_deployment_phase` | Current active deployment slot when present. |
 | `in_progress_deployment_id`, `in_progress_deployment_phase` | Current in-progress deployment slot when present. |
 | `pending_deployment_id`, `pending_deployment_phase` | Current pending deployment slot when present. |
-| `active_deployment_image_refs` | Active services/workers mapped by component name to canonical image refs. |
+| `image` | Desired AppSpec's first service image, used for reconciliation. |
+| `active_deployment_image_refs` | Active deployment spec's services/workers mapped by exact component name to canonical image refs. |
+| `active_deployment_image_refs_source` | `active_deployment.spec` when active image refs are available. |
+
+Active refs and their source are omitted without an identified `ACTIVE`
+deployment and its embedded spec. Digest-based images, unknown registry types,
+and DOCR images missing a registry namespace are omitted rather than assigned
+a guessed ref. Tags identify the deployment spec, not a resolved content digest.
+Readiness consumers must require the source, their configured components, and
+settled deployment slots; desired `image` is not active-image evidence.
 
 ## App Platform workers
 
