@@ -1,0 +1,137 @@
+{
+  "BaseCommit": "075c2c291a1f933692d9949650fc41d20c0a63f9",
+  "OldContext": "9790e7f657993b45b4f49a478f788fe25744aabe48678cccd058a97ee967a9c2",
+  "FutureContext": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+  "OldWrapper": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
+  "FutureWrapper": "3fbf786aad1448c55a934f3fc3ed22644d5e83fef2a1a299a09b48b803ae7d37",
+  "Files": {
+    "baseline/.github/public-workflow-action-allowlist.json": {
+      "SHA256": "d63dd97ad93a9fc919fbf1f14e0d16d4959686d37a78cc22ac87d088cdd1052f",
+      "Mode": 420
+    },
+    "baseline/.github/public-workflow-command-allowlist.json": {
+      "SHA256": "21628abb9062563b5b4fd381d53a560a32e9ddf77ebefa3aa1e4e1534869a9ac",
+      "Mode": 420
+    },
+    "baseline/.github/public-workflow-executable-allowlist.json": {
+      "SHA256": "892951b2ec9f3512344ec5a13639b7014743d5aad8d5aabf562d4e3429bedfbe",
+      "Mode": 420
+    },
+    "baseline/.github/public-workflow-presence-allowlist.json": {
+      "SHA256": "2252acf055a6b0009ca4fe65afc45dc69e9c440b7d044917eab61b1bd12e788c",
+      "Mode": 420
+    },
+    "baseline/.github/public-workflow-secret-allowlist.json": {
+      "SHA256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/ci.yml": {
+      "SHA256": "f08f741574b67751e119e885d55bff350afa6fb7a35d90db59ea3696b88c8af0",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/grpc-version-sync.yml": {
+      "SHA256": "450cbb14403c2a21e7d6eb8cba87b869ae6ddd6daae5a920510e1a5b29c7d2bb",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/iac-host-conformance.yml": {
+      "SHA256": "f8294ab62c0ff5e1b829baf1003ff5e9451edbfdec5870c309618bb503bfd1c2",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/policytool/go.mod": {
+      "SHA256": "ddbfb09771aa824f859940c0a937f2eeb900cf0786b3cbf4a3ea741a0302b46e",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/policytool/go.sum": {
+      "SHA256": "790ef858e5aeed12269a69e764ac69c02c3877678b0e7d9384ad3728b6e09f6c",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/policytool/main.go": {
+      "SHA256": "e47f0f53fa91b800809a2cb04fdafca5af4a4a1441772139410ef82a9bd55884",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/policytool/main_test.go": {
+      "SHA256": "acf2b56ac0228604844c3241ca05cb07792b45645fb2746d12bcf1698251393b",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/public-workflow-policy.yml": {
+      "SHA256": "4b0ad69a1e56b2a27594fcfc3206eb97d1ae56e24de993fed891addc8a00594d",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/release.yml": {
+      "SHA256": "d2769516166ed5a5b14575084c708df1e4c22f6c15cde0d9b4081d108a12065b",
+      "Mode": 420
+    },
+    "baseline/.github/workflows/scripts/check-public-workflow-policy.sh": {
+      "SHA256": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
+      "Mode": 493
+    },
+    "baseline/.github/workflows/scripts/test-public-workflow-policy.sh": {
+      "SHA256": "8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9",
+      "Mode": 493
+    },
+    "baseline/scripts/workflow-iac-host-conformance.sh": {
+      "SHA256": "5066dea5a461524cbda244f7ca00cdd85127457406af9966fd638d3648fd276a",
+      "Mode": 493
+    },
+    "stage/.github/public-workflow-presence-allowlist.json": {
+      "SHA256": "4a9868ac7d21d453cfbbc29c9541407e0c2805c343f8baab32b08e8704019db1",
+      "Mode": 420
+    },
+    "stage/.github/public-workflow-action-allowlist.json": {
+      "SHA256": "3c3b2ed406d81389fd2b9c044b606f04fe20df8d5d0356f90a6c354969736d73",
+      "Mode": 420
+    },
+    "stage/.github/public-workflow-command-allowlist.json": {
+      "SHA256": "ea3dea5aea452e72a843ab45a11100555bfa670538f2bb28da56ed0e1c7f1b22",
+      "Mode": 420
+    },
+    "stage/.github/public-workflow-executable-allowlist.json": {
+      "SHA256": "49a90cf5c91735ad3693b7c3b6c0e2fc35a9e42f0f0d8cd5ac45a67b2d44b54f",
+      "Mode": 420
+    },
+    "adopt/.github/public-workflow-presence-allowlist.json": {
+      "SHA256": "4a9868ac7d21d453cfbbc29c9541407e0c2805c343f8baab32b08e8704019db1",
+      "Mode": 420
+    },
+    "adopt/.github/public-workflow-action-allowlist.json": {
+      "SHA256": "3c3b2ed406d81389fd2b9c044b606f04fe20df8d5d0356f90a6c354969736d73",
+      "Mode": 420
+    },
+    "adopt/.github/public-workflow-command-allowlist.json": {
+      "SHA256": "ea3dea5aea452e72a843ab45a11100555bfa670538f2bb28da56ed0e1c7f1b22",
+      "Mode": 420
+    },
+    "adopt/.github/public-workflow-executable-allowlist.json": {
+      "SHA256": "5f7adfecd81a1fd49dfbc4cc1b2df751f59c42658d23d2dfa4db69b5d9955f2e",
+      "Mode": 420
+    },
+    "promote/.github/public-workflow-presence-allowlist.json": {
+      "SHA256": "d0c673c5c5f38a6e5a1685284196e1b4dfd2370d3f8ec9901443883ce5a96639",
+      "Mode": 420
+    },
+    "promote/.github/public-workflow-action-allowlist.json": {
+      "SHA256": "d2d65cd64533aa7d6f83b8a059000b945a5a8779931d4f0f7b10d93989834474",
+      "Mode": 420
+    },
+    "promote/.github/public-workflow-command-allowlist.json": {
+      "SHA256": "514263a1ad86030ca5c20d498f998694568b9002d82935855664ebda36ec8fa6",
+      "Mode": 420
+    },
+    "promote/.github/public-workflow-executable-allowlist.json": {
+      "SHA256": "01f437b049eb832583b388f07ce0ce7481d1cefab65d565b535e9f603b7a84a1",
+      "Mode": 420
+    },
+    "adopt/.github/workflows/ci.yml": {
+      "SHA256": "0f120206a3b5e8058b7ae6bcb8effaaa1a69531bb1f96fc7ee9b693687439c76",
+      "Mode": 420
+    },
+    "adopt/.github/workflows/policytool/go.mod": {
+      "SHA256": "51755e897f3de3cec86ca02e0bc954c019c54b0f807b33c943eadca5860d171b",
+      "Mode": 420
+    },
+    "adopt/.github/workflows/scripts/check-public-workflow-policy.sh": {
+      "SHA256": "3fbf786aad1448c55a934f3fc3ed22644d5e83fef2a1a299a09b48b803ae7d37",
+      "Mode": 493
+    }
+  }
+}

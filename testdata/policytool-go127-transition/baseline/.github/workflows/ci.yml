@@ -1,0 +1,91 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+defaults:
+  run:
+    shell: bash
+env:
+  WFCTL_VALIDATE_VERSION: v0.51.2
+  WFCTL_CONFORMANCE_VERSION: v0.85.4
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SAFE_JOB_MODE: strict
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: GOWORK=off go test -race ./...
+      - run: GOWORK=off go vet ./...
+      - name: Enforce credential-free public workflows and exact check contract
+        run: |
+          ./.github/workflows/scripts/check-public-workflow-policy.sh
+          ./.github/workflows/scripts/test-public-workflow-policy.sh
+
+  wfctl-strict-contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Fail fast if plugin.json is missing
+        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
+        with:
+          version: ${{ env.WFCTL_VALIDATE_VERSION }}
+      - name: Validate strict plugin contracts
+        run: |
+          # Validate as checked in.
+          wfctl plugin validate --file plugin.json --strict-contracts
+          # Also validate after simulating the GoReleaser before-hook rewrites
+          # (mirrors .goreleaser.yaml before.hooks) so a bad template change
+          # is caught before release.
+          # NOTE: wfctl plugin validate --strict-contracts looks for
+          # plugin.contracts.json co-located with plugin.json (same dir).
+          # Use a temp DIR (not just a temp file) and copy BOTH so the
+          # rewrite-validation finds the contract descriptor.
+          tmp_dir=$(mktemp -d)
+          cp plugin.json "$tmp_dir/"
+          cp plugin.contracts.json "$tmp_dir/"
+          sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
+          sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
+          wfctl plugin validate --file "$tmp_dir/plugin.json" --strict-contracts
+          rm -rf "$tmp_dir"
+
+  wfctl-conformance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Fail fast if plugin.json is missing
+        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
+        with:
+          version: ${{ env.WFCTL_CONFORMANCE_VERSION }}
+      - name: Run typed IaC conformance
+        run: |
+          wfctl \
+            plugin conformance \
+            --mode typed-iac \
+            --build-package ./cmd/plugin \
+            --engine-version "${WFCTL_CONFORMANCE_VERSION}" \
+            --format json \
+            --output conformance-evidence.json \
+            .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: workflow-plugin-digitalocean-conformance
+          path: conformance-evidence.json
+          if-no-files-found: error
