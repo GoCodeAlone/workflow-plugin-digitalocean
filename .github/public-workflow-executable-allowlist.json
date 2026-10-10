@@ -18,7 +18,7 @@
   {
     "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
     "workflowPath": ".github/workflows/ci.yml",
-    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "state": "active",
     "sha256": "3fbf786aad1448c55a934f3fc3ed22644d5e83fef2a1a299a09b48b803ae7d37",
     "rationale": "Exact reviewed Go1.27.2 CI context; Enforces the credential-free public workflow boundary before other CI proof."
@@ -26,9 +26,17 @@
   {
     "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
     "workflowPath": ".github/workflows/ci.yml",
-    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "state": "active",
-    "sha256": "8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9",
+    "sha256": "70da3f19cd3c288b612d910f5805de24e59a393f186ed6307aeacfd79bfff839",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exercises fail-closed workflow policy mutations in the CI test job."
+  },
+  {
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "path": ".github/workflows/scripts/require-policy-rg.sh",
+    "rationale": "Exact reviewed hosted rg provisioning and actual fixture PATH/PCRE checks.",
+    "sha256": "614908108730d6a2f01f42f0e45df1b34b03fe4037fc3ece323152a355d04109",
+    "state": "active",
+    "workflowPath": ".github/workflows/ci.yml"
   }
 ]

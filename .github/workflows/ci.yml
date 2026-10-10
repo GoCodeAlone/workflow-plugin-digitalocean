@@ -22,7 +22,19 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.27.2"
+      - name: Require working policy search tool
+        run: ./.github/workflows/scripts/require-policy-rg.sh
       - run: GOWORK=off go test -race ./...
+      - name: Export complete accepted-policy bootstrap receipt
+        run: |
+          sha256sum "$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
+          cat "$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-accepted-policy-bootstrap-receipt
+          path: ${{ runner.temp }}/provider-policy-bootstrap-receipt.json
+          if-no-files-found: error
+          retention-days: 14
       - run: GOWORK=off go vet ./...
       - name: Enforce credential-free public workflows and exact check contract
         run: |

@@ -12,7 +12,7 @@ import (
 )
 
 // Exact CI, trust and executable inventory after reviewed Go 1.27.2 trust promotion.
-const recoveryTrustedInventorySHA256 = "621a0f72765bb50efa862829c5263439be4b124e2a5b0f03723babe29e955521"
+const recoveryTrustedInventorySHA256 = "014c2d07e84a730e0dc6a381f363f0e658b96b3144d5553389ad5d587978ab0f"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string
@@ -53,7 +53,7 @@ func TestRecoveryCIAndTrustBytesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 46 || digest != recoveryTrustedInventorySHA256 {
+	if count != 47 || digest != recoveryTrustedInventorySHA256 {
 		t.Fatalf("CI/trust/script bytes differ from approved baseline: files=%d digest=%s", count, digest)
 	}
 }

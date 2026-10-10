@@ -1,0 +1,1525 @@
+{
+  "commit": "0f72e69febaf02e512abb075c3547f5b2eeac5ad",
+  "tree": "365109d6a442c7583bd172a0e6d1dd85c5d46b8d",
+  "files": [
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug_report.md",
+      "mode": "100644",
+      "blob": "2409d9882f3083ae129c4c3e00f1442fa3b3d26e",
+      "sha256": "cebf08c7a81e372f67a4e1c49d2e68c348b7f8efebd3e82c97e6238684a4afe0",
+      "bytes": 589
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/feature_request.md",
+      "mode": "100644",
+      "blob": "bfcf5e916ec2a9985f35db8f6e2a62fa19409732",
+      "sha256": "f20e97efb7ca999312450976a13bc29a7b6a132fe17c38fd8a1dd2be0d82d39d",
+      "bytes": 519
+    },
+    {
+      "path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "mode": "100644",
+      "blob": "a510115c6f86bb739ae3a748f9f4e8f4aa9725b6",
+      "sha256": "55e8d0a52ce37f9b5256a763fde52dc619e46beeda82a33c1a4e454dcac3526e",
+      "bytes": 436
+    },
+    {
+      "path": ".github/public-workflow-action-allowlist.json",
+      "mode": "100644",
+      "blob": "18b2d93de04fbca6a7d63c5287b8b26a77dcd3bf",
+      "sha256": "3c3b2ed406d81389fd2b9c044b606f04fe20df8d5d0356f90a6c354969736d73",
+      "bytes": 8466
+    },
+    {
+      "path": ".github/public-workflow-command-allowlist.json",
+      "mode": "100644",
+      "blob": "77ea8911c3b6415084e80c9d6248d9aca27f8099",
+      "sha256": "ea3dea5aea452e72a843ab45a11100555bfa670538f2bb28da56ed0e1c7f1b22",
+      "bytes": 47209
+    },
+    {
+      "path": ".github/public-workflow-executable-allowlist.json",
+      "mode": "100644",
+      "blob": "17abd620de69fb3f5960bfc75f9951ad9fe001fd",
+      "sha256": "49a90cf5c91735ad3693b7c3b6c0e2fc35a9e42f0f0d8cd5ac45a67b2d44b54f",
+      "bytes": 2587
+    },
+    {
+      "path": ".github/public-workflow-presence-allowlist.json",
+      "mode": "100644",
+      "blob": "9ed0f3b3cb045b22ec6726fc65a6078142877c4b",
+      "sha256": "4a9868ac7d21d453cfbbc29c9541407e0c2805c343f8baab32b08e8704019db1",
+      "bytes": 1183
+    },
+    {
+      "path": ".github/public-workflow-secret-allowlist.json",
+      "mode": "100644",
+      "blob": "fe51488c7066f6687ef680d6bfaa4f7768ef205c",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "bytes": 3
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "mode": "100644",
+      "blob": "7f9b5e87a08a67f8926df6a3b3c5370cdbec5662",
+      "sha256": "f08f741574b67751e119e885d55bff350afa6fb7a35d90db59ea3696b88c8af0",
+      "bytes": 3619
+    },
+    {
+      "path": ".github/workflows/grpc-version-sync.yml",
+      "mode": "100644",
+      "blob": "df6392de269b45fd76225416c86549d4892efa65",
+      "sha256": "450cbb14403c2a21e7d6eb8cba87b869ae6ddd6daae5a920510e1a5b29c7d2bb",
+      "bytes": 2826
+    },
+    {
+      "path": ".github/workflows/iac-host-conformance.yml",
+      "mode": "100644",
+      "blob": "c34be463bc442b64f7a6edcdd35bfdee8c547b5b",
+      "sha256": "f8294ab62c0ff5e1b829baf1003ff5e9451edbfdec5870c309618bb503bfd1c2",
+      "bytes": 2576
+    },
+    {
+      "path": ".github/workflows/policytool/go.mod",
+      "mode": "100644",
+      "blob": "e3c258753a6092cfb0a1dc41f84d4a386bf83394",
+      "sha256": "ddbfb09771aa824f859940c0a937f2eeb900cf0786b3cbf4a3ea741a0302b46e",
+      "bytes": 161
+    },
+    {
+      "path": ".github/workflows/policytool/go.sum",
+      "mode": "100644",
+      "blob": "ea0e47936acf287abb54ec3bd9e3b93c3c644dfd",
+      "sha256": "790ef858e5aeed12269a69e764ac69c02c3877678b0e7d9384ad3728b6e09f6c",
+      "bytes": 1348
+    },
+    {
+      "path": ".github/workflows/policytool/main.go",
+      "mode": "100644",
+      "blob": "159e548645814fe3c374a4b76a9410c9418d1d10",
+      "sha256": "e47f0f53fa91b800809a2cb04fdafca5af4a4a1441772139410ef82a9bd55884",
+      "bytes": 64311
+    },
+    {
+      "path": ".github/workflows/policytool/main_test.go",
+      "mode": "100644",
+      "blob": "4269d31a23d1ca0e7f38083531e77e2571b7adc6",
+      "sha256": "acf2b56ac0228604844c3241ca05cb07792b45645fb2746d12bcf1698251393b",
+      "bytes": 25482
+    },
+    {
+      "path": ".github/workflows/public-workflow-policy.yml",
+      "mode": "100644",
+      "blob": "e99bc19b64a36cbe0fa4d103c5e614d74a60b7ba",
+      "sha256": "4b0ad69a1e56b2a27594fcfc3206eb97d1ae56e24de993fed891addc8a00594d",
+      "bytes": 3954
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "mode": "100644",
+      "blob": "60068bed87c307c70815aac014a0fe2ec81f35e7",
+      "sha256": "d2769516166ed5a5b14575084c708df1e4c22f6c15cde0d9b4081d108a12065b",
+      "bytes": 2669
+    },
+    {
+      "path": ".github/workflows/scripts/check-public-workflow-policy.sh",
+      "mode": "100755",
+      "blob": "6c79b0cee6748ae160c87ce07c220cd58e2f6578",
+      "sha256": "297b344d854f461a61e9c85475b528c335ccba3f27f0a039d2a6944f84c1f8b7",
+      "bytes": 2865
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/lifecycle-future.yml",
+      "mode": "100644",
+      "blob": "db5b82cfee13d820559946316f0b27dffa418785",
+      "sha256": "346dbde7b48e262ab8bfb873928a57237d75311d3fa1b4f16f3fc740553c5621",
+      "bytes": 186
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/lifecycle-old.yml",
+      "mode": "100644",
+      "blob": "e9ef7910f1cb70fbb3234354047f0573012ce821",
+      "sha256": "89f1d85407aa3ccf41aa3248c02b3d431d3da6422979e0208b0caea933ab91ad",
+      "bytes": 180
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-expression-and-deny-guard.yml",
+      "mode": "100644",
+      "blob": "6437aa682c63724f070438d47cd4c4c121810eaf",
+      "sha256": "e5b4986658ef9168c1e7fed863a91a0b55bc4e1dd37e45aeec04c464819da9c5",
+      "bytes": 711
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass-negative-guard.yml",
+      "mode": "100644",
+      "blob": "30a4a91af55e97af25371c9b6b8d1d6e11fd739a",
+      "sha256": "258c2222d7a7a5b36fec169abee70626816d27ce15e4fdf8346a8f387f9a78a9",
+      "bytes": 401
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/pass.yml",
+      "mode": "100644",
+      "blob": "712e67263ba5ef57827d69663f238a27ccf1e306",
+      "sha256": "20ddb2c48cd097d2803b799dfb647efb98cb5466fd93407520bb46821035447c",
+      "bytes": 1591
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-command-analysis.yml",
+      "mode": "100644",
+      "blob": "e3856bff620b4a87ef4290f089869b9970858211",
+      "sha256": "589658280ae8623d932e691323b138c439a28fe27a79ea2859be7c00600b6820",
+      "bytes": 1035
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-deny-pattern-execution.yml",
+      "mode": "100644",
+      "blob": "e7e1c86165a5f4635541744f2b689fcc4fa8931b",
+      "sha256": "c8475ed82b6fb7ac4ec227f48becc4a148d7d3665a5fdfdbac19096cca7c2165",
+      "bytes": 439
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-dynamic-secrets.yml",
+      "mode": "100644",
+      "blob": "4e613c4865003eb2b8e131b496e841dc0f45dc22",
+      "sha256": "7900842a6adf772396eb4893925d26b71e1a4560053305031d7c4e15b3e2f5f8",
+      "bytes": 487
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-env-indirection.yml",
+      "mode": "100644",
+      "blob": "f873ce43a0fa3e3cc71ebf12e5d7c6055d8bead6",
+      "sha256": "6b524ac4c498f45d68896676f75c8171033558a9a270f5158870ae36604218d7",
+      "bytes": 472
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-execution-context.yml",
+      "mode": "100644",
+      "blob": "ea2515885fb40146626078a71ac9988527641c82",
+      "sha256": "b4deeab49c3c7f427f9c37e35cba927038397108c110cfc38a965a54a5f6d5e2",
+      "bytes": 774
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-global.yml",
+      "mode": "100644",
+      "blob": "64aeceb2db32f998db4393dc6cfeecd159918663",
+      "sha256": "43620c1094cf6a8223f4b35c18bf54a621e09b5f5922b835bd7e22a48f1f205d",
+      "bytes": 770
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-guard-suffix.yml",
+      "mode": "100644",
+      "blob": "6b30fa9437a346692408adb90ccef3e18730b73c",
+      "sha256": "4b5623b44d1dcef0198ce914a16a358180f65d733d5521863b4606178ea20823",
+      "bytes": 332
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-missing-shell.yml",
+      "mode": "100644",
+      "blob": "52b8cb6ebb9b9704eb2b4095d61c652ffc34d44e",
+      "sha256": "58757a1e09107185710dd3a2c401d6a3691d1c11f4db7f41b8a4f8dde57d0574",
+      "bytes": 210
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-permissions.yml",
+      "mode": "100644",
+      "blob": "89341259a94e1ef438c56286d0fd2732877bec9a",
+      "sha256": "24ac3b5c02f97b7b3ec2e06f2d7c7c46035a17dda029ed8918c3e54d8e6933c4",
+      "bytes": 444
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-provider-uses.yml",
+      "mode": "100644",
+      "blob": "b495e19d86d1a016b61c4c10313d05bf2d07538e",
+      "sha256": "3f6a028a527a04b1bcddd087174b56b85916fc347da23cb86b76948b2a006f45",
+      "bytes": 428
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-runners.yml",
+      "mode": "100644",
+      "blob": "8a5649cde5457bbd3e88e4dbf2cb44785907ffe2",
+      "sha256": "cbfec39b289dfcbee247f6fa5a415c01921ab02e03c63bd974df1322a6159050",
+      "bytes": 338
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-script-execution.yml",
+      "mode": "100644",
+      "blob": "3ba1c157dcf041b55a8e7768f2c0dae61057fb43",
+      "sha256": "6e57329ba154ee32a37c2c8227f75db5422d9fdf3487180f4f8d388891c04f62",
+      "bytes": 259
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-secret-syntax.yml",
+      "mode": "100644",
+      "blob": "2335e156a036f1d02c7d4c1101dafdc39e3c8075",
+      "sha256": "3ef3fc0c94a53510069d63e58e7a7eef51de884d7446fe20476d60c4fa078648",
+      "bytes": 524
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-shell-inheritance.yml",
+      "mode": "100644",
+      "blob": "3cbf1c11f8b8d4d1772da4163bc1871ee3151e39",
+      "sha256": "330bc5a511a1c14d6adadd7e7f19a1baacdf47b513a2382e7cfa060babc460e0",
+      "bytes": 820
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-shell.yml",
+      "mode": "100644",
+      "blob": "294235e317610f704fdea64de9f9736fd756c3b7",
+      "sha256": "6dffd2756cf468c9bf4c268bfebfd1c4bfb96e81e30137a7dafbd0d39161df00",
+      "bytes": 396
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-statement-authority.yml",
+      "mode": "100644",
+      "blob": "8f3ace225db586994b948aa8feddd29616d7e1fb",
+      "sha256": "2ae4ecdde184f102004b81cca0de0e345278c7ebc2aa0993f5a8ef47acf50e91",
+      "bytes": 1187
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-unreviewed-uses.yml",
+      "mode": "100644",
+      "blob": "9df9845190f681b6a6ed56000077f7fea4838e6c",
+      "sha256": "4e1a4f1d5c7b147af24dac04448617a77649e711366ab19701d6e878a1c0a274",
+      "bytes": 988
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-unsafe-programs.yml",
+      "mode": "100644",
+      "blob": "fe5a24fdb456b311c71d60f1e729ecf2de5638cc",
+      "sha256": "5c464126d992dc5305ca68c6ebb0f7086650d0e86dc56aee35ee0de40e6b1f96",
+      "bytes": 2355
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject-yaml-structure.yml",
+      "mode": "100644",
+      "blob": "5747e2eef561ef01ea8aff9993f345729e3580c8",
+      "sha256": "e564fe3b6655a68c242038c98f480fe432ed840aa3325caab88e052343352402",
+      "bytes": 758
+    },
+    {
+      "path": ".github/workflows/scripts/fixtures/public-workflow-policy/reject.yml",
+      "mode": "100644",
+      "blob": "792ef6f379308a367a40006853c32606c63b8a9b",
+      "sha256": "e98e5b29312f6541e6d71fc532943a055c9164923cd560710d47414ac80aecc1",
+      "bytes": 1629
+    },
+    {
+      "path": ".github/workflows/scripts/test-public-workflow-policy.sh",
+      "mode": "100755",
+      "blob": "7537aaadff43c518bc12f71879af18eb13844849",
+      "sha256": "8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9",
+      "bytes": 100802
+    },
+    {
+      "path": ".github/workflows/scripts/verify-public-workflow-branch-protection.sh",
+      "mode": "100755",
+      "blob": "25c9da1cdcf19f4e72c7dcd600864e875f3b0f98",
+      "sha256": "a21c953ee35182f570926ee12bc36cd2d04a5a32f7f17a786deb2a2ce5eb233f",
+      "bytes": 4941
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "blob": "5801c45ed53f73e9ea6f89e26accdca71ae2a594",
+      "sha256": "e4a8b5a076ff752ccb4f021bd9f1688f3c0db623076374211af337dc448cf134",
+      "bytes": 54
+    },
+    {
+      "path": ".goreleaser.yaml",
+      "mode": "100644",
+      "blob": "ced50c8f34b03f50ffbe66386c73a71cb68ad07a",
+      "sha256": "4b625eb438226fd335bcdd83cf53fb834ba60f157da876a38a9804de255787f5",
+      "bytes": 1597
+    },
+    {
+      "path": "CHANGELOG.md",
+      "mode": "100644",
+      "blob": "3b6be272240e68d68aeb799bfe9d0cce30aa61ee",
+      "sha256": "1b6a0fda1ed740d4d7c0a22c0d166c0cce492f7246a7752470a493b0a058a396",
+      "bytes": 40170
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "mode": "100644",
+      "blob": "453caab807f510d23073e9ef2d68bf5af6d634cd",
+      "sha256": "92e0eb7c66b91589a5950a5211bcd350485ccaa597753e811a96927d538be0cd",
+      "bytes": 793
+    },
+    {
+      "path": "LICENSE",
+      "mode": "100644",
+      "blob": "ee1ede98a8cca4e7650d53c6c75e8475515ed6dd",
+      "sha256": "659616b88b400d75d2773c62ebb74a7f2294562627c69fdafe3936117170f013",
+      "bytes": 1068
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "blob": "74932a1a96b206d95dddee2550fd565cd543b687",
+      "sha256": "4515f42ec34fee51e84df9f3e665e73f0f73be3f0ea0ed87f32f6471ba15349f",
+      "bytes": 6511
+    },
+    {
+      "path": "cmd/plugin/main.go",
+      "mode": "100644",
+      "blob": "e2ef0ec23181460d77304e8c6fab22f51b339dce",
+      "sha256": "e30da2dafcdcb42aa5f62df80931ce9c9dd761aedf2c5c52ae2636267ddb38cd",
+      "bytes": 1251
+    },
+    {
+      "path": "cmd/plugin/plugin.json",
+      "mode": "100644",
+      "blob": "9416236c99a18d71efc2ddfac66c703ed9610615",
+      "sha256": "1ebbb3b37ab592393756eb463ab68e3e881893fc1792b310a546bcaa47039d78",
+      "bytes": 12738
+    },
+    {
+      "path": "doc.go",
+      "mode": "100644",
+      "blob": "b31a4832aeca337f66dc4f8a7b4ff3428f5b5252",
+      "sha256": "4aa76cb7170ed7b985fc3902dbcfdd98aa5f50b4f29557e41b3801ffc0609612",
+      "bytes": 117
+    },
+    {
+      "path": "docs/DEPLOYMENT_STRATEGIES.md",
+      "mode": "100644",
+      "blob": "bb6ca6e04e38e7296939107716b6c6c0d44cc03f",
+      "sha256": "498543f3307848c5c09d81f5f12dd3cd8dadd3f08a316e4e4e1074b5b3c13463",
+      "bytes": 6432
+    },
+    {
+      "path": "docs/container-registry.md",
+      "mode": "100644",
+      "blob": "de958d3fb73b4cecd88e0831833972473c55d2fa",
+      "sha256": "bdae0f85054414369071772331b207a4ec4ac5a9726d68775c9c6801978a635e",
+      "bytes": 8043
+    },
+    {
+      "path": "docs/migrations/spaces-state-backend.md",
+      "mode": "100644",
+      "blob": "4dc9a0d79222d9554d453f69879ef180c542c281",
+      "sha256": "b2b0ccc63f7d0a20629eb37b2957950fa7abad417d97387841c8f11f2cd14eb8",
+      "bytes": 2289
+    },
+    {
+      "path": "docs/plans/2026-04-24-provider-id-state-heal-design.md",
+      "mode": "100644",
+      "blob": "59b8f76fe10ab2f9797fab7b4454dc4d30381cb8",
+      "sha256": "f1cd9e9038a57cf1e26d08d46d545a3312612857c655f5cc17233375c9ca076b",
+      "bytes": 10208
+    },
+    {
+      "path": "docs/plans/2026-04-24-provider-id-state-heal.md",
+      "mode": "100644",
+      "blob": "0ecee9e5c3380c1a791d926ff66184d5170242a4",
+      "sha256": "ccfe256e7b78f52f1f07be5efad953c0bc49752e51e67454a024fb03ab4eecdc",
+      "bytes": 29249
+    },
+    {
+      "path": "docs/plans/2026-05-23-true-blue-green-validation-design.md",
+      "mode": "100644",
+      "blob": "04c6348280158024dbe8403d6a083ae6be5dde90",
+      "sha256": "7a41597cf9d5de8f9b2ad35b6c8ddce6421f128d181fdf89d661ec8e5cf7ce47",
+      "bytes": 16816
+    },
+    {
+      "path": "docs/plans/2026-05-23-true-blue-green-validation.md",
+      "mode": "100644",
+      "blob": "ab5ccc09075db2e45947680e092ccae43c89b3ed",
+      "sha256": "4d106ac1ced5c9f7001382313e0e3e989f3dcbf9e172bd8e146f15b77fead08c",
+      "bytes": 45759
+    },
+    {
+      "path": "docs/plans/2026-05-23-true-blue-green-validation.md.scope-lock",
+      "mode": "100644",
+      "blob": "02dfe8cc56544da5d7355c99379b7aa436a29253",
+      "sha256": "1bc89c2c9d5a146e5acccc510b970f6026ab05fb3c3fe2674bebecd21fe2f818",
+      "bytes": 65
+    },
+    {
+      "path": "docs/plans/2026-06-12-control-plane-provider-handoff-alignment.md",
+      "mode": "100644",
+      "blob": "1b2bb612ef114231140bb585f9915885c87013be",
+      "sha256": "3e80cfcc8845a394d227344f1ace42c08fb8ecc4f590fbbdeaee45a578e713a3",
+      "bytes": 1609
+    },
+    {
+      "path": "docs/plans/2026-06-12-control-plane-provider-handoff-design-review.md",
+      "mode": "100644",
+      "blob": "8eeed0b30e11abe627b893d093f63f6791928ff6",
+      "sha256": "ae7bb2ae3b8328d034a42154a52191ab7d3c005f029b4235d7460811d65894ad",
+      "bytes": 3400
+    },
+    {
+      "path": "docs/plans/2026-06-12-control-plane-provider-handoff-design.md",
+      "mode": "100644",
+      "blob": "f2a3fde0a88f007e038ac97ceabf34fcc38f0c50",
+      "sha256": "e05f6cf6b13180973c0ed650a3d7869ec8d36f061fd7ff0e24fc8a234afed412",
+      "bytes": 6557
+    },
+    {
+      "path": "docs/plans/2026-06-12-control-plane-provider-handoff-plan-review.md",
+      "mode": "100644",
+      "blob": "b958cf56e94e897fab6ae9e3da2f1787ee8e3bc1",
+      "sha256": "6ed90b56b99cd9999b9c09f7cdea481ebf5ba0ffc57383d7d668aa8444da4b37",
+      "bytes": 3843
+    },
+    {
+      "path": "docs/plans/2026-06-12-control-plane-provider-handoff.md",
+      "mode": "100644",
+      "blob": "4b49a452cb48ed9fc106fce0f428cdec73a0077c",
+      "sha256": "ed67001e54f01d4e6e12e086054cc689f2e315d9fb4901ec0127244da44cf9fb",
+      "bytes": 8579
+    },
+    {
+      "path": "docs/public-workflow-policy.md",
+      "mode": "100644",
+      "blob": "f35d853648f6f32373ca069161f56f676359405b",
+      "sha256": "6452887d7f34c04d03c7f9b5fecb06d83c507d52ac6a15fd29c68b556e9a654e",
+      "bytes": 8718
+    },
+    {
+      "path": "docs/runtime-validation/2026-05-07-do-pin-bump.log",
+      "mode": "100644",
+      "blob": "ca206ad69813bb7c593a40f7725435971b923a88",
+      "sha256": "0d97e06ab9d476fa9b43d4ed1234bd5c8b58ade8e2c20976d7775615683aa766",
+      "bytes": 759
+    },
+    {
+      "path": "docs/runtime-validation/2026-05-07-droplet-replace-integration.log",
+      "mode": "100644",
+      "blob": "44f40afafdbaad172448bdb4dd5f627640c29aa1",
+      "sha256": "ab2140e64c05c919ceab635cf6304bd143355bbcdc842ed4e568a12424231b9a",
+      "bytes": 174
+    },
+    {
+      "path": "docs/runtime-validation/2026-05-07-tc2-equivalent-launch.log",
+      "mode": "100644",
+      "blob": "19f5f46ac9b8c2d06f46a24ccc7ba4b4ef3b1b3a",
+      "sha256": "a4e1ca046fdf54e9912530d85dbe72595c93133c2d20a91c9239bc5bee505bb9",
+      "bytes": 1343
+    },
+    {
+      "path": "docs/runtime-validation/2026-05-17-phase2.5-do-finalize-smoke.md",
+      "mode": "100644",
+      "blob": "20cfecb6d72a7ec6c8312878b151045cbbb3807b",
+      "sha256": "f0b0d1cc5d514e7affae2a26443aa78d42a874b4ff6b09c0e5cd26364f767034",
+      "bytes": 5493
+    },
+    {
+      "path": "examples/minimal/config.yaml",
+      "mode": "100644",
+      "blob": "a7ab664873bcc8090002da691e75b8cce0f5104a",
+      "sha256": "f7c4e772ccf6e0c260776d04686a672783bc575495bf0069a8c4beb3c61936d6",
+      "bytes": 692
+    },
+    {
+      "path": "go.mod",
+      "mode": "100644",
+      "blob": "b3239faef009190455e66197a036b9f0cb2abee4",
+      "sha256": "43d7b920e231bdd8658d6e50ae2491787b61fc83acba39ff569dadfae8515747",
+      "bytes": 9822
+    },
+    {
+      "path": "go.sum",
+      "mode": "100644",
+      "blob": "6e15c87f04c93c8976abb7d6e4fce944fc115605",
+      "sha256": "6790e15c45cea5a8e3039776eb5700a344c079c8a35a97fe8e27b46d46a6815b",
+      "bytes": 80485
+    },
+    {
+      "path": "integration_test.go",
+      "mode": "100644",
+      "blob": "3793ebe5e8815080f5227d1e828a55f95c665c79",
+      "sha256": "da39e37e71799c8df5988f85264ec44be896bd5e842d9d89a18b24c612750966",
+      "bytes": 5202
+    },
+    {
+      "path": "internal/api_logger.go",
+      "mode": "100644",
+      "blob": "a1096783d3f814e4f892e9862605b553577edc0a",
+      "sha256": "7706dcde5f6de26734f5fb0b37b65fa56304108d565f688a3516549eb7b5a2e7",
+      "bytes": 3109
+    },
+    {
+      "path": "internal/api_logger_test.go",
+      "mode": "100644",
+      "blob": "099fadcdf37bd4c6df6ee7595953a865bda512c9",
+      "sha256": "5169d0d42cb1bc978a3eef6ccbdf81b52aeace8b5c5605b66525de76bb707051",
+      "bytes": 1836
+    },
+    {
+      "path": "internal/app_platform_runner.go",
+      "mode": "100644",
+      "blob": "086351c13a0977404d3d5b16ff5413029d536c22",
+      "sha256": "7c85e768c18d9d7aaed4b51c7b667c1ffc22b20045db7a3115ddb07125582c2c",
+      "bytes": 27056
+    },
+    {
+      "path": "internal/app_platform_runner_test.go",
+      "mode": "100644",
+      "blob": "16d7fc16e12abb41dc04610516f75c28fdb76494",
+      "sha256": "1ea944c27142a2c825b1f0bd653edc8b62a0935fa3b40d3f03402fb72a05eced",
+      "bytes": 33486
+    },
+    {
+      "path": "internal/bootstrap.go",
+      "mode": "100644",
+      "blob": "09554901f3371a455d6e72b86f595e1f50a78a90",
+      "sha256": "7004aa276b4d9df9b82c32d34be461519640e7f347392f80c3d846463172ffbd",
+      "bytes": 5642
+    },
+    {
+      "path": "internal/bootstrap_test.go",
+      "mode": "100644",
+      "blob": "5dc51bbcc16990bc2b0589bb0d0e28b4bede0a04",
+      "sha256": "6ff61cbb375eeca078a29c057c5770ec143f6a2332a7a19721bb56403be461d8",
+      "bytes": 7499
+    },
+    {
+      "path": "internal/controlplanehandoff/fixture.go",
+      "mode": "100644",
+      "blob": "9b584f3aa87cc32bab677ca1cfcbff14a6407981",
+      "sha256": "3563fde222cf10d70c2c9c34fd1400970dad16b9fc0088eb7dbae389616b8a90",
+      "bytes": 3543
+    },
+    {
+      "path": "internal/controlplanehandoff/fixture_test.go",
+      "mode": "100644",
+      "blob": "007094668e59775c49ccc433416761bdecb75a4f",
+      "sha256": "d8efe7e91084e68dc6515f767263ead7f3f788e175d0ba220f8afd9730a876d6",
+      "bytes": 5180
+    },
+    {
+      "path": "internal/deferred_test_helpers_test.go",
+      "mode": "100644",
+      "blob": "ddd7320156f54b8be1c9c96ae7b7cecc96f0375b",
+      "sha256": "dc0a1c8ecfefb9e6bac7483bd92901b131f7a42a15b5ac4c7ded0772454619ba",
+      "bytes": 2784
+    },
+    {
+      "path": "internal/drivers/actions_wait.go",
+      "mode": "100644",
+      "blob": "e37520357cd04b358bc598ed51abffe7c7bd75ff",
+      "sha256": "ac59b0cc594d82ade43a0f376b5b8f303435d933fcfcb2e969a47b571f33b674",
+      "bytes": 1520
+    },
+    {
+      "path": "internal/drivers/api_gateway.go",
+      "mode": "100644",
+      "blob": "5f91e6fe17e51fb58733e64cdfea889a18af3bda",
+      "sha256": "aad41562da1e4ca735fa148622dc37381efc6c4ba8fd6866e5565a6115173f04",
+      "bytes": 7577
+    },
+    {
+      "path": "internal/drivers/api_gateway_stateheal_test.go",
+      "mode": "100644",
+      "blob": "24e98b152fcf3f3f01f2d6544d3fa802aa7ac9b5",
+      "sha256": "4a647c0828834894a44b4ec9cbad59ea756c24c140ccf9087f30477f5887e899",
+      "bytes": 6502
+    },
+    {
+      "path": "internal/drivers/api_gateway_test.go",
+      "mode": "100644",
+      "blob": "dff296abf9fcfc8d0e8cf05e6edec22ca1befe3e",
+      "sha256": "adba9d40ac3bcd4faf6d2c82f7bd599e177901cefc38c2d143459a65c068c19e",
+      "bytes": 11870
+    },
+    {
+      "path": "internal/drivers/app_domain.go",
+      "mode": "100644",
+      "blob": "8e208f80db134e59275c92f0f8efa83fcf1dc042",
+      "sha256": "c1bb9a64ad760c195f42d8316685f19cdc47821270b595d0960645d149b9260c",
+      "bytes": 15582
+    },
+    {
+      "path": "internal/drivers/app_domain_test.go",
+      "mode": "100644",
+      "blob": "f5db1b2883dd7b2b75d20f43c22c7a45cc5b385c",
+      "sha256": "240f2be7c5fb62d3f7af26640c1d49da8f62d3812b501a66b0233a5d606cf5d7",
+      "bytes": 11471
+    },
+    {
+      "path": "internal/drivers/app_platform.go",
+      "mode": "100644",
+      "blob": "c2e1009bb818fc9bc226c89159e742a283ae0367",
+      "sha256": "875576b64eeef667d440990e98c41ef60679c34847085aa695f83750132de117",
+      "bytes": 72443
+    },
+    {
+      "path": "internal/drivers/app_platform_buildspec.go",
+      "mode": "100644",
+      "blob": "adb42f3933bf6bb8d587fd2ad030e604a1d2b975",
+      "sha256": "ae3fee2eacbc7daca9c0c9832cb5dd2531e9989ee413dc50040d70887818d46e",
+      "bytes": 32141
+    },
+    {
+      "path": "internal/drivers/app_platform_buildspec_test.go",
+      "mode": "100644",
+      "blob": "b1273b0903a7a34df59c9c5761e715e63c72dd4d",
+      "sha256": "65cec4c2b7c58b421c05ae2beb0a1899a8c51143d52523f99417e7ed9f9d2db2",
+      "bytes": 59641
+    },
+    {
+      "path": "internal/drivers/app_platform_export_test.go",
+      "mode": "100644",
+      "blob": "fea9471365b4c851aa2cc638c7a25d1dd6788498",
+      "sha256": "22531116a37c9910bc94c9e596b29dbd5cb06b3e869ce86ead698eb4531ab6f9",
+      "bytes": 486
+    },
+    {
+      "path": "internal/drivers/app_platform_image_presence.go",
+      "mode": "100644",
+      "blob": "23b0c3e4e801bab1a7efe3dc04c8339fb8592b8f",
+      "sha256": "66ac75810aed93eb8bae7efdb2629e63b7bb76b9318fcb2903900e490deb1d81",
+      "bytes": 3561
+    },
+    {
+      "path": "internal/drivers/app_platform_image_presence_test.go",
+      "mode": "100644",
+      "blob": "97ca9459531a94e8986ec114f62f158487fc1eee",
+      "sha256": "5a5852598ad621dc6f56d6dab7b4b51cfafeb6ccf98ab1235ef5089057bf12ef",
+      "bytes": 10592
+    },
+    {
+      "path": "internal/drivers/app_platform_integration_test.go",
+      "mode": "100644",
+      "blob": "ce04629a9a17c9d52cede51c146e641591069e66",
+      "sha256": "9195cb2079662404694106bba2eacb97b72c4fc27740db39498b7f402a4099f4",
+      "bytes": 5968
+    },
+    {
+      "path": "internal/drivers/app_platform_lock_test.go",
+      "mode": "100644",
+      "blob": "d0b84d10a866905c5176cfdfae8988c16fdb3de4",
+      "sha256": "c37f963331e953f698701519eba886a1b58bcb199d8c9c56debe0a49620c4329",
+      "bytes": 1689
+    },
+    {
+      "path": "internal/drivers/app_platform_migration_repair.go",
+      "mode": "100644",
+      "blob": "5e5bb77d9a2ce2631408747a9037a94ea2f4806a",
+      "sha256": "3a2e54000a37e6bbb4b8e35880e96ad85578db33a94a3db45de4d8e954424263",
+      "bytes": 19590
+    },
+    {
+      "path": "internal/drivers/app_platform_migration_repair_test.go",
+      "mode": "100644",
+      "blob": "d6c0f07d61d04bf188973726994953ae7ce5ed1b",
+      "sha256": "5f4661dc74130813484bcba925d331c527d07386a4b4525cfed0c906c8068c29",
+      "bytes": 49742
+    },
+    {
+      "path": "internal/drivers/app_platform_readiness.go",
+      "mode": "100644",
+      "blob": "052fb5689330b405df8e84a839fa7880bbfe4140",
+      "sha256": "b5a1ec741d0a6182ffd619539a4f9df6a0f5dd6313573dc0f830f8e448941f2e",
+      "bytes": 4633
+    },
+    {
+      "path": "internal/drivers/app_platform_region.go",
+      "mode": "100644",
+      "blob": "d5941c9041ee5d98d2b9456c510cc6803f1f3373",
+      "sha256": "56226ddbf93d6d5c4ad65861a2270a849a7e8801648fecc55f124d2b7418dfc6",
+      "bytes": 2839
+    },
+    {
+      "path": "internal/drivers/app_platform_region_test.go",
+      "mode": "100644",
+      "blob": "a4ea9c7ee9242832becc6209bc0fb0b1cf305d93",
+      "sha256": "19725b1e1a29cfa7a36e44b930bae2612e87e3d34380e62f8ab7665b522a253b",
+      "bytes": 3631
+    },
+    {
+      "path": "internal/drivers/app_platform_stateheal_test.go",
+      "mode": "100644",
+      "blob": "9803156395fae2c0b70bccf337692dab9900f4a4",
+      "sha256": "494f4d278ccd53ea86df302f9b770fab5d79fdfbb50bf8dc2509de2ddca195d3",
+      "bytes": 12895
+    },
+    {
+      "path": "internal/drivers/app_platform_test.go",
+      "mode": "100644",
+      "blob": "05ec8e3772b9a81ac8513ac200df99843504d4e9",
+      "sha256": "b2ebed2fb3873b7175990b5a9b59a4bc695031c7cb36806d5b3f5f4e46686e7b",
+      "bytes": 103551
+    },
+    {
+      "path": "internal/drivers/app_platform_troubleshoot_test.go",
+      "mode": "100644",
+      "blob": "4f3616617955eddbb3d3bf5f6a542cebca7b7a4a",
+      "sha256": "53577daff44ec0001998e2f0d2d1bee50548f82c6a5bb8406ccd23c16de1e330",
+      "bytes": 21964
+    },
+    {
+      "path": "internal/drivers/cache.go",
+      "mode": "100644",
+      "blob": "5d94d2ead9362e00d2379bf4d8517c3390236617",
+      "sha256": "fd3f30b487cb9274956361a82af93ecec08ce10c5c61775442222fe34e4a870e",
+      "bytes": 7467
+    },
+    {
+      "path": "internal/drivers/cache_stateheal_test.go",
+      "mode": "100644",
+      "blob": "4e90ba19e9b7699090efc612b0ade318a0c84579",
+      "sha256": "8ceace4e1d23b33ac99697de8c0670176ece1d8c48a5b74d60903cc80c5c91b7",
+      "bytes": 7119
+    },
+    {
+      "path": "internal/drivers/cache_test.go",
+      "mode": "100644",
+      "blob": "ad9ac5d4d928c5faa912c873a2d4a93c3989d3b3",
+      "sha256": "03cc126ae794684b41823f41bd495894bbe7db031e19885c0efe090173a49ace",
+      "bytes": 7809
+    },
+    {
+      "path": "internal/drivers/certificate.go",
+      "mode": "100644",
+      "blob": "6103bf02195d946a51688223adf21a722d143b43",
+      "sha256": "d68744bf9e0c0e65c0598b9c97a42966e9656507b184fceaf9ef08affb8ad14e",
+      "bytes": 5968
+    },
+    {
+      "path": "internal/drivers/certificate_stateheal_test.go",
+      "mode": "100644",
+      "blob": "3de8165547517c9a1c2c53166a209c3504fce97c",
+      "sha256": "1e7bc906bbbfb01039fb6274a07be314b734f4c1ad834889d9f29dc52c37bf32",
+      "bytes": 6157
+    },
+    {
+      "path": "internal/drivers/certificate_test.go",
+      "mode": "100644",
+      "blob": "81b2e210c309312a2ae9d78b2914884e19ba6c91",
+      "sha256": "de4ef610fcd254241854bf2ccc71e173b94fb5cb4d7a4e3ea92338c5c9a42e27",
+      "bytes": 6635
+    },
+    {
+      "path": "internal/drivers/database.go",
+      "mode": "100644",
+      "blob": "3d8e131f5d1dd4a4b56b44143d974548972511a5",
+      "sha256": "dcd21b7c9f524336c1d19330a10ed0738c731d381f799e6dc4e8fb1d8e96243c",
+      "bytes": 34281
+    },
+    {
+      "path": "internal/drivers/database_deferred_test.go",
+      "mode": "100644",
+      "blob": "8392c31763f377e0181927ddd58da7ac33fd1116",
+      "sha256": "aceeb03be90520b3f4899251b82cba1e4e2d52d27f23af03ce9494605031523e",
+      "bytes": 16079
+    },
+    {
+      "path": "internal/drivers/database_stateheal_test.go",
+      "mode": "100644",
+      "blob": "098babb45c64b59492a259208241954b15a51556",
+      "sha256": "7b79dec61ec16b90bf5a0d82c2942fc1869923fbbbab739278a2c02771750021",
+      "bytes": 7217
+    },
+    {
+      "path": "internal/drivers/database_test.go",
+      "mode": "100644",
+      "blob": "4886474e5bbf874985064ec9bdc8b794eda5e65b",
+      "sha256": "c4f90ab3abec04d7bc9b049c9a751ce5e072c35974f2b3f9881d323d23bfed97",
+      "bytes": 32285
+    },
+    {
+      "path": "internal/drivers/database_trusted_sources_integration_test.go",
+      "mode": "100644",
+      "blob": "d1e62a916b6c259a4102f6832b56542fe232ae36",
+      "sha256": "62ad22f294bdc892029c36744a156f63141831dc35b2cf603be617ada0147c6e",
+      "bytes": 3674
+    },
+    {
+      "path": "internal/drivers/database_user.go",
+      "mode": "100644",
+      "blob": "c5ab65779cfdbf99da717e7803ef61f83ca0265b",
+      "sha256": "08ddfcbab595c5f2ed1e762aa1ba6d932a0c5a7e4cb64f5165fd016358cc8e33",
+      "bytes": 14082
+    },
+    {
+      "path": "internal/drivers/database_user_test.go",
+      "mode": "100644",
+      "blob": "22cb97720d696b899972973eebbd04a1d62d5299",
+      "sha256": "49ecb24f8f88487184a6aa73331bd142f84eba1a5af24f8abdeeb1b4b117b782",
+      "bytes": 28444
+    },
+    {
+      "path": "internal/drivers/deploy.go",
+      "mode": "100644",
+      "blob": "2c082ea54ace43dc7aec5bf1071fd6c5ac4e4fd2",
+      "sha256": "9b705e69f277993aa0765b97bb4015067c58b599604e62dcd5864cf641681ea5",
+      "bytes": 24677
+    },
+    {
+      "path": "internal/drivers/deploy_internal_test.go",
+      "mode": "100644",
+      "blob": "45f47d92cea81c85280da9003ed23b0425b7217a",
+      "sha256": "47a82f9fa6e1739006b00ff899c7ef64dd294746b3c62cf84caee35a2fa4a81a",
+      "bytes": 8870
+    },
+    {
+      "path": "internal/drivers/deploy_test.go",
+      "mode": "100644",
+      "blob": "9244fb191b20ae78aac39f6ea63521db077c0774",
+      "sha256": "8a1e1992d708c2ed544416e4c097f27c61726f6fa864cc5bfdf877926de8acb6",
+      "bytes": 29420
+    },
+    {
+      "path": "internal/drivers/dns.go",
+      "mode": "100644",
+      "blob": "8ec0e4200b10083ac764283cd1b2246e9be5235b",
+      "sha256": "d8501a5d2c4b63307c055a060cbc27a9097fca4e5cceded4dbb631e1383a89f8",
+      "bytes": 40541
+    },
+    {
+      "path": "internal/drivers/dns_test.go",
+      "mode": "100644",
+      "blob": "be462930926dfa456abdd555787ee6db10ce2c68",
+      "sha256": "cb845b75e848c368c63e175a5483c800d5c6039bfbdb4e431aec42cd30edec3f",
+      "bytes": 98046
+    },
+    {
+      "path": "internal/drivers/droplet.go",
+      "mode": "100644",
+      "blob": "4869e494d2303cadd7225d04874257729e5fcf5c",
+      "sha256": "121cbd418da351eb023ef1424a8585f272160a51aa07bfcdfdf3c816e518aaf8",
+      "bytes": 35249
+    },
+    {
+      "path": "internal/drivers/droplet_pricing.go",
+      "mode": "100644",
+      "blob": "a898baa3e90c2d6ddfa757e56bc939f9aeda991e",
+      "sha256": "c2603309230a6eae7ec0d2a578c63e39bd814a346cb34bb88a1e6cba507a50f5",
+      "bytes": 6385
+    },
+    {
+      "path": "internal/drivers/droplet_pricing_test.go",
+      "mode": "100644",
+      "blob": "0ad4e2ffa24102802f88e2685b5cea213464460b",
+      "sha256": "59cb32d63ac8ecd3ebcc6abea86dc3c4e40c0ef6b5c6e8673ebcb892f2da404a",
+      "bytes": 13356
+    },
+    {
+      "path": "internal/drivers/droplet_replace_fakes_test.go",
+      "mode": "100644",
+      "blob": "36b0d2124d0cb579c421d92a76abbdb9046cde1c",
+      "sha256": "1a4ff397b839dea7e124a41ee6eb288791977c588a1e6507eb6b64a5dbb71219",
+      "bytes": 6643
+    },
+    {
+      "path": "internal/drivers/droplet_replace_helpers_test.go",
+      "mode": "100644",
+      "blob": "bd83e20f05133f1c6b522e764160b1607a9b18b4",
+      "sha256": "c85091357cef63af0fbc356cfa3a04fb2c9ec0f710388cac853bd357a0c76606",
+      "bytes": 2498
+    },
+    {
+      "path": "internal/drivers/droplet_replace_integration_test.go",
+      "mode": "100644",
+      "blob": "6833c312d3b921a65a237e71a842e7bd8fb4d7fa",
+      "sha256": "17389309e8cbe2ddb9192e8b85146a7366d8465b48145bed815259a428a04b96",
+      "bytes": 3072
+    },
+    {
+      "path": "internal/drivers/droplet_replace_test.go",
+      "mode": "100644",
+      "blob": "70f3dacb3a3e13ead72b9e8b0d6d841364298d52",
+      "sha256": "164a1f25f91aac49a3f0e54159f1e8b57ce2d71e7161bef2cf9645e908311bac",
+      "bytes": 8207
+    },
+    {
+      "path": "internal/drivers/droplet_test.go",
+      "mode": "100644",
+      "blob": "30fac667e2e3fe6542b235d7ed11a1d2c61d5eb6",
+      "sha256": "94d4ceef237b22b7a68c5fb39c7d6d84390f0c6a8537a426b93f1d39c2181ec5",
+      "bytes": 47663
+    },
+    {
+      "path": "internal/drivers/errors.go",
+      "mode": "100644",
+      "blob": "35bbfeb7d86c3be406b0ab9c686c0d6e3a70f010",
+      "sha256": "c5bac59e55ee6e366ef8d2f2b75851d9682ee49ced517edeaf53991a82f260ae",
+      "bytes": 2058
+    },
+    {
+      "path": "internal/drivers/errors_test.go",
+      "mode": "100644",
+      "blob": "cfba007e873c7e7db177cb4d0ecb42feb1527909",
+      "sha256": "ac43f81e9cdf54963bdeddc00de4ca95b4479ef2e11dc103f7f93f15fea6ec82",
+      "bytes": 2517
+    },
+    {
+      "path": "internal/drivers/export_test.go",
+      "mode": "100644",
+      "blob": "3955830ad4eca239207d19094f20fc6146cd9773",
+      "sha256": "82c45d73d583021382f5ced356a3526c27a38e67b2ffac996f6a863407ac6c50",
+      "bytes": 343
+    },
+    {
+      "path": "internal/drivers/firewall.go",
+      "mode": "100644",
+      "blob": "56a190d5c7155cd5feac664c86e398b75d3d82b4",
+      "sha256": "7ed113e01f6bcfe5694280b4d4ba3bd918a6f1f4ac4b8eeb7bde0b4bc3ed3acd",
+      "bytes": 21426
+    },
+    {
+      "path": "internal/drivers/firewall_stateheal_test.go",
+      "mode": "100644",
+      "blob": "c46959402ebb93f8c833a65bc8a44a020f47c76b",
+      "sha256": "28db43b5305819c161565fcc5af0e5ef27a561f3a69e7834659e8a76bbbc5adc",
+      "bytes": 6483
+    },
+    {
+      "path": "internal/drivers/firewall_test.go",
+      "mode": "100644",
+      "blob": "128290f15c011377c447c6564ca9676206a51f06",
+      "sha256": "cdb56254d45932dbb03ec84bc325525ac342b2d03563b87d48a75d4df97f6044",
+      "bytes": 39870
+    },
+    {
+      "path": "internal/drivers/iam_role.go",
+      "mode": "100644",
+      "blob": "32a2cad4987e7079add6650e17d224e9be825d20",
+      "sha256": "b1a8c74e262231fa3a6c530c5743b890792794578d9519df4735a586264516e7",
+      "bytes": 3267
+    },
+    {
+      "path": "internal/drivers/iam_role_test.go",
+      "mode": "100644",
+      "blob": "788db74514e8b3a618e4865278fe1f8366c0a7d4",
+      "sha256": "d1fcdd8b571d48b92e16d09518620a2e29ea5dcc447c7723c7c2163b6e61a3dd",
+      "bytes": 2869
+    },
+    {
+      "path": "internal/drivers/integration_test_helpers_test.go",
+      "mode": "100644",
+      "blob": "ddce0973dc94b9db6b29c69cd2bda3c6b995e942",
+      "sha256": "2d2a6b9b05caedbc8f455c50d61a17c315db23be58455bd2bee6b344998d5b78",
+      "bytes": 6466
+    },
+    {
+      "path": "internal/drivers/kubernetes.go",
+      "mode": "100644",
+      "blob": "ec39e016d1f7d2380a88f0bfbacd50e133b22f1f",
+      "sha256": "062f72adbc5c217335b2adc82a53a326702ea381398b8050f7bde3b734ba5210",
+      "bytes": 7649
+    },
+    {
+      "path": "internal/drivers/kubernetes_stateheal_test.go",
+      "mode": "100644",
+      "blob": "42c632066d64d7be7102a8c901ef90d6c1701a2c",
+      "sha256": "025d4e44728af0b4d76f2cf275bb1ba2f682718140a7d1c36c35ef1f49ccadd2",
+      "bytes": 8420
+    },
+    {
+      "path": "internal/drivers/kubernetes_test.go",
+      "mode": "100644",
+      "blob": "cd07521a1703681876de603c15cc683c4485c0f9",
+      "sha256": "2d45645bafa40903da65d128e754fbeaebf13ec1361360796c1ed3c634ed8659",
+      "bytes": 8745
+    },
+    {
+      "path": "internal/drivers/load_balancer.go",
+      "mode": "100644",
+      "blob": "c5802fef316e1ebb378471617ca488cc4b608f73",
+      "sha256": "adf5c5466f44d9eeaba766da0cf7b5a8de0cf75c67d0f59e9ca592e332480958",
+      "bytes": 6666
+    },
+    {
+      "path": "internal/drivers/load_balancer_stateheal_test.go",
+      "mode": "100644",
+      "blob": "ee3a497256489343b889086b3784e41cb2b97dc8",
+      "sha256": "da43e93252ba252a273c24ac3204226c902f4d4bdcea3f7dffe1944cbba5fc8a",
+      "bytes": 6212
+    },
+    {
+      "path": "internal/drivers/load_balancer_test.go",
+      "mode": "100644",
+      "blob": "313804a1864d4b16732b847f94bb38e95215cfb3",
+      "sha256": "5efad18db0b5277908a4c70393973a36561648f32ae34e27e9a4e561fddb6f4a",
+      "bytes": 7487
+    },
+    {
+      "path": "internal/drivers/providerid_format_test.go",
+      "mode": "100644",
+      "blob": "da38f18a53022cbfa0ae8a1d5a657e7a3eb36b7a",
+      "sha256": "1c362ca7a650a4d9513c26e63e60d4712a93136df5c9d61eeb52e847b24cda45",
+      "bytes": 3368
+    },
+    {
+      "path": "internal/drivers/registry.go",
+      "mode": "100644",
+      "blob": "5b44d068b1595611b4f90129c19cae4105688e03",
+      "sha256": "72d17296aa8df36961ef8cad6d59fb80e2726652d9c3467f450afd8e9c50aaf6",
+      "bytes": 5424
+    },
+    {
+      "path": "internal/drivers/registry_test.go",
+      "mode": "100644",
+      "blob": "19c8e6fc409ff39253a363fd8dffc8df712ec1a6",
+      "sha256": "d5c8a1785deee2a6a5d0f012e6b71ea50db50c1c937d9bd616176939860f5384",
+      "bytes": 5774
+    },
+    {
+      "path": "internal/drivers/shared.go",
+      "mode": "100644",
+      "blob": "afea1c35bd09df95dacdc0316e196533cbc04222",
+      "sha256": "8a252bb50fa7b829abdb5fa5ca62bc58646ef925eeb0567de1cb273640429a8a",
+      "bytes": 760
+    },
+    {
+      "path": "internal/drivers/shared_test.go",
+      "mode": "100644",
+      "blob": "35fafed1d7889b71dc8854631d429f1ed2e01285",
+      "sha256": "0c388df0e1d49e8084b4859c1fbb6b4d97f2b44e1d7338cf4a4d5b2284621ea1",
+      "bytes": 1025
+    },
+    {
+      "path": "internal/drivers/spaces.go",
+      "mode": "100644",
+      "blob": "a1f87fc6d91b05a45c64460773ec6424a7a5b8c1",
+      "sha256": "b684e1be9cfed4e615364b4248752a22d3140e4b1fbe58d2714cbda8b9a9c25d",
+      "bytes": 6615
+    },
+    {
+      "path": "internal/drivers/spaces_key.go",
+      "mode": "100644",
+      "blob": "b2714a95bb7ed7fcb305fd4219ceb5cf9d482d9b",
+      "sha256": "2d001dd6bd2d1cd44d185639f91f13883942bf87caa1b4e3eeebc50cfbc592d2",
+      "bytes": 15171
+    },
+    {
+      "path": "internal/drivers/spaces_key_test.go",
+      "mode": "100644",
+      "blob": "5938114cef03750feac1e258eeb1f590c9f50fb9",
+      "sha256": "0a303462d499ad99ed864b8afb1ffc658b38811c6a908c7929b3889e5e8e3e63",
+      "bytes": 30735
+    },
+    {
+      "path": "internal/drivers/spaces_test.go",
+      "mode": "100644",
+      "blob": "d849d23fdd61ccf295111f44ca144b6f977abb31",
+      "sha256": "6068d01f5b70c1361ecc581c95cb10c5fdd8fa5818cf33209e4cdb7700be3d93",
+      "bytes": 4309
+    },
+    {
+      "path": "internal/drivers/util.go",
+      "mode": "100644",
+      "blob": "5a179055c22bed6c64fc28abe930cd681d8bd601",
+      "sha256": "2521b985854766332952495bf8d79e869354867ae3177584f547c25ded1ca45c",
+      "bytes": 4507
+    },
+    {
+      "path": "internal/drivers/volume.go",
+      "mode": "100644",
+      "blob": "47006843cf9aecf3dd6622db4dfc9b1c4f371d11",
+      "sha256": "0764689cb3c3b0a361da285617bbb25dd1391b3195e4039c0416ef425296b883",
+      "bytes": 12278
+    },
+    {
+      "path": "internal/drivers/volume_test.go",
+      "mode": "100644",
+      "blob": "cee18824e575b3073f8dd5479990cf976912e525",
+      "sha256": "17cc1ce6abbb8ed0ba4cc77d68f314f31176b9db77d4ef84e0c685ba8d158f83",
+      "bytes": 26822
+    },
+    {
+      "path": "internal/drivers/vpc.go",
+      "mode": "100644",
+      "blob": "d20ecd7cdbe42eb3b58a0b197b54e8d427c9d1d7",
+      "sha256": "a88a7124bbd7e1121a10071d2fc323dfb00e70b05932541420fde987b6407f91",
+      "bytes": 7421
+    },
+    {
+      "path": "internal/drivers/vpc_stateheal_test.go",
+      "mode": "100644",
+      "blob": "29d9c6a5427a3b65a81e415f58807aaf028ba69f",
+      "sha256": "a058e3f756e98c87c3efc95a6c0b2224153ca899d0d68fc9be482425cc154c21",
+      "bytes": 6057
+    },
+    {
+      "path": "internal/drivers/vpc_test.go",
+      "mode": "100644",
+      "blob": "2548ba331c279f859888e1e4c6619be469576275",
+      "sha256": "d653e804208bf83b6ba764710ba3f55254b484bce328c7fce86d1f578d78055f",
+      "bytes": 10279
+    },
+    {
+      "path": "internal/host_conformance_test.go",
+      "mode": "100644",
+      "blob": "051bd6d2d805a19865090ed081234ae45bf1edf0",
+      "sha256": "03dee91cca658497b28aaaece0f4f82032850f7ff132548cadecf0d63cbbee14",
+      "bytes": 7920
+    },
+    {
+      "path": "internal/iacserver.go",
+      "mode": "100644",
+      "blob": "715bfff7330e1dcf92a2706e5dad3c94505fd9e9",
+      "sha256": "89c6558572e4b83c17943033b26a8c5ccba3a752be2a45f0befd60ee1f454bb6",
+      "bytes": 35103
+    },
+    {
+      "path": "internal/iacserver_finalize_test.go",
+      "mode": "100644",
+      "blob": "4fcd254f577b9b850f44e59b4fa9bd93ae32c360",
+      "sha256": "02e5c3397e16013384a2fa6d9c28d951c8b1c5275f02663793136f3637433257",
+      "bytes": 9254
+    },
+    {
+      "path": "internal/iacserver_mapper.go",
+      "mode": "100644",
+      "blob": "4289356f6bb40f001ff9063097832512e5e8d7cc",
+      "sha256": "d9c68880ee29fb7df23915b898fc7d1af8be68046e54f8c2e19034e44d6e9583",
+      "bytes": 10678
+    },
+    {
+      "path": "internal/iacserver_mapper_test.go",
+      "mode": "100644",
+      "blob": "85c7e855a3a32ea6e52b2e5a4b0c1e9a444c1933",
+      "sha256": "97a35183eaf01e56f144093d0c2294b29f74f83b9cda9c36567804454baead82",
+      "bytes": 7199
+    },
+    {
+      "path": "internal/iacserver_pricing_test.go",
+      "mode": "100644",
+      "blob": "83f7c79b885bb50f422a254e9c0a1eb1ff7a50c0",
+      "sha256": "b3c7cb7122eec8a026f07c836a2ae63c1516c4110850df91446ee30f6bb1eacf",
+      "bytes": 4623
+    },
+    {
+      "path": "internal/iacserver_runner.go",
+      "mode": "100644",
+      "blob": "65b7dff40a0543d261093424c7992c0ab714a5d5",
+      "sha256": "846e15443ecaf3f443bf3c5222a50ad401c97abe8f45ce5b49aa3c80e7374445",
+      "bytes": 3048
+    },
+    {
+      "path": "internal/iacserver_runner_test.go",
+      "mode": "100644",
+      "blob": "aacf5e2605334919a3c3b39f0d8b862759b5420f",
+      "sha256": "3841a05c729a5f7f62e6398c833e490f8e7701058d7dc61105117f9afd03726e",
+      "bytes": 15843
+    },
+    {
+      "path": "internal/iacserver_test.go",
+      "mode": "100644",
+      "blob": "f600a96d69fba28dcfb3fc3426b96fbea5b4df32",
+      "sha256": "12dfc2b2659085eb684cbea51ff916f674200e807b23fd2eeb5e9350bbf0a1b7",
+      "bytes": 7071
+    },
+    {
+      "path": "internal/logcapture.go",
+      "mode": "100644",
+      "blob": "cf5c016ac1932e30bc59994576d74a5382f73a15",
+      "sha256": "888987db6e60d60e7cf1ade20ab3a303f8af30a50fe1668e2df879e6a79fdf7e",
+      "bytes": 6436
+    },
+    {
+      "path": "internal/logcapture_server.go",
+      "mode": "100644",
+      "blob": "b270a0fee74b67572f733acb6156081162ca803d",
+      "sha256": "ae61db026a48379166f0ea80a121f2f0e141228a2a4c256a376608fe2097767a",
+      "bytes": 1815
+    },
+    {
+      "path": "internal/logcapture_test.go",
+      "mode": "100644",
+      "blob": "60e31627fd14efc0f8beed95f4b001a66439df63",
+      "sha256": "1a989cfae6cd58b659bd3a730d04db7080673afa6d9b7fd6e390a55e6d5973e2",
+      "bytes": 11034
+    },
+    {
+      "path": "internal/ownership.go",
+      "mode": "100644",
+      "blob": "9a567f7d6bd55844819340dec6ed3c27be9a10fb",
+      "sha256": "71045c5436e81cbcf4b9f85357e36c3b96d7123aa97a0a7598454c03a24d8a1d",
+      "bytes": 10397
+    },
+    {
+      "path": "internal/ownership_server.go",
+      "mode": "100644",
+      "blob": "206ec60b4656350496c89c5f70e945521209a911",
+      "sha256": "c4de94dab954f787bc205edf994decf0efdc7cb1309897bfb3d736472f095e4d",
+      "bytes": 1257
+    },
+    {
+      "path": "internal/ownership_test.go",
+      "mode": "100644",
+      "blob": "960b07b6562bd6300882ce3ddb40935f0d84bff9",
+      "sha256": "a967d5006908806d715ab5c8dc334e723c8ba1166dadc5dfd394060c64bc6df2",
+      "bytes": 12370
+    },
+    {
+      "path": "internal/plugin_test.go",
+      "mode": "100644",
+      "blob": "95b8bae5f0ee36918ad30b1ec9c73deb6a7485db",
+      "sha256": "902184bda5a017bb3e1786cbfe7490c6e118a74dc24ac7d26affe524f97db337",
+      "bytes": 9722
+    },
+    {
+      "path": "internal/provider.go",
+      "mode": "100644",
+      "blob": "419a8e5980fee9003e1d7381a0c568887a8b8c60",
+      "sha256": "9ca7902d4293c4bd8e7e9b14eaba3e5cd446ee55f8d954a696b8c93146a5e460",
+      "bytes": 34854
+    },
+    {
+      "path": "internal/provider_conformance_test.go",
+      "mode": "100644",
+      "blob": "1b3457e998712da1c214365b553402db628d0945",
+      "sha256": "07ab6f4215ee7e040f454b980c695251bc64ad0d4a7e082ef119f4ec3d5cda7f",
+      "bytes": 3731
+    },
+    {
+      "path": "internal/provider_detect_drift_test.go",
+      "mode": "100644",
+      "blob": "62af16df184712ec795fdecfb4741d00bb918563",
+      "sha256": "6ef7c79b78223b20b8221cc474e12e44fe5402a00c5324ba3d8480bb18c7e083",
+      "bytes": 20716
+    },
+    {
+      "path": "internal/provider_enumerator_live_test.go",
+      "mode": "100644",
+      "blob": "9aabe3c48e1f523ffae4028edef0b0d69c1f0b31",
+      "sha256": "1a9cc95b64bc94e25466714fbae3093f49eee88ec71a83311d130d18bd46d5bc",
+      "bytes": 1592
+    },
+    {
+      "path": "internal/provider_enumerator_test.go",
+      "mode": "100644",
+      "blob": "4c6c0d596251e09b64f248bb8b36d7951fdf4334",
+      "sha256": "9159ca8f590994b35723b3926355f792a6a4ef70651ed68159b235b44cb886f6",
+      "bytes": 14770
+    },
+    {
+      "path": "internal/provider_revoke_test.go",
+      "mode": "100644",
+      "blob": "9ab7ac1f7beb3b7d162746ecb828865b15241aa5",
+      "sha256": "5e7d36fc5c9de0af93e61ca43645bbd0ace6e4356bea68984cddbebacc85e378",
+      "bytes": 4962
+    },
+    {
+      "path": "internal/provider_test.go",
+      "mode": "100644",
+      "blob": "3050fa012e61c7efb4266ed1f5b9882f9a1c9ea9",
+      "sha256": "3ed4ee2efc92bd79950d675ff14bc7262b7cb69ec5feffaddd035501d96b0323",
+      "bytes": 27871
+    },
+    {
+      "path": "internal/region_lister.go",
+      "mode": "100644",
+      "blob": "e9db857608c26841e910ac55ee83efd4469b585f",
+      "sha256": "0ec46ee050e77afdb6e45a8a195ee2aba63b68415e9c78b0d88c89bc70d3a4d0",
+      "bytes": 1794
+    },
+    {
+      "path": "internal/region_lister_test.go",
+      "mode": "100644",
+      "blob": "6f68c7b51d668267ca77bf205de50a58ae44a1aa",
+      "sha256": "ea95875a661fcec2664899f13e581d5c7f0086e242585e215fdeb7a9f65eab07",
+      "bytes": 4166
+    },
+    {
+      "path": "internal/released_host_test.go",
+      "mode": "100644",
+      "blob": "d3975a078cd8bf3e459fa3745de75b74f0b73176",
+      "sha256": "dbb8d7856d4f0a0fe18b330ffe33ca0522e15e02b55e54261ef413c1f33310c6",
+      "bytes": 33089
+    },
+    {
+      "path": "internal/resourcedriver_sensitive_inputs_test.go",
+      "mode": "100644",
+      "blob": "55d16e8d25a6b4abc63e980c6c617fef98d1e4c7",
+      "sha256": "0f2bab1e04aadba70ab561544f0d2ab5f93cc130b4cdea4fc01f99b47ff383d4",
+      "bytes": 33276
+    },
+    {
+      "path": "internal/resourcedriver_server.go",
+      "mode": "100644",
+      "blob": "6dd5ac08f6d6b3b0f1b39579a3de39c059358c8e",
+      "sha256": "252f8acf522421b022a1ec4b5f428e74ca2b32442b6c8b2a41bd552b66019489",
+      "bytes": 12440
+    },
+    {
+      "path": "internal/resourcedriver_server_test.go",
+      "mode": "100644",
+      "blob": "8358a22b8a1a8379be65a797f08f172107c4bf05",
+      "sha256": "557dbd408db932ec96a8f01710d0567b89469c1bfd4259e6e466c53421f4786b",
+      "bytes": 7908
+    },
+    {
+      "path": "internal/sizing.go",
+      "mode": "100644",
+      "blob": "9d67735f29cefb96672696e9e8e0706168eff21f",
+      "sha256": "fd38b3e9e7a50ed20c9ce206d42fa076d1690e1089f4468839a8414a2d7ef6f6",
+      "bytes": 3529
+    },
+    {
+      "path": "internal/sizing_test.go",
+      "mode": "100644",
+      "blob": "aae7b902a16446c9044de1ec9b25440576f54eed",
+      "sha256": "3a0fdd3ef0f56aa5975fecfd5e3442b43ca2ec0858ec9134c15a45c7d719795c",
+      "bytes": 2429
+    },
+    {
+      "path": "internal/statebackend/spaces.go",
+      "mode": "100644",
+      "blob": "9a7bad88d6023f72a83da9c9a91b25d4a44c61b5",
+      "sha256": "3c50b06b514fa91cd419d8281d6870d6ef77d66f32c71f44868782f627192f51",
+      "bytes": 13653
+    },
+    {
+      "path": "internal/statebackend/spaces_lock_test.go",
+      "mode": "100644",
+      "blob": "a06a7124291966628465d2c102d0a08b837c45c4",
+      "sha256": "8f4f52c6eba48a935c7bf39502eed51568815883bcb24b26a2f0e5e87acf5b58",
+      "bytes": 1636
+    },
+    {
+      "path": "internal/statebackend/spaces_test.go",
+      "mode": "100644",
+      "blob": "6def53022e77071bf1905addce08ed36ece8cce7",
+      "sha256": "8d6add1c925bf43794b066e3c6676702a7ad543f7194e892570bede2869271fe",
+      "bytes": 14465
+    },
+    {
+      "path": "internal/statebackend_server.go",
+      "mode": "100644",
+      "blob": "bbdc4dfe06ad56aef6bb81ce90305c6edf9fbe09",
+      "sha256": "5d003b88eb27e3d74c4fbab538b4693ded169a4afb98c136674eb2923876b9ca",
+      "bytes": 10030
+    },
+    {
+      "path": "internal/statebackend_server_test.go",
+      "mode": "100644",
+      "blob": "09d1ffe26fb9ce0ae3297418813f48cc29453d86",
+      "sha256": "6e881613e6e784261d61e5a897e930fe056f06887bb0bfb0166b025221e10992",
+      "bytes": 7906
+    },
+    {
+      "path": "internal/step_router.go",
+      "mode": "100644",
+      "blob": "038e70591313214b9b2321d166a17cedf949327b",
+      "sha256": "ee42a0493374e4f9453c956d38a392b5f3c53efc551557d4787e4d823dd4aa07",
+      "bytes": 10850
+    },
+    {
+      "path": "internal/steps/iac_logs.go",
+      "mode": "100644",
+      "blob": "e1ff32a25a827b678e3d4501bade3d1dbb62762c",
+      "sha256": "1a7d9ce50bf1ddd9cfdb988d7e8e34cd4b3f0fd513b2acc245483e406d0c8ed2",
+      "bytes": 9638
+    },
+    {
+      "path": "internal/steps/iac_logs_test.go",
+      "mode": "100644",
+      "blob": "2ea57916f1fbd1484e8e530f3dad490fa5f6c166",
+      "sha256": "a93ba6b05d691f22efade153284137d6ac3b193e071fda5cab6e56d1d684c184",
+      "bytes": 10973
+    },
+    {
+      "path": "internal/steps/iac_scale.go",
+      "mode": "100644",
+      "blob": "9a0607734c44044ec1a20f12c846e2c02b5b1002",
+      "sha256": "53f643c5835595216a726483b28060ecad9a8a1aa30510bafa0db2614c5fd7a9",
+      "bytes": 9432
+    },
+    {
+      "path": "internal/steps/iac_scale_test.go",
+      "mode": "100644",
+      "blob": "2e6170fe11df1b971d07b783728e113c2aa5f101",
+      "sha256": "de91349ec53cbab8d34d840f5996aecfcbda3e87e49ea4e5424c3bc7f09b32d5",
+      "bytes": 13163
+    },
+    {
+      "path": "internal/testdata/app-platform-runner/main.go",
+      "mode": "100644",
+      "blob": "f845520f10563c6f2692e8ab9e2b2fe2882a9cc2",
+      "sha256": "3b2d3ba00526c560522cc78d374301c79ece9dcd50bf283612f68ba488335bf1",
+      "bytes": 1584
+    },
+    {
+      "path": "internal/validate_plan.go",
+      "mode": "100644",
+      "blob": "cb65d87ee1f134ac46bf5a3a61a4bcd04d78de4c",
+      "sha256": "4b1f9c7fd58c64450a84a2a70531815999635c27358cb9f982e238f1b7ce77a2",
+      "bytes": 19280
+    },
+    {
+      "path": "internal/validate_plan_pricing_test.go",
+      "mode": "100644",
+      "blob": "14828f5d560a2b3793e41c319df1fb27a1289de6",
+      "sha256": "74f0636f6f615e82a62c8802af99eeb9947ac9cb352a02c34c216b3cdc1bafaf",
+      "bytes": 9439
+    },
+    {
+      "path": "internal/validate_plan_test.go",
+      "mode": "100644",
+      "blob": "6dd3156a3b66624864235341256fd7d1cd713211",
+      "sha256": "c8db865867ab425ff45e92067c912fe94c26444dad7b0aa910235782658303dd",
+      "bytes": 22934
+    },
+    {
+      "path": "plugin.contracts.json",
+      "mode": "100644",
+      "blob": "1ecc941914ca94cf9823fe62b76bf454788e808f",
+      "sha256": "7a6154c32e062e6b4e437ab231747a18d8edae4e42294320ea173ff676dc8aaa",
+      "bytes": 696
+    },
+    {
+      "path": "plugin.json",
+      "mode": "100644",
+      "blob": "9416236c99a18d71efc2ddfac66c703ed9610615",
+      "sha256": "1ebbb3b37ab592393756eb463ab68e3e881893fc1792b310a546bcaa47039d78",
+      "bytes": 12738
+    },
+    {
+      "path": "proto/digitalocean.pb.go",
+      "mode": "100644",
+      "blob": "3a5721482132c55c0653c174e508f9fab5297803",
+      "sha256": "84aa0661aa321962d0ce6dc0b092b82992b61e0aa89db671e6db9fed403d3bbf",
+      "bytes": 6354
+    },
+    {
+      "path": "proto/digitalocean.proto",
+      "mode": "100644",
+      "blob": "3a99586bc24a1b512ed6101dcbca072f10e2f9d2",
+      "sha256": "88b2dcb741ee836d00d088932217d3bc1c3e66be8fd77f612d76e6de07c93c4f",
+      "bytes": 1611
+    },
+    {
+      "path": "proto/generate.go",
+      "mode": "100644",
+      "blob": "d6b730b082df1cddd729f3b954f6a4aa41cbfd28",
+      "sha256": "e9639362d01ea467b8a55e01f1a544d409cd1b9f224954596b8459394d50d16b",
+      "bytes": 727
+    },
+    {
+      "path": "recovery_workflow_test.go",
+      "mode": "100644",
+      "blob": "c6e5f775cc8bfb7c7dd12e7250c47a749c6919c3",
+      "sha256": "6263bb298d91be257df164c8bddbb5f9c2a483cf9ee3f6715c312f1a21ea262e",
+      "bytes": 2612
+    },
+    {
+      "path": "scripts/workflow-iac-host-conformance.sh",
+      "mode": "100755",
+      "blob": "62e6aa3f4fad000dfedcbf410064a8f629af048e",
+      "sha256": "5066dea5a461524cbda244f7ca00cdd85127457406af9966fd638d3648fd276a",
+      "bytes": 893
+    },
+    {
+      "path": "testfixture/tc2-equivalent/infra.yaml",
+      "mode": "100644",
+      "blob": "44b07b2caaa7adb386e6f8d2d9ce3821dfe0b048",
+      "sha256": "77d4c517b16d8060d9cd63894015837c65a04a0bf24fdcee55daf5b6593dbbe6",
+      "bytes": 1932
+    },
+    {
+      "path": "testfixture/tc2-equivalent/state.json",
+      "mode": "100644",
+      "blob": "ce8705723f5dbd4654c4d249069eb79e6d2844f1",
+      "sha256": "036ffbd0e7cfb964b709c9e397ca0cc5a8966d4f3ab5aa8747cae2c360e993e3",
+      "bytes": 954
+    }
+  ]
+}
