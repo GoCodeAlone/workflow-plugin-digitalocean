@@ -2,6 +2,7 @@ package digitalocean_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -99,5 +100,43 @@ func TestPublicWorkflowPortableStaticAssertionsRejectRealControls(t *testing.T) 
 	}
 	if findings := publicWorkflowStaticFindings(map[string]string{".github/workflows/release.yml": "secrets.GITHUB_TOKEN"}); len(findings) != 0 {
 		t.Fatalf("automatic release token incorrectly rejected: %v", findings)
+	}
+}
+
+func TestPublicWorkflowFixturesRejectMissingOrBrokenRGBeforeGitOrGo(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal("policy fixture regression requires bash")
+	}
+	for _, control := range []struct{ Name, RG string }{
+		{"missing", ""},
+		{"broken", "#!/bin/sh\nexit 127\n"},
+		{"always-match", "#!/bin/sh\nexit 0\n"},
+		{"never-match", "#!/bin/sh\nexit 1\n"},
+	} {
+		t.Run(control.Name, func(t *testing.T) {
+			bin := t.TempDir()
+			sentinel := filepath.Join(bin, "git-or-go-ran")
+			for _, child := range []string{"git", "go"} {
+				if err := os.WriteFile(filepath.Join(bin, child), []byte("#!/bin/sh\n: > \"$RG_CHILD_SENTINEL\"\nexit 99\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if control.RG != "" {
+				if err := os.WriteFile(filepath.Join(bin, "rg"), []byte(control.RG), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command := exec.Command(bash, ".github/workflows/scripts/test-public-workflow-policy.sh")
+			command.Env = []string{"PATH=" + bin, "RG_CHILD_SENTINEL=" + sentinel}
+			output, err := command.CombinedOutput()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || strings.TrimSpace(string(output)) != "public workflow policy fixtures require working rg with PCRE2" {
+				t.Fatalf("fixture did not fail closed for %s: %v: %s", control.Name, err, output)
+			}
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("git or Go was invoked before rejecting %s rg", control.Name)
+			}
+		})
 	}
 }

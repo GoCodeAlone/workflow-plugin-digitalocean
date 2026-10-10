@@ -123,7 +123,7 @@
     "path": ".github/workflows/ci.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "2e0ab657507095c018435a0da34a76ffffd3ca15eb3ceff7c2b17e13ebbb9383",
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed immutable action node and inherited execution context.",
     "state": "staged"
   },
@@ -131,7 +131,7 @@
     "path": ".github/workflows/ci.yml",
     "uses": "GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956",
     "nodeSHA256": "50a4a8d5a662beda4b4b57507d7342495a175dd663e5c1e247961dcbb5d83bee",
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed immutable action node and inherited execution context.",
     "state": "staged"
   },
@@ -139,7 +139,7 @@
     "path": ".github/workflows/ci.yml",
     "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
     "nodeSHA256": "72a9f885834e7e7cfc170d24954ed15b9c11a222760a6b919510993561321f03",
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed immutable action node and inherited execution context.",
     "state": "staged"
   },
@@ -147,7 +147,7 @@
     "path": ".github/workflows/ci.yml",
     "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
     "nodeSHA256": "5f52e8bc5d4f74ac39c486b8605c4e16db070ea05934d4d741f739f34e43394a",
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed immutable action node and inherited execution context.",
     "state": "staged"
   },
@@ -155,12 +155,12 @@
     "path": ".github/workflows/ci.yml",
     "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     "nodeSHA256": "0fe822ed8559961639e22a7249495326099fd0c0302ee96b5ecdf0e6434d6385",
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed immutable action node and inherited execution context.",
     "state": "staged"
   },
   {
-    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
     "nodeSHA256": "558cd5abea492ec06d260cfe3bbd499e0a6b994bbf2d5377fdaa685f3fca5f8e",
     "path": ".github/workflows/ci.yml",
     "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",

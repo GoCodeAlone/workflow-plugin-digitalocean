@@ -23,7 +23,8 @@ const bootstrapBaseTree = "365109d6a442c7583bd172a0e6d1dd85c5d46b8d"
 const bootstrapInventorySHA = "691f7b85863123faea3f3ce1139b5fb4153ede520377e566e7ced5c4cfd62d14"
 const bootstrapRepo = "GoCodeAlone/workflow-plugin-digitalocean"
 const bootstrapProofRef = "refs/heads/prep/policytool-bootstrap-proof-20261010"
-const bootstrapReceiptAmendmentSHA = "be3baee9e482cbe5d1581d9401465b8d6744a1eeab5e0866c9355142272af472"
+const bootstrapReceiptAmendmentSHA = "21768299f64e630faba4b994c4086964242a4921793eff296aee24c2dcf0b47a"
+const bootstrapFixtureSHA = "70da3f19cd3c288b612d910f5805de24e59a393f186ed6307aeacfd79bfff839"
 
 type bootstrapReceiptAmendment struct {
 	Schema         string `json:"schema"`
@@ -74,6 +75,15 @@ func bootstrapReceiptPolicyProposal(t *testing.T, trusted, candidate, destinatio
 			t.Fatal("receipt-context proposal does not match the immutable accepted maps")
 		}
 		amended := bytes.ReplaceAll(acceptedData, []byte(proposal.OldContext), []byte(proposal.NewContext))
+		if kind == "executable" {
+			// Repin only the staged CI fixture; historical active bindings stay intact.
+			oldBinding := []byte(fmt.Sprintf("\"contextSHA256\": \"%s\",\n    \"state\": \"staged\",\n    \"sha256\": \"8728ddcc4dedb0057f331e587a821698e797950d3a3e5d7dcd4639471a4751a9\"", proposal.NewContext))
+			newBinding := []byte(fmt.Sprintf("\"contextSHA256\": \"%s\",\n    \"state\": \"staged\",\n    \"sha256\": \"%s\"", proposal.NewContext, bootstrapFixtureSHA))
+			if bytes.Count(amended, oldBinding) != 1 {
+				t.Fatal("finite fixture amendment does not select one staged binding")
+			}
+			amended = bytes.Replace(amended, oldBinding, newBinding, 1)
+		}
 		if len(file.Additional) != 0 {
 			extra, err := json.MarshalIndent(file.Additional, "", "  ")
 			if err != nil || !bytes.HasSuffix(amended, []byte("\n]\n")) || !bytes.HasPrefix(extra, []byte("[\n")) || !bytes.HasSuffix(extra, []byte("\n]")) {
@@ -550,6 +560,7 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 		}
 	}
 	for _, control := range []struct{ Path, Diagnostic string }{
+		{".github/workflows/scripts/require-policy-rg.sh", "executable hash mismatch"},
 		{".github/workflows/scripts/test-public-workflow-policy.sh", "executable hash mismatch"},
 		{".github/workflows/ci.yml", "no trust group matches workflow"},
 	} {
