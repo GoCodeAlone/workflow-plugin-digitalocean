@@ -1,91 +1,362 @@
 name: CI
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches: [prep/policytool-bootstrap-proof-20261010]
 defaults:
   run:
     shell: bash
-env:
-  WFCTL_VALIDATE_VERSION: v0.51.2
-  WFCTL_CONFORMANCE_VERSION: v0.85.4
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     env:
       SAFE_JOB_MODE: strict
+      GOENV: "off"
+      GOTOOLCHAIN: local
+      PROVIDER_BOOTSTRAP_PREPARATION_SHA: 33e78ead93935d227a3ab816a275cf0fd28a248a
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: 33e78ead93935d227a3ab816a275cf0fd28a248a
+          persist-credentials: false
+          fetch-depth: 64
+      - name: Require working policy search tool
+        run: |
+          set -euo pipefail
+          if ! test -x /usr/bin/rg; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          test "$(env -i PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin /bin/bash -c 'command -v rg')" = /usr/bin/rg
+          /usr/bin/rg --version
+          printf 'secrets.TEST\n' | /usr/bin/rg -q -P 'secrets\.(?!GITHUB_TOKEN\b)'
+      - name: Retrieve authenticated supplier SDK data
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I - <<'PYSDK'
+          import hashlib, json, os, pathlib, stat, subprocess, sys
+          if sys.flags.optimize != 0 or sys.flags.isolated != 1:
+              raise RuntimeError("isolated unoptimized Python is mandatory")
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          assert root.is_absolute() and root.resolve() == root
+          archive = root / "provider-bootstrap-go1272-supplier.tar.gz"
+          fd = os.open(archive, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+          with os.fdopen(fd, "r+b") as owned:
+              os.fchmod(owned.fileno(), 0o600)
+              before = os.fstat(owned.fileno())
+              assert stat.S_ISREG(before.st_mode) and stat.S_IMODE(before.st_mode) == 0o600 and before.st_size == 0
+              subprocess.run(["/usr/bin/curl", "--disable", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "15", "--max-time", "120", "--max-filesize", "71657186", "https://github.com/actions/go-versions/releases/download/1.27.2-37875086547/go-1.27.2-linux-x64.tar.gz"], env={"PATH": "/usr/bin:/bin", "HOME": "/home/runner", "LANG": "C.UTF-8"}, stdout=owned, check=True, timeout=135)
+              owned.flush()
+              os.fsync(owned.fileno())
+              after = os.fstat(owned.fileno())
+              current = archive.lstat()
+              assert stat.S_ISREG(current.st_mode) and stat.S_IMODE(current.st_mode) == 0o600
+              assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino) == (current.st_dev, current.st_ino)
+              assert after.st_size == current.st_size == 71657186
+              owned.seek(0)
+              data = owned.read(71657187)
+              assert len(data) == 71657186 and hashlib.sha256(data).hexdigest() == "d5ea5f4ae405daa1d37ab1d54706f25aee826f8ccc9ce06e7d89aeb4ea308051"
+              final = os.fstat(owned.fileno())
+              assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
+          closed = archive.lstat()
+          assert stat.S_ISREG(closed.st_mode) and stat.S_IMODE(closed.st_mode) == 0o600
+          assert (closed.st_dev, closed.st_ino, closed.st_size) == (final.st_dev, final.st_ino, final.st_size)
+          print(json.dumps({"supplier_archive_sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "exclusive_owned_fd": "PASS"}, sort_keys=True))
+          PYSDK
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: "1.27.2"
-      - run: GOWORK=off go test -race ./...
-      - run: GOWORK=off go vet ./...
-      - name: Enforce credential-free public workflows and exact check contract
+      - name: Authenticate installed SDK before compiling root tests
         run: |
-          ./.github/workflows/scripts/check-public-workflow-policy.sh
-          ./.github/workflows/scripts/test-public-workflow-policy.sh
-
-  wfctl-strict-contracts:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Fail fast if plugin.json is missing
-        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
-      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
-        with:
-          version: ${{ env.WFCTL_VALIDATE_VERSION }}
-      - name: Validate strict plugin contracts
+          set -euo pipefail
+          /usr/bin/python3 -I - <<'PY'
+          import gzip, hashlib, io, json, os, pathlib, posixpath, stat, subprocess, sys, tarfile
+          if sys.flags.optimize != 0 or sys.flags.isolated != 1:
+              raise RuntimeError("isolated unoptimized Python is mandatory")
+          archive = pathlib.Path(os.environ["RUNNER_TEMP"]) / "provider-bootstrap-go1272-supplier.tar.gz"
+          root = pathlib.Path("/opt/hostedtoolcache/go/1.27.2/x64")
+          expected_sha = "d5ea5f4ae405daa1d37ab1d54706f25aee826f8ccc9ce06e7d89aeb4ea308051"
+          assert root.resolve() == root and archive.resolve() == archive
+          assert os.environ["GITHUB_EVENT_NAME"] == "push"
+          assert os.environ["GITHUB_REF"] == "refs/heads/prep/policytool-bootstrap-proof-20261010"
+          assert os.environ["GITHUB_WORKFLOW_SHA"] != os.environ["PROVIDER_BOOTSTRAP_PREPARATION_SHA"]
+          assert subprocess.check_output(["/usr/bin/git", "rev-parse", "HEAD"], text=True).strip() == os.environ["PROVIDER_BOOTSTRAP_PREPARATION_SHA"]
+          def digest_file(path, limit):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and before.st_size <= limit
+              with path.open("rb") as f:
+                  opened = os.fstat(f.fileno())
+                  assert (before.st_dev, before.st_ino) == (opened.st_dev, opened.st_ino)
+                  h = hashlib.sha256()
+                  size = 0
+                  while True:
+                      chunk = f.read(1024 * 1024)
+                      if not chunk:
+                          break
+                      size += len(chunk)
+                      assert size <= limit
+                      h.update(chunk)
+                  after = os.fstat(f.fileno())
+                  assert (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                  return size, h.hexdigest()
+          before = archive.lstat()
+          assert stat.S_ISREG(before.st_mode) and before.st_size == 71657186
+          with archive.open("rb") as source:
+              opened = os.fstat(source.fileno())
+              assert (before.st_dev, before.st_ino) == (opened.st_dev, opened.st_ino)
+              archive_data = source.read(71657187)
+              after = os.fstat(source.fileno())
+              assert (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+          assert len(archive_data) == 71657186 and hashlib.sha256(archive_data).hexdigest() == expected_sha
+          class Bounded:
+              def __init__(self, reader):
+                  self.reader, self.total = reader, 0
+              def read(self, size):
+                  data = self.reader.read(min(size, 1024 * 1024 * 1024 + 1 - self.total))
+                  self.total += len(data)
+                  assert self.total <= 1024 * 1024 * 1024
+                  return data
+          expected, seen = {}, set()
+          with gzip.GzipFile(fileobj=io.BytesIO(archive_data)) as gz:
+              bounded = Bounded(gz)
+              with tarfile.open(fileobj=bounded, mode="r|") as tf:
+                  for count, member in enumerate(tf):
+                      assert count < 50000
+                      name = member.name.removeprefix("./")
+                      if member.isdir():
+                          name = name.removesuffix("/")
+                      if member.isdir() and member.name in (".", "./"):
+                          name = "."
+                      else:
+                          assert name not in ("", ".", "..") and not name.startswith("/") and "\\" not in name
+                          assert posixpath.normpath(name) == name and ".." not in name.split("/") and ".git" not in name.split("/")
+                          assert all(ord(c) >= 32 and ord(c) != 127 for c in name)
+                      assert name not in seen and not member.linkname
+                      seen.add(name)
+                      assert member.isdir() or member.isreg()
+                      assert 0 <= member.size <= 64 * 1024 * 1024
+                      if member.isdir():
+                          assert member.size == 0
+                          continue
+                      h = hashlib.sha256()
+                      size = 0
+                      source = tf.extractfile(member)
+                      assert source is not None
+                      while True:
+                          chunk = source.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          size += len(chunk)
+                          assert size <= 64 * 1024 * 1024
+                          h.update(chunk)
+                      assert size == member.size
+                      expected[name] = (size, h.hexdigest())
+              while bounded.read(1024 * 1024):
+                  pass
+          assert {"bin/go", "VERSION", "src/runtime/runtime2.go", "pkg/tool/linux_amd64/compile"} <= expected.keys()
+          actual = set()
+          for path in root.rglob("*"):
+              info = path.lstat()
+              assert not stat.S_ISLNK(info.st_mode)
+              if stat.S_ISDIR(info.st_mode):
+                  continue
+              assert stat.S_ISREG(info.st_mode) and path.resolve() == path
+              name = path.relative_to(root).as_posix()
+              assert name in expected and digest_file(path, expected[name][0]) == expected[name]
+              actual.add(name)
+          assert actual == expected.keys()
+          normalized = [{"path": name, "sha256": expected[name][1], "bytes": expected[name][0]} for name in sorted(expected)]
+          inventory_sha = hashlib.sha256(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+          components = {name: expected[name][1] for name in ("VERSION", "bin/go", "pkg/tool/linux_amd64/compile", "pkg/tool/linux_amd64/link", "pkg/tool/linux_amd64/asm")}
+          print(json.dumps({"sdk_inventory_sha256": inventory_sha, "critical_component_shas": components, "schema": "provider-bootstrap-pre-go-sdk-authentication/v1", "candidate": os.environ["PROVIDER_BOOTSTRAP_PREPARATION_SHA"], "workflow": os.environ["GITHUB_WORKFLOW_SHA"], "sdk_archive_sha256": expected_sha, "sdk_files": len(actual), "installed_sdk_comparison": "PASS"}, sort_keys=True))
+          PY
+      - name: Full root race suite under authenticated compiler
         run: |
-          # Validate as checked in.
-          wfctl plugin validate --file plugin.json --strict-contracts
-          # Also validate after simulating the GoReleaser before-hook rewrites
-          # (mirrors .goreleaser.yaml before.hooks) so a bad template change
-          # is caught before release.
-          # NOTE: wfctl plugin validate --strict-contracts looks for
-          # plugin.contracts.json co-located with plugin.json (same dir).
-          # Use a temp DIR (not just a temp file) and copy BOTH so the
-          # rewrite-validation finds the contract descriptor.
-          tmp_dir=$(mktemp -d)
-          cp plugin.json "$tmp_dir/"
-          cp plugin.contracts.json "$tmp_dir/"
-          sed -i.bak 's/"version": ".*"/"version": "0.0.0-ci-rewrite-test"/' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
-          sed -i.bak 's|/releases/download/v[^/]*/|/releases/download/v0.0.0-ci-rewrite-test/|g' "$tmp_dir/plugin.json" && rm -f "$tmp_dir/plugin.json.bak"
-          wfctl plugin validate --file "$tmp_dir/plugin.json" --strict-contracts
-          rm -rf "$tmp_dir"
-
-  wfctl-conformance:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Fail fast if plugin.json is missing
-        run: test -f plugin.json || (echo "::error::plugin.json not found" && exit 1)
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.27.2"
-      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
-        with:
-          version: ${{ env.WFCTL_CONFORMANCE_VERSION }}
-      - name: Run typed IaC conformance
+          set -euo pipefail
+          env -i \
+            PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin \
+            HOME=/home/runner \
+            LANG=C.UTF-8 \
+            GOROOT=/opt/hostedtoolcache/go/1.27.2/x64 \
+            GOENV=off \
+            GOWORK=off \
+            GOTOOLCHAIN=local \
+            GOFLAGS=-mod=readonly \
+            CGO_ENABLED=1 \
+            GOOS=linux \
+            GOARCH=amd64 \
+            GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org \
+            GOPATH=/home/runner/go \
+            GOCACHE=/home/runner/.cache/go-build \
+            GOMODCACHE=/home/runner/go/pkg/mod \
+            GIT_CONFIG_GLOBAL=/dev/null \
+            GIT_CONFIG_NOSYSTEM=1 \
+            GIT_NO_REPLACE_OBJECTS=1 \
+            GIT_TERMINAL_PROMPT=0 \
+            GIT_ASKPASS=/bin/false \
+            CI=true \
+            GITHUB_ACTIONS="${GITHUB_ACTIONS}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME}" \
+            GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            GITHUB_REF="${GITHUB_REF}" \
+            GITHUB_SHA="${GITHUB_SHA}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            GITHUB_STEP_SUMMARY="${GITHUB_STEP_SUMMARY}" \
+            RUNNER_TEMP="${RUNNER_TEMP}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
+            PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
+            /opt/hostedtoolcache/go/1.27.2/x64/bin/go test -race ./...
+      - name: Full root vet under authenticated compiler
         run: |
-          wfctl \
-            plugin conformance \
-            --mode typed-iac \
-            --build-package ./cmd/plugin \
-            --engine-version "${WFCTL_CONFORMANCE_VERSION}" \
-            --format json \
-            --output conformance-evidence.json \
-            .
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
+          set -euo pipefail
+          env -i \
+            PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin \
+            HOME=/home/runner \
+            LANG=C.UTF-8 \
+            GOROOT=/opt/hostedtoolcache/go/1.27.2/x64 \
+            GOENV=off \
+            GOWORK=off \
+            GOTOOLCHAIN=local \
+            GOFLAGS=-mod=readonly \
+            CGO_ENABLED=1 \
+            GOOS=linux \
+            GOARCH=amd64 \
+            GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org \
+            GOPATH=/home/runner/go \
+            GOCACHE=/home/runner/.cache/go-build \
+            GOMODCACHE=/home/runner/go/pkg/mod \
+            GIT_CONFIG_GLOBAL=/dev/null \
+            GIT_CONFIG_NOSYSTEM=1 \
+            GIT_NO_REPLACE_OBJECTS=1 \
+            GIT_TERMINAL_PROMPT=0 \
+            GIT_ASKPASS=/bin/false \
+            CI=true \
+            GITHUB_ACTIONS="${GITHUB_ACTIONS}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME}" \
+            GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            GITHUB_REF="${GITHUB_REF}" \
+            GITHUB_SHA="${GITHUB_SHA}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            GITHUB_STEP_SUMMARY="${GITHUB_STEP_SUMMARY}" \
+            RUNNER_TEMP="${RUNNER_TEMP}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
+            PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
+            /opt/hostedtoolcache/go/1.27.2/x64/bin/go vet ./...
+      - name: Enforce complete public policy fixtures with available rg
+        run: |
+          set -euo pipefail
+          test "$(env -i PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin /bin/bash -c 'command -v rg')" = /usr/bin/rg
+          printf 'secrets.TEST\n' | /usr/bin/rg -q -P 'secrets\.(?!GITHUB_TOKEN\b)'
+          env -i \
+            PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin \
+            HOME=/home/runner \
+            LANG=C.UTF-8 \
+            GOROOT=/opt/hostedtoolcache/go/1.27.2/x64 \
+            GOENV=off \
+            GOWORK=off \
+            GOTOOLCHAIN=local \
+            GOFLAGS=-mod=readonly \
+            CGO_ENABLED=1 \
+            GOOS=linux \
+            GOARCH=amd64 \
+            GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org \
+            GOPATH=/home/runner/go \
+            GOCACHE=/home/runner/.cache/go-build \
+            GOMODCACHE=/home/runner/go/pkg/mod \
+            GIT_CONFIG_GLOBAL=/dev/null \
+            GIT_CONFIG_NOSYSTEM=1 \
+            GIT_NO_REPLACE_OBJECTS=1 \
+            GIT_TERMINAL_PROMPT=0 \
+            GIT_ASKPASS=/bin/false \
+            CI=true \
+            GITHUB_ACTIONS="${GITHUB_ACTIONS}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME}" \
+            GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            GITHUB_REF="${GITHUB_REF}" \
+            GITHUB_SHA="${GITHUB_SHA}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            GITHUB_STEP_SUMMARY="${GITHUB_STEP_SUMMARY}" \
+            RUNNER_TEMP="${RUNNER_TEMP}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
+            PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
+            /bin/bash ./.github/workflows/scripts/check-public-workflow-policy.sh
+          env -i \
+            PATH=/opt/hostedtoolcache/go/1.27.2/x64/bin:/usr/bin:/bin \
+            HOME=/home/runner \
+            LANG=C.UTF-8 \
+            GOROOT=/opt/hostedtoolcache/go/1.27.2/x64 \
+            GOENV=off \
+            GOWORK=off \
+            GOTOOLCHAIN=local \
+            GOFLAGS=-mod=readonly \
+            CGO_ENABLED=1 \
+            GOOS=linux \
+            GOARCH=amd64 \
+            GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org \
+            GOPATH=/home/runner/go \
+            GOCACHE=/home/runner/.cache/go-build \
+            GOMODCACHE=/home/runner/go/pkg/mod \
+            GIT_CONFIG_GLOBAL=/dev/null \
+            GIT_CONFIG_NOSYSTEM=1 \
+            GIT_NO_REPLACE_OBJECTS=1 \
+            GIT_TERMINAL_PROMPT=0 \
+            GIT_ASKPASS=/bin/false \
+            CI=true \
+            GITHUB_ACTIONS="${GITHUB_ACTIONS}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME}" \
+            GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            GITHUB_REF="${GITHUB_REF}" \
+            GITHUB_SHA="${GITHUB_SHA}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            GITHUB_STEP_SUMMARY="${GITHUB_STEP_SUMMARY}" \
+            RUNNER_TEMP="${RUNNER_TEMP}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
+            PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
+            /bin/bash ./.github/workflows/scripts/test-public-workflow-policy.sh
+      - name: Emit complete actual bootstrap receipt
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
+          test -f "$receipt"
+          test "$(stat -c %a "$receipt")" = 600
+          test "$(stat -c %s "$receipt")" -le 262145
+          sha256sum "$receipt"
+          cat "$receipt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: workflow-plugin-digitalocean-conformance
-          path: conformance-evidence.json
+          name: provider-accepted-policy-bootstrap-receipt
+          path: ${{ runner.temp }}/provider-policy-bootstrap-receipt.json
           if-no-files-found: error
+          retention-days: 14
