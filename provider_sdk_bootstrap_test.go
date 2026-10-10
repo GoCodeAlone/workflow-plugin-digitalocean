@@ -163,11 +163,9 @@ func bootstrapSDKTarInventory(data []byte) ([]bootstrapSDKFile, error) {
 		if err != nil || n != header.Size {
 			return nil, errors.New("truncated supplier SDK component")
 		}
-		// The supplier copies this flat archive to the toolcache then removes
-		// setup.sh. It is authenticated data here, never an invoked installer.
-		if name != "setup.sh" {
-			inventory = append(inventory, bootstrapSDKFile{Path: name, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), Bytes: n})
-		}
+		// Pinned setup-go caches the complete flat archive, including inert
+		// setup.sh metadata. Authenticate every file; never invoke installers.
+		inventory = append(inventory, bootstrapSDKFile{Path: name, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), Bytes: n})
 	}
 	if _, err := io.Copy(io.Discard, limited); err != nil || limited.N <= 0 {
 		return nil, errors.New("supplier SDK decompression bound or checksum failure")
