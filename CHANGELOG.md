@@ -63,6 +63,9 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ### Fixed
 
+- Retire the PR201-only policy bootstrap after its accepted cutover. Normal CI
+  now binds the real accepted main base to the candidate and builds only that
+  base's checker, retaining complete SDK/source receipts and hostile controls.
 - **App Platform active image provenance** — deployment image refs now come
   from the identified `ACTIVE` deployment's embedded spec, with an explicit
   `active_deployment.spec` source marker. Missing active specs and unsupported
