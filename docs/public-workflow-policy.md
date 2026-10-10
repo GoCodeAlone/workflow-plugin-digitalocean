@@ -82,11 +82,26 @@ Zero, adjacent, unknown, or later missing-policy bases fail closed. If `main`
 moves before bootstrap merges, rebase and update this exact SHA through review;
 never replace it with a generic missing-policy skip. After bootstrap,
 subsequent `.github/workflows` changes use trusted prior-revision policy.
+
 Because that exact base has no public policy workflow or trust manifests, the
 initial bootstrap pull request finalizes all active trust atomically. The
 required status check is installed immediately after the bootstrap merge; it
 is necessarily absent during bootstrap because no base workflow produces it.
 This exception does not apply to any later workflow-authority change.
+
+The separate Go1.27.2 normal-CI bootstrap admitted only PR201 and the first
+adoption push. Its reviewed retirement anchors the full accepted cutover
+`d85f44c7573d66ae64ec003a94158480b24ac4df`, then binds each actual main/PR event
+to its real prior accepted base and exact candidate. PR203 binds that exact
+cutover; later event bases must contain it. PR synthetic merge parents and
+candidate/checkout trees are checked independently. Only the full actual
+accepted-base checker and maps scan the inert candidate; no candidate-map or
+finite proposal override is used. Missing policy, ambiguous/shallow ancestry,
+wrong event identities and tampered source/SDK fail closed. The complete v3
+receipt retains the floor and actual authority inventories separately, all
+hostile controls, and the unchanged CI export path. Canonical `policy` and the
+required normal `test` remain separate acceptance checks; retirement does not
+waive either check or grant merge/release authority.
 
 The same stable `policy` check also runs on pushes to
 `main`, comparing `github.event.before` as trusted policy authority with the new

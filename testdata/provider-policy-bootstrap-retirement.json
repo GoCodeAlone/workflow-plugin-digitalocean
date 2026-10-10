@@ -1,0 +1,16 @@
+{
+  "acceptedFloor": "d85f44c7573d66ae64ec003a94158480b24ac4df",
+  "acceptedFloorFiles": 257,
+  "acceptedFloorInventorySHA256": "28a832e8cc090a16c1895b75529460f6051efbbe1c5f8c3250dbc21d1f81f5bc",
+  "acceptedFloorTree": "99b885d3d5e0eb34c9a59e99810760550140d28a",
+  "historicalBootstrapBase": "0f72e69febaf02e512abb075c3547f5b2eeac5ad",
+  "receiptSchema": "provider-actual-accepted-policy/v3",
+  "repository": "GoCodeAlone/workflow-plugin-digitalocean",
+  "retirementHeadRef": "fix/policytool-go1272-promote-20261009",
+  "retirementPullRequest": 203,
+  "schema": "provider-policy-bootstrap-retirement/v1",
+  "transition": "PR203 must bind exact acceptedFloor to its actual event candidate and ordered synthetic merge parents. After acceptance, real main/PR event bases must contain acceptedFloor. Only the full actual accepted-base checker and maps are executable authority; candidate source and manifests remain inert scanner data.",
+  "workflowContextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+  "workflowPath": ".github/workflows/ci.yml",
+  "workflowSHA256": "58a01a556fa391928e3bc8a56d517df770fae9479789bcd0758f0834421e8cc4"
+}

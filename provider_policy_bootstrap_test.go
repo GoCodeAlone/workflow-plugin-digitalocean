@@ -138,13 +138,18 @@ type bootstrapEvent struct {
 	} `json:"repository"`
 	PullRequest struct {
 		Head struct {
+			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
 			Repo struct {
 				FullName string `json:"full_name"`
 			} `json:"repo"`
 		} `json:"head"`
 		Base struct {
-			SHA string `json:"sha"`
+			Ref  string `json:"ref"`
+			SHA  string `json:"sha"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"base"`
 	} `json:"pull_request"`
 }
@@ -421,7 +426,7 @@ func verifyBootstrapCandidateTree(checkoutTree, candidateTree string) error {
 
 func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	if os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("GITHUB_REPOSITORY") != bootstrapRepo || runtime.Version() != "go1.27.2" || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Fatal("finite bootstrap requires the admitted hosted Go1.27.2 producer; no local or generic event fallback")
+		t.Fatal("accepted-policy proof requires the admitted hosted Go1.27.2 producer; no local or missing-policy fallback")
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -445,10 +450,11 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	if err := json.Unmarshal(eventData, &event); err != nil {
 		t.Fatal("invalid actual GitHub event metadata")
 	}
-	binding, err := bindBootstrapEvent(os.Getenv("GITHUB_EVENT_NAME"), os.Getenv("GITHUB_WORKFLOW_REF"), os.Getenv("GITHUB_WORKFLOW_SHA"), checkout, os.Getenv("PROVIDER_BOOTSTRAP_PREPARATION_SHA"), event)
+	binding, err := bindAcceptedPolicyEvent(os.Getenv("GITHUB_EVENT_NAME"), os.Getenv("GITHUB_WORKFLOW_REF"), os.Getenv("GITHUB_WORKFLOW_SHA"), checkout, os.Getenv("GITHUB_SHA"), os.Getenv("PROVIDER_BOOTSTRAP_PREPARATION_SHA"), event)
 	if err != nil {
 		t.Fatal(err)
 	}
+	retirement := acceptedPolicyRetirementProposal(t)
 	sdkArchive := bootstrapSDKArchive(t)
 	sdkInventory, err := bootstrapSupplierSDK(sdkArchive)
 	if err != nil {
@@ -458,25 +464,47 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestData, err := bootstrapRegularFile("testdata/provider-policy-bootstrap-accepted-0f72.json", 128*1024)
-	if err != nil || bootstrapHash(manifestData) != bootstrapInventorySHA {
-		t.Fatal("accepted inventory source digest mismatch")
+	manifestData, err := bootstrapRegularFile("testdata/provider-policy-accepted-d85f.json", 128*1024)
+	if err != nil || bootstrapHash(manifestData) != acceptedPolicyFloorInventorySHA {
+		t.Fatal("accepted floor inventory source digest mismatch")
 	}
 	var frozen bootstrapInventory
 	decoder := json.NewDecoder(bytes.NewReader(manifestData))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&frozen) != nil || frozen.Commit != bootstrapBase || frozen.Tree != bootstrapBaseTree || len(frozen.Files) != 217 {
-		t.Fatal("accepted inventory is not the reviewed exact base")
+	if decoder.Decode(&frozen) != nil || decoder.Decode(new(any)) != io.EOF || frozen.Commit != acceptedPolicyFloor || frozen.Tree != acceptedPolicyFloorTree || len(frozen.Files) != 257 {
+		t.Fatal("accepted floor inventory is not the reviewed exact cutover")
 	}
-	bootstrapGit(t, root, env, "fetch", "--quiet", "--no-tags", "--depth=64", "https://github.com/"+bootstrapRepo+".git", bootstrapBase, binding.Candidate)
-	if _, err := providerProofCommand(t, root, env, "/usr/bin/git", "merge-base", "--is-ancestor", bootstrapBase, binding.Candidate); err != nil {
-		t.Fatal("candidate does not contain the actual accepted stage")
+	bootstrapGit(t, root, env, "fetch", "--quiet", "--no-tags", "--depth=64", "https://github.com/"+bootstrapRepo+".git", acceptedPolicyFloor, binding.Base, binding.Candidate, bootstrapBase, "075c2c291a1f933692d9949650fc41d20c0a63f9")
+	for _, relation := range [][2]string{{acceptedPolicyFloor, binding.Base}, {binding.Base, binding.Candidate}} {
+		if _, err := providerProofCommand(t, root, env, "/usr/bin/git", "merge-base", "--is-ancestor", relation[0], relation[1]); err != nil {
+			t.Fatal("actual accepted authority/candidate does not contain the reviewed floor; missing or shallow history is not proof")
+		}
+	}
+	// Traversal output hides parents at a shallow checkout boundary. Read the
+	// exact immutable object headers instead; ancestry is checked separately.
+	checkoutCommitTree, checkoutParents, err := acceptedPolicyCommitHeaders(bootstrapGit(t, root, env, "cat-file", "commit", checkout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyAcceptedPolicyParents(binding, checkoutParents); err != nil {
+		t.Fatal(err)
 	}
 	tmp := t.TempDir()
-	trusted, candidate := filepath.Join(tmp, "trusted"), filepath.Join(tmp, "candidate")
-	accepted := materializeBootstrapTree(t, root, bootstrapBase, trusted, env, &frozen)
+	floor, candidate := filepath.Join(tmp, "floor"), filepath.Join(tmp, "candidate")
+	acceptedFloor := materializeBootstrapTree(t, root, acceptedPolicyFloor, floor, env, &frozen)
+	if err := verifyBootstrapAuthority(floor, acceptedFloor); err != nil {
+		t.Fatal(err)
+	}
+	trusted, accepted := floor, acceptedFloor
+	if binding.Base != acceptedPolicyFloor {
+		trusted = filepath.Join(tmp, "trusted")
+		accepted = materializeBootstrapTree(t, root, binding.Base, trusted, env, nil)
+	}
 	scanned := materializeBootstrapTree(t, root, binding.Candidate, candidate, env, nil)
 	checkoutTree := strings.TrimSpace(string(bootstrapGit(t, root, env, "rev-parse", "HEAD^{tree}")))
+	if checkoutCommitTree != checkoutTree {
+		t.Fatal("immutable checkout commit header tree differs from the actual checkout tree")
+	}
 	if err := verifyBootstrapCandidateTree(checkoutTree, scanned.Tree); err != nil {
 		t.Fatal(err)
 	}
@@ -516,14 +544,10 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkerSHA := bootstrapHash(checkerBytes)
-	proposalArgs, proposal := bootstrapReceiptPolicyProposal(t, trusted, candidate, filepath.Join(tmp, "receipt-context-proposal"))
 	var outcomes []string
-	scanAt := func(label, authorityRoot, scanRoot, diagnostic string, amendment bool) {
+	scanAt := func(label, authorityRoot, scanRoot, diagnostic string) {
 		t.Helper()
 		args := []string{"--repo", authorityRoot, "--scan-root", scanRoot}
-		if amendment {
-			args = append(args, proposalArgs...)
-		}
 		output, err := providerProofCommand(t, trusted, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}, binary, args...)
 		if diagnostic == "" {
 			if err != nil || !strings.Contains(string(output), "public workflow policy passed") {
@@ -537,12 +561,16 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 		}
 		outcomes = append(outcomes, label+":PASS")
 	}
-	scan := func(label, scanRoot, diagnostic string) { scanAt(label, trusted, scanRoot, diagnostic, true) }
-	scanAt("reject-exporter-with-unamended-accepted-authority", trusted, candidate, "no trust group matches workflow", false)
+	scan := func(label, scanRoot, diagnostic string) { scanAt(label, trusted, scanRoot, diagnostic) }
+	// Retain the real pre-cutover rejection as historical data. Accepted A
+	// legitimately admits this workflow; no candidate maps override its policy.
+	preCutover := filepath.Join(tmp, "pre-cutover")
+	materializeBootstrapTree(t, root, bootstrapBase, preCutover, env, nil)
+	scanAt("reject-exporter-with-historical-unamended-0f72-authority", preCutover, candidate, "no trust group matches workflow")
 	scan("complete-actual-candidate", candidate, "")
 	unprepared := filepath.Join(tmp, "unprepared")
 	materializeBootstrapTree(t, root, "075c2c291a1f933692d9949650fc41d20c0a63f9", unprepared, env, nil)
-	scanAt("reject-actual-unprepared-predecessor", unprepared, candidate, "no trust group matches workflow", false)
+	scanAt("reject-actual-unprepared-predecessor", unprepared, candidate, "no trust group matches workflow")
 	// Candidate source/modules/maps are data, never executable authority.
 	for _, poison := range []struct{ Path, Content string }{
 		{".github/workflows/policytool/main.go", "package main\nfunc main() { panic(\"candidate executed\") }\n"},
@@ -621,6 +649,9 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	if err := verifyBootstrapAuthority(trusted, accepted); err != nil {
 		t.Fatal(err)
 	}
+	if err := verifyBootstrapAuthority(floor, acceptedFloor); err != nil {
+		t.Fatal("reviewed accepted floor changed during the actual proof")
+	}
 	if err := verifyBootstrapAuthority(candidate, scanned); err != nil {
 		t.Fatal("owned controls did not restore the full actual candidate")
 	}
@@ -634,14 +665,15 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	}
 	sdkInventoryJSON, _ := json.Marshal(sdkInventory)
 	bootstrapReceipt(t, map[string]any{
-		"Schema": "provider-actual-accepted-policy-bootstrap/v2", "Binding": binding,
+		"Schema": "provider-actual-accepted-policy/v3", "Binding": binding,
 		"WorkflowRef": os.Getenv("GITHUB_WORKFLOW_REF"), "RunID": os.Getenv("GITHUB_RUN_ID"), "RunAttempt": os.Getenv("GITHUB_RUN_ATTEMPT"),
-		"AcceptedCommit": bootstrapBase, "AcceptedTree": accepted.Tree, "AcceptedInventorySHA256": bootstrapInventorySHA,
-		"Candidate": scanned, "CheckoutTree": checkoutTree, "SDKRoot": sdk, "SDKComponentsSHA256": sdkPins,
+		"AcceptedFloor": acceptedFloor, "AcceptedFloorInventorySHA256": acceptedPolicyFloorInventorySHA,
+		"AcceptedCommit": binding.Base, "AcceptedTree": accepted.Tree, "Accepted": accepted,
+		"Candidate": scanned, "CheckoutTree": checkoutTree, "CheckoutParents": checkoutParents, "SDKRoot": sdk, "SDKComponentsSHA256": sdkPins,
 		"SDKArchiveURL": bootstrapSDKURL, "SDKArchiveSHA256": bootstrapSDKArchiveSHA, "SDKArchiveBytes": len(sdkArchive), "SDKInventorySHA256": bootstrapHash(sdkInventoryJSON), "SDKFiles": len(sdkInventory),
 		"Compiler": built.GoVersion, "CompilerEnvironment": metadata, "CheckerSHA256": checkerSHA, "CheckerModules": modules,
-		"PolicyAuthorityProposal": proposal, "PolicyAuthorityProposalSHA256": bootstrapReceiptAmendmentSHA,
-		"Outcomes": outcomes, "Admission": "Supporting real candidate and finite proposed context-amendment proof only. Accepted0f72 authority is unchanged and genuinely rejects the exporter. Exact owner admission of the separate proposal, source/SDK provenance and cutover permission are required. Historical Go1264 declarations and GO-2026-5932 remain visible.",
+		"RetirementTransition": retirement, "RetirementTransitionSHA256": acceptedPolicyRetirementSHA,
+		"Outcomes": outcomes, "Admission": "Actual accepted-base checker and maps only; no candidate map or finite proposal override. Complete floorA, event-selected accepted base and exact candidate/checkout histories are separately bound. Initial root execution retains hosted setup-go/TLS trust; subsequent compiler/checker bytes are authenticated against the approved supplier SDK. Source/normal CI and canonical proof are separate acceptance gates; receipt alone is not merge or release authority. Historical Go1264 declarations and GO-2026-5932 remain visible.",
 	}, map[string]any{"Binding": binding, "CandidateTree": scanned.Tree, "SDKArchiveSHA256": bootstrapSDKArchiveSHA, "SDKInventorySHA256": bootstrapHash(sdkInventoryJSON), "CheckerSHA256": checkerSHA, "Outcomes": outcomes})
 }
 

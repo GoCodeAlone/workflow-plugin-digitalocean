@@ -11,8 +11,8 @@ import (
 	"testing"
 )
 
-// Exact CI, trust and executable inventory for the reviewed finite Go 1.27.2 receipt-export proposal.
-const recoveryTrustedInventorySHA256 = "048b4c93a8c33b5a7783aedfa4123f28abde37559ce4c5613a410bb016605906"
+// Exact CI, trust and executable inventory after reviewed Go 1.27.2 trust promotion.
+const recoveryTrustedInventorySHA256 = "014c2d07e84a730e0dc6a381f363f0e658b96b3144d5553389ad5d587978ab0f"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string
