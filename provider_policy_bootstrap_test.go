@@ -480,7 +480,12 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 			t.Fatal("actual accepted authority/candidate does not contain the reviewed floor; missing or shallow history is not proof")
 		}
 	}
-	checkoutParents := strings.Fields(string(bootstrapGit(t, root, env, "show", "-s", "--format=%P", checkout)))
+	// Traversal output hides parents at a shallow checkout boundary. Read the
+	// exact immutable object headers instead; ancestry is checked separately.
+	checkoutCommitTree, checkoutParents, err := acceptedPolicyCommitHeaders(bootstrapGit(t, root, env, "cat-file", "commit", checkout))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := verifyAcceptedPolicyParents(binding, checkoutParents); err != nil {
 		t.Fatal(err)
 	}
@@ -497,6 +502,9 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	}
 	scanned := materializeBootstrapTree(t, root, binding.Candidate, candidate, env, nil)
 	checkoutTree := strings.TrimSpace(string(bootstrapGit(t, root, env, "rev-parse", "HEAD^{tree}")))
+	if checkoutCommitTree != checkoutTree {
+		t.Fatal("immutable checkout commit header tree differs from the actual checkout tree")
+	}
 	if err := verifyBootstrapCandidateTree(checkoutTree, scanned.Tree); err != nil {
 		t.Fatal(err)
 	}

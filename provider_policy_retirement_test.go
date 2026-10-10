@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,80 @@ func verifyAcceptedPolicyParents(binding bootstrapBinding, parents []string) err
 		return errors.New("actual main checkout does not have the event-selected prior authority as first parent")
 	}
 	return nil
+}
+
+func acceptedPolicyCommitHeaders(data []byte) (string, []string, error) {
+	end := bytes.Index(data, []byte("\n\n"))
+	if len(data) > 128*1024 || end < 0 {
+		return "", nil, errors.New("immutable checkout commit headers exceed the bound or are incomplete")
+	}
+	lines := strings.Split(string(data[:end]), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "tree ") || !acceptedPolicyCommit(strings.TrimPrefix(lines[0], "tree ")) {
+		return "", nil, errors.New("immutable checkout tree header is not exact")
+	}
+	tree := strings.TrimPrefix(lines[0], "tree ")
+	var parents []string
+	closed := false
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(line, "tree ") {
+			return "", nil, errors.New("immutable checkout has a duplicate tree header")
+		}
+		if strings.HasPrefix(line, "parent ") {
+			parent := strings.TrimPrefix(line, "parent ")
+			if closed || !acceptedPolicyCommit(parent) || len(parents) >= 64 {
+				return "", nil, errors.New("immutable checkout parent header is not exact and ordered")
+			}
+			parents = append(parents, parent)
+		} else {
+			closed = true
+		}
+	}
+	return tree, parents, nil
+}
+
+func TestAcceptedPolicyCommitHeadersAcrossRealShallowBoundary(t *testing.T) {
+	root := t.TempDir()
+	env := bootstrapChildEnv("/unused-sdk-no-Go-invocation")
+	bootstrapGit(t, root, env, "init", "--quiet")
+	emptyTree := filepath.Join(root, "empty-tree")
+	if err := os.WriteFile(emptyTree, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tree := strings.TrimSpace(string(bootstrapGit(t, root, env, "hash-object", "-w", "-t", "tree", emptyTree)))
+	commit := func(name string, parents ...string) string {
+		t.Helper()
+		var data strings.Builder
+		fmt.Fprintf(&data, "tree %s\n", tree)
+		for _, parent := range parents {
+			fmt.Fprintf(&data, "parent %s\n", parent)
+		}
+		data.WriteString("author Fixture <fixture@example.invalid> 1 +0000\ncommitter Fixture <fixture@example.invalid> 1 +0000\n\n" + name + "\n")
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(data.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(bootstrapGit(t, root, env, "hash-object", "-w", "-t", "commit", path)))
+	}
+	base := commit("base")
+	candidate := commit("candidate", base)
+	merge := commit("merge", base, candidate)
+	bootstrapGit(t, root, env, "update-ref", "HEAD", merge)
+	if err := os.WriteFile(filepath.Join(root, ".git", "shallow"), []byte(merge+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(bootstrapGit(t, root, env, "show", "-s", "--format=%P", merge))); got != "" {
+		t.Fatal("regression did not reproduce hidden traversal parents at the real shallow boundary")
+	}
+	actualTree, parents, err := acceptedPolicyCommitHeaders(bootstrapGit(t, root, env, "cat-file", "commit", merge))
+	binding := bootstrapBinding{Mode: "accepted-policy-pr", Base: base, Candidate: candidate, Checkout: merge, WorkflowSHA: merge, Merge: merge}
+	if err != nil || actualTree != tree || verifyAcceptedPolicyParents(binding, parents) != nil {
+		t.Fatal("immutable actual merge object did not retain its exact ordered parents across the shallow boundary")
+	}
+	for _, raw := range []string{"", "tree " + tree, "tree " + strings.Repeat("0", 40) + "\n\n", "tree " + tree + "\nparent invalid\n\n", "tree " + tree + "\nauthor fixture\nparent " + base + "\n\n", "tree " + tree + "\ntree " + tree + "\n\n"} {
+		if _, _, err := acceptedPolicyCommitHeaders([]byte(raw)); err == nil {
+			t.Fatal("malformed, duplicate or reordered immutable headers were admitted")
+		}
+	}
 }
 
 func TestAcceptedPolicyRetirementEventBindings(t *testing.T) {
