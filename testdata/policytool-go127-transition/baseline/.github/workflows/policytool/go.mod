@@ -1,6 +1,6 @@
 module github.com/GoCodeAlone/workflow-plugin-digitalocean/.github/workflows/policytool
 
-go 1.27.2
+go 1.26.4
 
 require (
 	gopkg.in/yaml.v3 v3.0.1

@@ -11,8 +11,8 @@ import (
 	"testing"
 )
 
-// Exact CI, trust and executable inventory with the reviewed future Go 1.27.2 context staged.
-const recoveryTrustedInventorySHA256 = "8a5d9135873ceb37d3c9fa45f206739256d3a3e09c685ca178ad6b528c34a07f"
+// Exact CI, trust and executable inventory for the reviewed finite Go 1.27.2 receipt-export proposal.
+const recoveryTrustedInventorySHA256 = "048b4c93a8c33b5a7783aedfa4123f28abde37559ce4c5613a410bb016605906"
 
 func recoveryTrustedInventory(root string) (string, int, error) {
 	var paths []string
@@ -53,7 +53,7 @@ func TestRecoveryCIAndTrustBytesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 46 || digest != recoveryTrustedInventorySHA256 {
+	if count != 47 || digest != recoveryTrustedInventorySHA256 {
 		t.Fatalf("CI/trust/script bytes differ from approved baseline: files=%d digest=%s", count, digest)
 	}
 }

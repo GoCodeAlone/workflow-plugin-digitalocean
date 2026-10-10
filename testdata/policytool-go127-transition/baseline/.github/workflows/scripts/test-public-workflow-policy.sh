@@ -3,22 +3,6 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
-# Tool errors inside conditionals must never count as clean negative searches.
-if ! command -v rg >/dev/null 2>&1 ||
-  ! printf 'secrets.TEST\n' | rg -q -P 'secrets\.(?!GITHUB_TOKEN\b)'; then
-  echo 'public workflow policy fixtures require working rg with PCRE2' >&2
-  exit 1
-fi
-if printf 'secrets.GITHUB_TOKEN\n' | rg -q -P 'secrets\.(?!GITHUB_TOKEN\b)'; then
-  rg_nonmatch_status=0
-else
-  rg_nonmatch_status=$?
-fi
-if [[ "${rg_nonmatch_status}" -ne 1 ]]; then
-  echo 'public workflow policy fixtures require working rg with PCRE2' >&2
-  exit 1
-fi
-
 repo_root="$(git rev-parse --show-toplevel)"
 checker_binary="${repo_root}/.github/workflows/scripts/check-public-workflow-policy.sh"
 fixtures="${repo_root}/.github/workflows/scripts/fixtures/public-workflow-policy"

@@ -1,0 +1,80 @@
+{
+  "base": "0f72e69febaf02e512abb075c3547f5b2eeac5ad",
+  "files": [
+    {
+      "additional": [],
+      "candidateSHA256": "a5b38841a5695379f88a3c27e6885bd5f3894df421e5875b0f61e89037adef82",
+      "changedRows": 1,
+      "path": ".github/public-workflow-presence-allowlist.json",
+      "sha256": "a5b38841a5695379f88a3c27e6885bd5f3894df421e5875b0f61e89037adef82"
+    },
+    {
+      "additional": [
+        {
+          "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+          "nodeSHA256": "558cd5abea492ec06d260cfe3bbd499e0a6b994bbf2d5377fdaa685f3fca5f8e",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        }
+      ],
+      "candidateSHA256": "82ba8e9e97902e7303833ff64fd01dba33150af8f9d2d16b8d08335e5115da81",
+      "changedRows": 5,
+      "path": ".github/public-workflow-action-allowlist.json",
+      "sha256": "82ba8e9e97902e7303833ff64fd01dba33150af8f9d2d16b8d08335e5115da81"
+    },
+    {
+      "additional": [
+        {
+          "command": "sha256sum",
+          "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "statementSHA256": "4f06eb1ddb17ddafb81b73107604ea4a5ea4b4d3d19d6f0e69bb717e0ab987da"
+        },
+        {
+          "command": "cat",
+          "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "statementSHA256": "e739d35965f92ee7d73a7ea8855c5947a8b61d88ad546726d7fc098a7fe75a40"
+        },
+        {
+          "command": "require-policy-rg.sh",
+          "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed real policy-fixture search dependency helper; no credentials or control writes.",
+          "state": "staged",
+          "statementSHA256": "442c424de88bbb38ed77925066ff227894ddc02632bf84a98b2c730105434da4"
+        }
+      ],
+      "candidateSHA256": "09a4e37005caf3d6287e4d5bbde304fa5c686cd98621b1341316f7c301d708d0",
+      "changedRows": 19,
+      "path": ".github/public-workflow-command-allowlist.json",
+      "sha256": "09a4e37005caf3d6287e4d5bbde304fa5c686cd98621b1341316f7c301d708d0"
+    },
+    {
+      "additional": [
+        {
+          "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+          "path": ".github/workflows/scripts/require-policy-rg.sh",
+          "rationale": "Exact reviewed hosted rg provisioning and actual fixture PATH/PCRE checks.",
+          "sha256": "614908108730d6a2f01f42f0e45df1b34b03fe4037fc3ece323152a355d04109",
+          "state": "staged",
+          "workflowPath": ".github/workflows/ci.yml"
+        }
+      ],
+      "candidateSHA256": "4d587be37f15bad92528a18c4ecd6e7e365a621f3ff631ac222f0b9d4cbad4da",
+      "changedRows": 2,
+      "path": ".github/public-workflow-executable-allowlist.json",
+      "sha256": "bb8f48ef2625b198ca8577e0b67df9201cde095fbcc3dd27792477f6533a28c7"
+    }
+  ],
+  "newContext": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+  "oldContext": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+  "schema": "provider-normal-receipt-context-amendment/v1",
+  "workflowSHA256": "58a01a556fa391928e3bc8a56d517df770fae9479789bcd0758f0834421e8cc4"
+}

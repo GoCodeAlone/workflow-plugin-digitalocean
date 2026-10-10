@@ -63,6 +63,10 @@ Eliminates the runtime-failure surface (sentinel-stub returning `ErrApplyV1Remov
 
 ### Fixed
 
+- **App Platform active image provenance** — deployment image refs now come
+  from the identified `ACTIVE` deployment's embedded spec, with an explicit
+  `active_deployment.spec` source marker. Missing active specs and unsupported
+  image identities are omitted instead of substituting the desired AppSpec.
 - **`CaptureLogs` live follow tolerates DO websocket EOF after streamed data** —
   DigitalOcean can close a live log websocket with close code 1006 after useful
   log chunks have already been delivered. The provider now treats that as a

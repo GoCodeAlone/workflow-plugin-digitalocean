@@ -859,7 +859,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "$assignment",
     "statementSHA256": "cce7b2dcf90f57e6c0debcae2ec8f47163c98bb92c8897577af9633e6091549b",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed $assignment statement and inherited execution context.",
     "state": "staged"
   },
@@ -867,7 +867,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "check-public-workflow-policy.sh",
     "statementSHA256": "059267b9a877a8957428b61e6450583c9962076265d2e5021c62503cbaaa80cd",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed check-public-workflow-policy.sh statement and inherited execution context.",
     "state": "staged"
   },
@@ -875,7 +875,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "cp",
     "statementSHA256": "0d014a1d348020afc447050504e37ef90fff840616f0bd14bbe55fa8691ff82c",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed cp statement and inherited execution context.",
     "state": "staged"
   },
@@ -883,7 +883,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "cp",
     "statementSHA256": "f24c02e0a37916516a87e3adb67605ee89a9829472e4b8c1ea728f5e6b30fc13",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed cp statement and inherited execution context.",
     "state": "staged"
   },
@@ -891,7 +891,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "echo",
     "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed echo statement and inherited execution context.",
     "state": "staged"
   },
@@ -899,7 +899,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "exit",
     "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed builtin statement and complete workflow context.",
     "state": "staged"
   },
@@ -907,7 +907,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "go",
     "statementSHA256": "4b2eb9bc1a70c92294c2a9f9ff2429166f819eec67e05a3db30b46dfc3ea08de",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed go statement and inherited execution context.",
     "state": "staged"
   },
@@ -915,7 +915,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "go",
     "statementSHA256": "f9f85ad974896d0638b921502dcc30e4a553f92830be8bdc9914a8959bf142ee",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed go statement and inherited execution context.",
     "state": "staged"
   },
@@ -923,7 +923,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "mktemp",
     "statementSHA256": "cce7b2dcf90f57e6c0debcae2ec8f47163c98bb92c8897577af9633e6091549b",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed mktemp statement and inherited execution context.",
     "state": "staged"
   },
@@ -931,7 +931,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "rm",
     "statementSHA256": "3da3a2022e982564e297bf3d72804a5c1681565348f74bd7aa037e6b0270d972",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed rm statement and inherited execution context.",
     "state": "staged"
   },
@@ -939,7 +939,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "rm",
     "statementSHA256": "55776ebdb126dba0c3b4ff10113a6308b3322726b60c7ad3d327eed567a58c5c",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed rm statement and inherited execution context.",
     "state": "staged"
   },
@@ -947,7 +947,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "rm",
     "statementSHA256": "abca00ffde9ce2b84108aa4b5161a54703373b74d9cd4d64625103d19db1b800",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed rm statement and inherited execution context.",
     "state": "staged"
   },
@@ -955,7 +955,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "sed",
     "statementSHA256": "3da3a2022e982564e297bf3d72804a5c1681565348f74bd7aa037e6b0270d972",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed sed statement and inherited execution context.",
     "state": "staged"
   },
@@ -963,7 +963,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "sed",
     "statementSHA256": "55776ebdb126dba0c3b4ff10113a6308b3322726b60c7ad3d327eed567a58c5c",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed sed statement and inherited execution context.",
     "state": "staged"
   },
@@ -971,7 +971,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "test",
     "statementSHA256": "3fd6aea73eb83ad70cab82347f03c893206cc7f8b8f70e4649aa8270d2c054c9",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed builtin statement and complete workflow context.",
     "state": "staged"
   },
@@ -979,7 +979,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "test-public-workflow-policy.sh",
     "statementSHA256": "c133baf851f841a2a19da61077e346d5f5d6d7640e23b310a3c11f8307370a2a",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed test-public-workflow-policy.sh statement and inherited execution context.",
     "state": "staged"
   },
@@ -987,7 +987,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "wfctl",
     "statementSHA256": "10a8deeda60dd3240448a5f198fa8b22207e27f405c1bc21fd9178b8d27b94bf",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed wfctl statement and inherited execution context.",
     "state": "staged"
   },
@@ -995,7 +995,7 @@
     "path": ".github/workflows/ci.yml",
     "command": "wfctl",
     "statementSHA256": "67815ba97241cf4f93fa278d1412e0fae91e87afc65f43fe52d211243a2bb95e",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed wfctl statement and inherited execution context.",
     "state": "staged"
   },
@@ -1003,32 +1003,8 @@
     "path": ".github/workflows/ci.yml",
     "command": "wfctl",
     "statementSHA256": "95886645768adfe207686bd3667365dff6bcdd9a4fdf24a4365b54afaf9fbd75",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
+    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
     "rationale": "Exact reviewed Go1.27.2 CI context; Exact reviewed wfctl statement and inherited execution context.",
     "state": "staged"
-  },
-  {
-    "command": "sha256sum",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
-    "path": ".github/workflows/ci.yml",
-    "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
-    "state": "staged",
-    "statementSHA256": "4f06eb1ddb17ddafb81b73107604ea4a5ea4b4d3d19d6f0e69bb717e0ab987da"
-  },
-  {
-    "command": "cat",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
-    "path": ".github/workflows/ci.yml",
-    "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
-    "state": "staged",
-    "statementSHA256": "e739d35965f92ee7d73a7ea8855c5947a8b61d88ad546726d7fc098a7fe75a40"
-  },
-  {
-    "command": "require-policy-rg.sh",
-    "contextSHA256": "ae860e737fff0acf1e835ff2a0539ef8ac0c187fb2f1e3f9042af16ab72fe545",
-    "path": ".github/workflows/ci.yml",
-    "rationale": "Exact reviewed real policy-fixture search dependency helper; no credentials or control writes.",
-    "state": "staged",
-    "statementSHA256": "442c424de88bbb38ed77925066ff227894ddc02632bf84a98b2c730105434da4"
   }
 ]

@@ -1260,7 +1260,7 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			// otherwise "public". Stored on Outputs so Diff can detect
 			// in-place public↔internal toggles — F4 Finding 1.
 			"expose": deriveExposeFromAppSpec(app.Spec),
-			// `image` is derived from the first service's ImageSourceSpec
+			// `image` is derived from the desired AppSpec's first service ImageSourceSpec
 			// and formatted as a canonical user-facing ref. Stored on
 			// Outputs so Diff can structurally compare against the user's
 			// desired `cfg["image"]` and avoid emitting spurious image
@@ -1302,9 +1302,10 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "active", app.ActiveDeployment)
 	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "in_progress", app.InProgressDeployment)
 	addDeploymentSlotOutputs(out.Outputs, emittedDeploymentIDs, "pending", app.PendingDeployment)
-	if app.ActiveDeployment != nil {
-		if refs := activeDeploymentImageRefs(app.Spec); len(refs) > 0 {
+	if active := app.ActiveDeployment; active != nil && active.ID != "" && active.Phase == godo.DeploymentPhase_Active {
+		if refs := activeDeploymentImageRefs(active.Spec); len(refs) > 0 {
 			out.Outputs["active_deployment_image_refs"] = refs
+			out.Outputs["active_deployment_image_refs_source"] = "active_deployment.spec"
 		}
 	}
 	if app.ActiveDeployment == nil {
@@ -1363,7 +1364,18 @@ func componentImageRefs[T any](components []T, imageOf func(T) (string, *godo.Im
 	refs := map[string]any{}
 	for _, component := range components {
 		name, image := imageOf(component)
-		if name == "" {
+		// The reconciliation formatter ignores digests and uses a placeholder
+		// for a missing DOCR namespace. Neither is evidence of an active image.
+		if name == "" || image == nil || image.Digest != "" {
+			continue
+		}
+		switch image.RegistryType {
+		case godo.ImageSourceSpecRegistryType_DOCR:
+			if image.Registry == "" {
+				continue
+			}
+		case godo.ImageSourceSpecRegistryType_Ghcr, godo.ImageSourceSpecRegistryType_DockerHub:
+		default:
 			continue
 		}
 		ref := formatImageSpec(image)
