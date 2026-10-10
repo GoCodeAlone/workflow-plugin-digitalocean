@@ -23,6 +23,86 @@ const bootstrapBaseTree = "365109d6a442c7583bd172a0e6d1dd85c5d46b8d"
 const bootstrapInventorySHA = "691f7b85863123faea3f3ce1139b5fb4153ede520377e566e7ced5c4cfd62d14"
 const bootstrapRepo = "GoCodeAlone/workflow-plugin-digitalocean"
 const bootstrapProofRef = "refs/heads/prep/policytool-bootstrap-proof-20261010"
+const bootstrapReceiptAmendmentSHA = "be3baee9e482cbe5d1581d9401465b8d6744a1eeab5e0866c9355142272af472"
+
+type bootstrapReceiptAmendment struct {
+	Schema         string `json:"schema"`
+	Base           string `json:"base"`
+	OldContext     string `json:"oldContext"`
+	NewContext     string `json:"newContext"`
+	WorkflowSHA256 string `json:"workflowSHA256"`
+	Files          []struct {
+		Path            string              `json:"path"`
+		ChangedRows     int                 `json:"changedRows"`
+		SHA256          string              `json:"sha256"`
+		CandidateSHA256 string              `json:"candidateSHA256"`
+		Additional      []map[string]string `json:"additional"`
+	} `json:"files"`
+}
+
+// This finite, independently reviewed proposal is separate from accepted
+// 0f72 authority. It never reads candidate public maps as scanner authority.
+// Owner admission of these exact bytes is required before normal cutover.
+func bootstrapReceiptPolicyProposal(t *testing.T, trusted, candidate, destination string) ([]string, bootstrapReceiptAmendment) {
+	t.Helper()
+	var proposal bootstrapReceiptAmendment
+	data, err := bootstrapRegularFile(filepath.Join(candidate, "testdata/provider-normal-receipt-context-amendment.json"), 16*1024)
+	if err != nil || bootstrapHash(data) != bootstrapReceiptAmendmentSHA {
+		t.Fatal("finite receipt-context proposal digest mismatch")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&proposal) != nil || proposal.Schema != "provider-normal-receipt-context-amendment/v1" || proposal.Base != bootstrapBase || len(proposal.Files) != 4 {
+		t.Fatal("finite receipt-context proposal identity mismatch")
+	}
+	workflow, err := bootstrapRegularFile(filepath.Join(candidate, ".github/workflows/ci.yml"), 128*1024)
+	if err != nil || bootstrapHash(workflow) != proposal.WorkflowSHA256 {
+		t.Fatal("normal exporter workflow differs from the reviewed finite proposal")
+	}
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	for index, kind := range []string{"presence", "action", "command", "executable"} {
+		file := proposal.Files[index]
+		path := ".github/public-workflow-" + kind + "-allowlist.json"
+		if file.Path != path || file.ChangedRows != []int{1, 5, 19, 2}[index] {
+			t.Fatal("receipt-context proposal exceeds its exact four-map scope")
+		}
+		acceptedData, err := bootstrapRegularFile(filepath.Join(trusted, path), 256*1024)
+		if err != nil || bytes.Count(acceptedData, []byte(proposal.OldContext)) != file.ChangedRows {
+			t.Fatal("receipt-context proposal does not match the immutable accepted maps")
+		}
+		amended := bytes.ReplaceAll(acceptedData, []byte(proposal.OldContext), []byte(proposal.NewContext))
+		if len(file.Additional) != 0 {
+			extra, err := json.MarshalIndent(file.Additional, "", "  ")
+			if err != nil || !bytes.HasSuffix(amended, []byte("\n]\n")) || !bytes.HasPrefix(extra, []byte("[\n")) || !bytes.HasSuffix(extra, []byte("\n]")) {
+				t.Fatal("cannot encode the exact receipt export map additions")
+			}
+			amended = append(append(append(amended[:len(amended)-3], []byte(",\n")...), extra[2:len(extra)-2]...), []byte("\n]\n")...)
+		}
+		candidateData, err := bootstrapRegularFile(filepath.Join(candidate, path), 256*1024)
+		if err != nil || bootstrapHash(amended) != file.SHA256 || bootstrapHash(candidateData) != file.CandidateSHA256 {
+			t.Fatal("proposed map bytes differ from the exact accepted-map amendment")
+		}
+		output := filepath.Join(destination, kind+".json")
+		f, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, writeErr := f.Write(amended)
+		syncErr, closeErr := f.Sync(), f.Close()
+		if n != len(amended) || writeErr != nil || syncErr != nil || closeErr != nil {
+			t.Fatal("cannot persist the finite proposed scanner maps")
+		}
+		readback, err := bootstrapRegularFile(output, 256*1024)
+		if err != nil || !bytes.Equal(readback, amended) {
+			t.Fatal("finite proposed scanner map readback mismatch")
+		}
+		args = append(args, "--"+kind+"-allowlist", output)
+	}
+	return args, proposal
+}
 
 type bootstrapFile struct {
 	Path   string `json:"path"`
@@ -426,10 +506,15 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkerSHA := bootstrapHash(checkerBytes)
+	proposalArgs, proposal := bootstrapReceiptPolicyProposal(t, trusted, candidate, filepath.Join(tmp, "receipt-context-proposal"))
 	var outcomes []string
-	scanAt := func(label, authorityRoot, scanRoot, diagnostic string) {
+	scanAt := func(label, authorityRoot, scanRoot, diagnostic string, amendment bool) {
 		t.Helper()
-		output, err := providerProofCommand(t, trusted, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}, binary, "--repo", authorityRoot, "--scan-root", scanRoot)
+		args := []string{"--repo", authorityRoot, "--scan-root", scanRoot}
+		if amendment {
+			args = append(args, proposalArgs...)
+		}
+		output, err := providerProofCommand(t, trusted, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}, binary, args...)
 		if diagnostic == "" {
 			if err != nil || !strings.Contains(string(output), "public workflow policy passed") {
 				t.Fatalf("real accepted scanner rejected %s: %v\n%s", label, err, output)
@@ -442,11 +527,12 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 		}
 		outcomes = append(outcomes, label+":PASS")
 	}
-	scan := func(label, scanRoot, diagnostic string) { scanAt(label, trusted, scanRoot, diagnostic) }
+	scan := func(label, scanRoot, diagnostic string) { scanAt(label, trusted, scanRoot, diagnostic, true) }
+	scanAt("reject-exporter-with-unamended-accepted-authority", trusted, candidate, "no trust group matches workflow", false)
 	scan("complete-actual-candidate", candidate, "")
 	unprepared := filepath.Join(tmp, "unprepared")
 	materializeBootstrapTree(t, root, "075c2c291a1f933692d9949650fc41d20c0a63f9", unprepared, env, nil)
-	scanAt("reject-actual-unprepared-predecessor", unprepared, candidate, "no trust group matches workflow")
+	scanAt("reject-actual-unprepared-predecessor", unprepared, candidate, "no trust group matches workflow", false)
 	// Candidate source/modules/maps are data, never executable authority.
 	for _, poison := range []struct{ Path, Content string }{
 		{".github/workflows/policytool/main.go", "package main\nfunc main() { panic(\"candidate executed\") }\n"},
@@ -537,13 +623,14 @@ func TestActualAcceptedPolicyBootstrap(t *testing.T) {
 	}
 	sdkInventoryJSON, _ := json.Marshal(sdkInventory)
 	bootstrapReceipt(t, map[string]any{
-		"Schema": "provider-actual-accepted-policy-bootstrap/v1", "Binding": binding,
+		"Schema": "provider-actual-accepted-policy-bootstrap/v2", "Binding": binding,
 		"WorkflowRef": os.Getenv("GITHUB_WORKFLOW_REF"), "RunID": os.Getenv("GITHUB_RUN_ID"), "RunAttempt": os.Getenv("GITHUB_RUN_ATTEMPT"),
 		"AcceptedCommit": bootstrapBase, "AcceptedTree": accepted.Tree, "AcceptedInventorySHA256": bootstrapInventorySHA,
 		"Candidate": scanned, "CheckoutTree": checkoutTree, "SDKRoot": sdk, "SDKComponentsSHA256": sdkPins,
 		"SDKArchiveURL": bootstrapSDKURL, "SDKArchiveSHA256": bootstrapSDKArchiveSHA, "SDKArchiveBytes": len(sdkArchive), "SDKInventorySHA256": bootstrapHash(sdkInventoryJSON), "SDKFiles": len(sdkInventory),
 		"Compiler": built.GoVersion, "CompilerEnvironment": metadata, "CheckerSHA256": checkerSHA, "CheckerModules": modules,
-		"Outcomes": outcomes, "Admission": "Supporting real candidate proof only. Exact operator source/SDK provenance and cutover permission are separate. Historical Go1264 declarations and GO-2026-5932 remain visible.",
+		"PolicyAuthorityProposal": proposal, "PolicyAuthorityProposalSHA256": bootstrapReceiptAmendmentSHA,
+		"Outcomes": outcomes, "Admission": "Supporting real candidate and finite proposed context-amendment proof only. Accepted0f72 authority is unchanged and genuinely rejects the exporter. Exact owner admission of the separate proposal, source/SDK provenance and cutover permission are required. Historical Go1264 declarations and GO-2026-5932 remain visible.",
 	}, map[string]any{"Binding": binding, "CandidateTree": scanned.Tree, "SDKArchiveSHA256": bootstrapSDKArchiveSHA, "SDKInventorySHA256": bootstrapHash(sdkInventoryJSON), "CheckerSHA256": checkerSHA, "Outcomes": outcomes})
 }
 

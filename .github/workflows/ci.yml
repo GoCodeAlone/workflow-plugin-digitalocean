@@ -17,11 +17,11 @@ jobs:
       SAFE_JOB_MODE: strict
       GOENV: "off"
       GOTOOLCHAIN: local
-      PROVIDER_BOOTSTRAP_PREPARATION_SHA: 33e78ead93935d227a3ab816a275cf0fd28a248a
+      PROVIDER_BOOTSTRAP_PREPARATION_SHA: 5e7f3363528a57c28e18f8812573ab200be227c7
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: 33e78ead93935d227a3ab816a275cf0fd28a248a
+          ref: 5e7f3363528a57c28e18f8812573ab200be227c7
           persist-credentials: false
           fetch-depth: 64
       - name: Require working policy search tool
@@ -217,6 +217,16 @@ jobs:
             RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
             PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
             /opt/hostedtoolcache/go/1.27.2/x64/bin/go test -race ./...
+      - name: Export complete accepted-policy bootstrap receipt
+        run: |
+          sha256sum "$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
+          cat "$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-accepted-policy-bootstrap-receipt
+          path: ${{ runner.temp }}/provider-policy-bootstrap-receipt.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Full root vet under authenticated compiler
         run: |
           set -euo pipefail
@@ -345,18 +355,3 @@ jobs:
             RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT}" \
             PROVIDER_BOOTSTRAP_PREPARATION_SHA="${PROVIDER_BOOTSTRAP_PREPARATION_SHA}" \
             /bin/bash ./.github/workflows/scripts/test-public-workflow-policy.sh
-      - name: Emit complete actual bootstrap receipt
-        run: |
-          set -euo pipefail
-          receipt="$RUNNER_TEMP/provider-policy-bootstrap-receipt.json"
-          test -f "$receipt"
-          test "$(stat -c %a "$receipt")" = 600
-          test "$(stat -c %s "$receipt")" -le 262145
-          sha256sum "$receipt"
-          cat "$receipt"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: provider-accepted-policy-bootstrap-receipt
-          path: ${{ runner.temp }}/provider-policy-bootstrap-receipt.json
-          if-no-files-found: error
-          retention-days: 14

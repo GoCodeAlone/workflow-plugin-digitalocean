@@ -1,0 +1,63 @@
+{
+  "base": "0f72e69febaf02e512abb075c3547f5b2eeac5ad",
+  "files": [
+    {
+      "additional": [],
+      "candidateSHA256": "47dda6ae79edc108dd6c8a3f589639ef4e1c3e35f79839909bd2a4468eabe651",
+      "changedRows": 1,
+      "path": ".github/public-workflow-presence-allowlist.json",
+      "sha256": "47dda6ae79edc108dd6c8a3f589639ef4e1c3e35f79839909bd2a4468eabe651"
+    },
+    {
+      "additional": [
+        {
+          "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+          "nodeSHA256": "558cd5abea492ec06d260cfe3bbd499e0a6b994bbf2d5377fdaa685f3fca5f8e",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        }
+      ],
+      "candidateSHA256": "269e4a1472eb64a94bc223e12843552edbff190d4f9a374a026adee06b818372",
+      "changedRows": 5,
+      "path": ".github/public-workflow-action-allowlist.json",
+      "sha256": "269e4a1472eb64a94bc223e12843552edbff190d4f9a374a026adee06b818372"
+    },
+    {
+      "additional": [
+        {
+          "command": "sha256sum",
+          "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "statementSHA256": "4f06eb1ddb17ddafb81b73107604ea4a5ea4b4d3d19d6f0e69bb717e0ab987da"
+        },
+        {
+          "command": "cat",
+          "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+          "path": ".github/workflows/ci.yml",
+          "rationale": "Exact reviewed complete public bootstrap receipt export; no credentials or control writes.",
+          "state": "staged",
+          "statementSHA256": "e739d35965f92ee7d73a7ea8855c5947a8b61d88ad546726d7fc098a7fe75a40"
+        }
+      ],
+      "candidateSHA256": "9d120ee06fbac78a073ac89d8aa741a3a100b34c027aca9effcbaddfd0da0a46",
+      "changedRows": 19,
+      "path": ".github/public-workflow-command-allowlist.json",
+      "sha256": "9d120ee06fbac78a073ac89d8aa741a3a100b34c027aca9effcbaddfd0da0a46"
+    },
+    {
+      "additional": [],
+      "candidateSHA256": "008c3a882ed5feb9df0bee6aaf9382685f21012af4cd71c65e2b8690cc276960",
+      "changedRows": 2,
+      "path": ".github/public-workflow-executable-allowlist.json",
+      "sha256": "65e93a5195f46a45662363191ff55e3b776f3be08767ac838dd5ab6ed12a128d"
+    }
+  ],
+  "newContext": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
+  "oldContext": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+  "schema": "provider-normal-receipt-context-amendment/v1",
+  "workflowSHA256": "e03834cbf3b4a10d8b1849c5140a5e5cadf767826e412fcb9ebe744000546afe"
+}

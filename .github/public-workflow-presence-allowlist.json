@@ -31,7 +31,7 @@
   },
   {
     "path": ".github/workflows/ci.yml",
-    "contextSHA256": "587ecdb66f8ea81d24fa090aadec0adde17fef877cbe7ed5aea9b0208f4d15e1",
+    "contextSHA256": "8a2aa38670c6d1b607d39cc5655bc75ab8d9f23a9853978f5faa4d9767e47465",
     "state": "staged",
     "presence": "present"
   }
