@@ -2911,6 +2911,53 @@ func TestAppPlatformDriver_appOutput_IncludesDeploymentSnapshotOutputs(t *testin
 	}
 }
 
+func TestAppPlatformDriver_appOutput_ReportsOnlyActiveDeploymentDigests(t *testing.T) {
+	const sentinel = "fixture-registry-secret-do-not-export"
+	active := "sha256:" + strings.Repeat("a", 64)
+	worker := "sha256:" + strings.Repeat("b", 64)
+	desired := "sha256:" + strings.Repeat("c", 64)
+	image := func(digest string) *godo.ImageSourceSpec {
+		return &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Repository: "web", Digest: digest, RegistryCredentials: sentinel}
+	}
+	app := &godo.App{
+		ID:   "app-uuid",
+		Spec: &godo.AppSpec{Name: "app", Services: []*godo.AppServiceSpec{{Name: "web", Image: image(desired)}}},
+		ActiveDeployment: &godo.Deployment{ID: "dep-active", Phase: godo.DeploymentPhase_Active, Spec: &godo.AppSpec{
+			Services: []*godo.AppServiceSpec{
+				nil, {Image: image(active)}, {Name: "web", Image: image(active)},
+				{Name: "short", Image: image("sha256:5093564")},
+				{Name: "bad-hex", Image: image("sha256:" + strings.Repeat("g", 64))},
+				{Name: "tag-only", Image: &godo.ImageSourceSpec{RegistryType: godo.ImageSourceSpecRegistryType_Ghcr, Registry: "acme", Repository: "web", Tag: "latest"}},
+			},
+			Workers: []*godo.AppWorkerSpec{nil, {Name: "control", Image: image(worker)}},
+		}},
+	}
+	app.InProgressDeployment = &godo.Deployment{ID: "dep-new", Phase: godo.DeploymentPhase_Deploying, Spec: app.Spec}
+	out := drivers.AppOutputForTest(app)
+	requireOutputString(t, out, "active_deployment_image_digests_source", "active_deployment.spec")
+	digests, ok := out["active_deployment_image_digests"].(map[string]any)
+	if !ok || len(digests) != 2 {
+		t.Fatalf("active deployment digests = %v", digests)
+	}
+	for _, tc := range []struct{ kind, name, want string }{{"services", "web", active}, {"workers", "control", worker}} {
+		components, ok := digests[tc.kind].(map[string]any)
+		if !ok || len(components) != 1 || components[tc.name] != tc.want {
+			t.Fatalf("%s = %v, want only %s=%s", tc.kind, components, tc.name, tc.want)
+		}
+	}
+	encoded, err := json.Marshal(digests)
+	if err != nil || strings.Contains(string(encoded), sentinel) || strings.Contains(string(encoded), desired) {
+		t.Fatal("digest output must not serialize credentials or desired state")
+	}
+	app.ActiveDeployment.Phase = godo.DeploymentPhase_Deploying
+	out = drivers.AppOutputForTest(app)
+	for _, key := range []string{"active_deployment_image_digests", "active_deployment_image_digests_source"} {
+		if _, ok := out[key]; ok {
+			t.Fatalf("%s should be absent for a non-active deployment", key)
+		}
+	}
+}
+
 func TestAppPlatformDriver_appOutput_OmitsDeploymentSlotAliases(t *testing.T) {
 	app := &godo.App{
 		ID: "app-uuid",
