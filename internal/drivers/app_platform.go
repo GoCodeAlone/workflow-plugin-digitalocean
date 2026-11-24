@@ -1307,6 +1307,10 @@ func appOutput(app *godo.App) *interfaces.ResourceOutput {
 			out.Outputs["active_deployment_image_refs"] = refs
 			out.Outputs["active_deployment_image_refs_source"] = "active_deployment.spec"
 		}
+		if digests := activeDeploymentImageDigests(active.Spec); len(digests) > 0 {
+			out.Outputs["active_deployment_image_digests"] = digests
+			out.Outputs["active_deployment_image_digests_source"] = "active_deployment.spec"
+		}
 	}
 	if app.ActiveDeployment == nil {
 		out.Status = "pending"
@@ -1358,6 +1362,46 @@ func activeDeploymentImageRefs(spec *godo.AppSpec) map[string]any {
 		refs["workers"] = workers
 	}
 	return refs
+}
+
+// activeDeploymentImageDigests reports an explicit SHA-256 digest from the
+// active deployment spec, never from a mutable tag or the desired app spec.
+func activeDeploymentImageDigests(spec *godo.AppSpec) map[string]any {
+	if spec == nil {
+		return nil
+	}
+	result := map[string]any{}
+	add := func(components map[string]any, name string, image *godo.ImageSourceSpec) {
+		if name == "" || image == nil || image.Repository == "" {
+			return
+		}
+		digest := image.Digest
+		raw, ok := strings.CutPrefix(digest, "sha256:")
+		if !ok || len(raw) != sha256.Size*2 || strings.ToLower(raw) != raw {
+			return
+		}
+		if _, err := hex.DecodeString(raw); err == nil {
+			components[name] = digest
+		}
+	}
+	services, workers := map[string]any{}, map[string]any{}
+	for _, svc := range spec.Services {
+		if svc != nil {
+			add(services, svc.Name, svc.Image)
+		}
+	}
+	for _, worker := range spec.Workers {
+		if worker != nil {
+			add(workers, worker.Name, worker.Image)
+		}
+	}
+	if len(services) > 0 {
+		result["services"] = services
+	}
+	if len(workers) > 0 {
+		result["workers"] = workers
+	}
+	return result
 }
 
 func componentImageRefs[T any](components []T, imageOf func(T) (string, *godo.ImageSourceSpec)) map[string]any {
